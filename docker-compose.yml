@@ -1,0 +1,19 @@
+services:
+  simplifica-agenda:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      COOKIE_SECURE: "false"
+      SESSION_SECRET: ${SESSION_SECRET:?Defina SESSION_SECRET no arquivo .env}
+      DATABASE_PATH: /app/data/simplifica-agenda.sqlite
+      DEMO_EMAIL: ${DEMO_EMAIL:-admin@simplifica.local}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-Agenda123!}
+    ports:
+      - "3000:3000"
+    volumes:
+      - simplifica-data:/app/data
+
+volumes:
+  simplifica-data:

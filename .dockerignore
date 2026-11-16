@@ -1,0 +1,15 @@
+.git
+.env
+.env.*
+node_modules
+**/node_modules
+data
+**/data
+backups
+**/dist
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+*.db-shm
+*.db-wal
