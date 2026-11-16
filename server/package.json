@@ -1,0 +1,19 @@
+{
+  "name": "@simplifica-agenda/server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js",
+    "seed": "node src/seed.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "better-sqlite3": "^12.4.1",
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "express-session": "^1.18.2"
+  }
+}
