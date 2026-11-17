@@ -1090,11 +1090,12 @@ app.get("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
   const summaries=new Map();
   for(const item of items) {
     const cur=summaries.get(item.professionalId)||{
-      professionalId:item.professionalId,professionalName:item.professionalName,completed:0,grossCents:0,
+      professionalId:item.professionalId,professionalName:item.professionalName,completed:0,pendingServices:0,grossCents:0,
       earnedCents:0,paidCents:0,dueCents:0};
     const earned=commissionCents(item);
     cur.completed++;cur.grossCents+=item.priceCents;cur.earnedCents+=earned;
     cur.paidCents+=item.paidCents??0;cur.dueCents+=item.paidCents===null?earned:0;
+    if(item.paidCents===null)cur.pendingServices++;
     summaries.set(item.professionalId,cur);
   }
   const batches=db.prepare(`SELECT b.id,b.period,b.total_cents AS totalCents,b.paid_at AS paidAt,
