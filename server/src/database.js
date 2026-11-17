@@ -116,6 +116,15 @@ db.exec(`
     reason TEXT NOT NULL DEFAULT '',
     CHECK (starts_at < ends_at)
   );
+  CREATE TABLE IF NOT EXISTS commission_payments (
+    appointment_id TEXT PRIMARY KEY REFERENCES appointments(id) ON DELETE CASCADE,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    professional_id TEXT NOT NULL REFERENCES users(id),
+    amount_cents INTEGER NOT NULL CHECK (amount_cents >= 0),
+    paid_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS commission_payments_professional_idx
+    ON commission_payments(tenant_id, professional_id);
   CREATE TABLE IF NOT EXISTS sessions (
     sid TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
