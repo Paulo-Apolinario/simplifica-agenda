@@ -334,7 +334,7 @@ function Shell({ user, onLogout, children }) {
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
   const isDemo = user.tenantId === "tenant-salao-demo";
   const visibleNavItems = navItems.filter((item) => {
-    if (user.role === "profissional") return ["/", "/agenda", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
+    if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
     if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes"].includes(item.to);
     if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos"].includes(item.to)) return false;
@@ -503,48 +503,103 @@ function EmptyState({ icon: Icon = CalendarDays, title, description, action }) {
 }
 
 function AppointmentForm({ onClose, onSaved, initialDate, user }) {
+  const isProfessional = user.role === "profissional";
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
-  const [values, setValues] = useState({ clientId: "", serviceId: "", professionalId: user.role === "profissional" ? user.id : "", startsAt: `${initialDate}T09:00`, notes: "" });
+  const [values, setValues] = useState({
+    clientId: "", serviceId: "", professionalId: isProfessional ? user.id : "",
+    startsAt: `${initialDate}T09:00`, notes: "",
+  });
+  const [quickClient, setQuickClient] = useState(false);
+  const [newClient, setNewClient] = useState({ name: "", phone: "" });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const reloadClients = useCallback(() =>
+    api(isProfessional ? "/booking/clients" : "/clients")
+      .then(({ clients: list }) => setClients(list)), [isProfessional]);
   useEffect(() => {
-    Promise.all([api("/clients"), api("/services"), api("/professionals")]).then(([c, s, p]) => {
-      setClients(c.clients); setServices(s.services.filter((item) => item.active)); setProfessionals(p.professionals.filter((item) => item.active));
-    }).catch((reason) => setError(reason.message));
-  }, []);
-  const selectedService = services.find((service) => service.id === values.serviceId);
-  const options = professionals.filter((professional) =>
-    (user.role !== "profissional" || professional.id === user.id)
-    && (!selectedService || professional.serviceIds.includes(selectedService.id)));
-  const submit = async (event) => {
+    Promise.all([reloadClients(), api("/services"), api("/professionals")])
+      .then(([, svc, pro]) => {
+        const activePros = pro.professionals.filter(item => item.active);
+        setProfessionals(activePros);
+        setServices(svc.services.filter(item => item.active &&
+          (!isProfessional || activePros.some(p => p.id === user.id && p.serviceIds.includes(item.id)))));
+      }).catch(reason => setError(reason.message));
+  }, [reloadClients, isProfessional, user.id]);
+
+  const selectedService = services.find(item => item.id === values.serviceId);
+  const options = professionals.filter(person =>
+    (!isProfessional || person.id === user.id) &&
+    (!selectedService || person.serviceIds.includes(selectedService.id)));
+  const submit = async event => {
     event.preventDefault();
     setSaving(true); setError("");
     try {
-      await api("/appointments", { method: "POST", body: values });
+      let clientId = values.clientId;
+      if (quickClient) {
+        if (!newClient.name.trim()) throw new Error("Informe o nome da cliente.");
+        if (isProfessional) {
+          const response = await api("/booking/clients", { method: "POST", body: newClient });
+          clientId = response.client.id;
+        } else {
+          const response = await api("/clients", { method: "POST", body: newClient });
+          clientId = response.client.id;
+        }
+      }
+      await api("/appointments", { method: "POST", body: { ...values, clientId } });
       onSaved();
-    } catch (reason) { setError(reason.message); } finally { setSaving(false); }
+    } catch (reason) { setError(reason.message); }
+    finally { setSaving(false); }
   };
   return <Modal title="Novo agendamento" onClose={onClose}>
     <form className="form-stack" onSubmit={submit}>
-      <SelectField label="Cliente (opcional)" value={values.clientId} onChange={(e) => setValues({ ...values, clientId: e.target.value })}>
-        <option value="">Atendimento sem cliente cadastrado</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name} · {client.phone}</option>)}
+      <SelectField label="Cliente (opcional)" value={quickClient ? "__new__" : values.clientId}
+        onChange={event => {
+          if (event.target.value === "__new__") { setQuickClient(true); setValues(v => ({ ...v, clientId: "" })); }
+          else { setQuickClient(false); setValues(v => ({ ...v, clientId: event.target.value })); }
+        }}>
+        <option value="">Atendimento sem cliente cadastrado</option>
+        <option value="__new__">+ Cadastrar cliente rapidamente</option>
+        {clients.map(client => <option key={client.id} value={client.id}>{client.name}{client.phone ? ` · ${client.phone}` : ""}</option>)}
       </SelectField>
+      {quickClient && <div className="form-grid">
+        <Field label="Nome da cliente" required maxLength={120} value={newClient.name}
+          onChange={event => setNewClient(c => ({ ...c, name: event.target.value }))}/>
+        <Field label="Telefone (opcional)" type="tel" maxLength={40} value={newClient.phone}
+          onChange={event => setNewClient(c => ({ ...c, phone: event.target.value }))}/>
+      </div>}
       <div className="form-grid">
-        <SelectField label="Serviço" required value={values.serviceId}         onChange={(e) => setValues({ ...values, serviceId: e.target.value, professionalId: user.role === "profissional" ? user.id : "" })}>
-          <option value="">Selecione</option>{services.map((service) => <option key={service.id} value={service.id}>{service.name} · {money(service.priceCents)}</option>)}
+        <SelectField label="Serviço" required value={values.serviceId}
+          onChange={event => setValues(v => ({
+            ...v, serviceId: event.target.value,
+            professionalId: isProfessional ? user.id : "",
+          }))}>
+          <option value="">Selecione um serviço</option>
+          {services.map(item => <option key={item.id} value={item.id}>{item.name} · {money(item.priceCents)}</option>)}
         </SelectField>
-        <SelectField label="Profissional" required value={values.professionalId} onChange={(e) => setValues({ ...values, professionalId: e.target.value })}>
-          <option value="">Selecione</option>{options.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+        <SelectField label="Profissional" required value={values.professionalId}
+          onChange={event => setValues(v => ({ ...v, professionalId: event.target.value }))}>
+          <option value="">Selecione</option>
+          {options.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
         </SelectField>
       </div>
+      {isProfessional && !services.length &&
+        <p className="booking-share-notice">Nenhum serviço está vinculado ao seu perfil. Solicite ao administrador que configure seus serviços na aba Equipe e acessos.</p>}
+      {selectedService && !options.length &&
+        <p className="booking-share-notice">Não há profissional ativo vinculado a este serviço. Solicite ao administrador que ajuste as atribuições.</p>}
       <Field label="Data e horário" type="datetime-local" required value={values.startsAt}
-        onChange={(e) => setValues({ ...values, startsAt: e.target.value })} />
+        onChange={event => setValues(v => ({ ...v, startsAt: event.target.value }))}/>
       <Field label="Observações" placeholder="Algum detalhe importante?" value={values.notes}
-        onChange={(e) => setValues({ ...values, notes: e.target.value })} />
+        onChange={event => setValues(v => ({ ...v, notes: event.target.value }))}/>
       <ErrorMessage>{error}</ErrorMessage>
-      <div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button disabled={saving}>{saving ? "Salvando..." : "Salvar agendamento"}</Button></div>
+      <div className="modal-actions">
+        <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
+        <Button disabled={saving || !services.length || !options.length}>
+          {saving ? "Salvando..." : "Salvar agendamento"}
+        </Button>
+      </div>
     </form>
   </Modal>;
 }
@@ -710,13 +765,38 @@ function ClientForm({ client, onClose, onSaved }) {
   </Modal>;
 }
 
+function QuickClientForm({ onClose, onSaved }) {
+  const [values, setValues] = useState({ name: "", phone: "" });
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const submit = async event => {
+    event.preventDefault(); setSaving(true); setError("");
+    try { await api("/booking/clients", { method: "POST", body: values }); onSaved(); }
+    catch (reason) { setError(reason.message); }
+    finally { setSaving(false); }
+  };
+  return <Modal title="Cadastro rápido de cliente" onClose={onClose}>
+    <form className="form-stack" onSubmit={submit}>
+      <Field label="Nome da cliente" required maxLength={120} value={values.name}
+        onChange={event => setValues(v => ({ ...v, name: event.target.value }))}/>
+      <Field label="Telefone (opcional)" maxLength={40} type="tel" value={values.phone}
+        onChange={event => setValues(v => ({ ...v, phone: event.target.value }))}/>
+      <ErrorMessage>{error}</ErrorMessage>
+      <div className="modal-actions">
+        <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
+        <Button disabled={saving}>{saving ? "Salvando..." : "Cadastrar cliente"}</Button>
+      </div>
+    </form>
+  </Modal>;
+}
+
 function ClientsPage({ user }) {
   const [clients, setClients] = useState([]);
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null);
   const [history, setHistory] = useState(null);
   const [error, setError] = useState("");
-  const refresh = useCallback(() => api(`/clients?search=${encodeURIComponent(search)}`).then(({ clients: list }) => setClients(list)).catch((reason) => setError(reason.message)), [search]);
+  const refresh = useCallback(() => api(`${user.role === "profissional" ? "/booking/clients" : "/clients"}?search=${encodeURIComponent(search)}`).then(({ clients: list }) => setClients(list)).catch((reason) => setError(reason.message)), [search, user.role]);
   useEffect(() => { refresh(); }, [refresh]);
   const showHistory = async (client) => {
     try { const result = await api(`/clients/${client.id}/history`); setHistory({ client, appointments: result.history }); }
@@ -724,23 +804,25 @@ function ClientsPage({ user }) {
   };
   return <>
     <PageTitle eyebrow="RELACIONAMENTO QUE FIDELIZA" title="Clientes" description="Conheça melhor quem confia no seu trabalho."
-      actions={user.role !== "profissional" && <Button onClick={() => setModal({})}><Plus size={17} /> Novo cliente</Button>} />
+      actions={user.tenantId !== "tenant-salao-demo" && <Button onClick={() => setModal({})}><Plus size={17} /> Novo cliente</Button>} />
     <ErrorMessage>{error}</ErrorMessage>
     <section className="panel clients-panel">
       <div className="table-toolbar"><label className="search-field"><Search size={17} /><input placeholder="Buscar por nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} /></label>
         <span className="count-chip">{clients.length} clientes</span>{user.role !== "profissional" && <a className="button button-secondary export-button" href="/api/export/clients.csv"><Download size={15} /> Exportar CSV</a>}</div>
-      {clients.length ? <div className="table-scroll"><table><thead><tr><th>CLIENTE</th><th>CONTATO</th><th>ATENDIMENTOS</th><th>ÚLTIMA VISITA</th><th> </th></tr></thead>
+      {clients.length ? <div className="table-scroll"><table><thead><tr><th>CLIENTE</th><th>CONTATO</th>{user.role !== "profissional" && <><th>ATENDIMENTOS</th><th>ÚLTIMA VISITA</th></>}<th> </th></tr></thead>
         <tbody>{clients.map((client) => <tr key={client.id}>
-          <td><div className="table-person"><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><b>{client.name}</b><small>{client.email || client.notes || "Cliente Simplifica"}</small></div></div></td>
-          <td>{client.phone || "—"}</td><td><span className="count-chip">{client.appointmentCount}</span></td>
-          <td>{client.lastVisit ? dateTimeLabel(client.lastVisit) : "Ainda sem visita"}</td>
-          <td><div className="row-actions"><button className="text-link" onClick={() => showHistory(client)}>Histórico</button>
+          <td><div className="table-person"><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><b>{client.name}</b><small>{user.role === "profissional" ? "Cliente do estabelecimento" : client.email || client.notes || "Cliente Simplifica"}</small></div></div></td>
+          <td>{client.phone || "—"}</td>{user.role !== "profissional" && <td><span className="count-chip">{client.appointmentCount}</span></td>}
+          {user.role !== "profissional" && <td>{client.lastVisit ? dateTimeLabel(client.lastVisit) : "Ainda sem visita"}</td>}
+          <td><div className="row-actions">{user.role !== "profissional" && <button className="text-link" onClick={() => showHistory(client)}>Histórico</button>}
             {user.role !== "profissional" && <button className="icon-button compact" onClick={() => setModal(client)} aria-label="Editar cliente"><MoreHorizontal size={18} /></button>}
             {client.phone && <a className="icon-button compact" aria-label="Enviar mensagem" href={whatsappUrl(client.phone, `Olá, ${client.name}! Tudo bem?`) } target="_blank" rel="noreferrer"><Phone size={15} /></a>}</div></td>
         </tr>)}</tbody></table></div>
-        : <EmptyState icon={Users} title="Sua lista começa aqui" description="Cadastre seus clientes e acompanhe cada visita." action={user.role !== "profissional" && <Button onClick={() => setModal({})}><Plus size={15} /> Cadastrar cliente</Button>} />}
+        : <EmptyState icon={Users} title="Sua lista começa aqui" description="Cadastre seus clientes e acompanhe cada visita." action={user.tenantId !== "tenant-salao-demo" && <Button onClick={() => setModal({})}><Plus size={15} /> Cadastrar cliente</Button>} />}
     </section>
-    {modal && <ClientForm client={modal.id ? modal : null} onClose={() => setModal(null)} onSaved={() => { setModal(null); refresh(); }} />}
+    {modal && (user.role === "profissional" ?
+      <QuickClientForm onClose={() => setModal(null)} onSaved={() => { setModal(null); refresh(); }}/> :
+      <ClientForm client={modal.id ? modal : null} onClose={() => setModal(null)} onSaved={() => { setModal(null); refresh(); }}/>)}
     {history && <Modal title={`Histórico de ${history.client.name}`} onClose={() => setHistory(null)} wide>
       <p className="mb-4 text-sm text-slate-500">{history.client.notes || "Sem observações sobre este cliente."}</p>
       {history.appointments.length ? <div className="appointments-list">{history.appointments.map((item) => <div className="history-item" key={item.id}><span>{dateTimeLabel(item.startsAt)}</span><b>{item.serviceName}</b><span>{item.professionalName}</span><span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span></div>)}</div>
