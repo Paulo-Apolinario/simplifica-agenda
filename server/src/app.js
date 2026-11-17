@@ -569,6 +569,7 @@ app.get("/api/clients/:id/history", requireAuth, (req, res) => {
 app.get("/api/services", requireAuth, (_req, res) => {
   const services = db.prepare(`
     SELECT s.id, s.name, s.duration_minutes AS durationMinutes, s.price_cents AS priceCents, s.active,
+       s.house_share_percent AS houseSharePercent, s.commission_mode AS commissionMode, s.service_commission_percent AS serviceCommissionPercent,
       group_concat(u.name, ', ') AS professionalNames
     FROM services s LEFT JOIN professional_services ps ON ps.service_id = s.id
       AND ps.tenant_id = s.tenant_id
@@ -583,6 +584,9 @@ app.post("/api/services", requireAuth, allowRoles("dono"), (req, res) => {
   const durationMinutes = Number(req.body?.durationMinutes);
   const priceCents = Number(req.body?.priceCents);
   const houseSharePercent = Number(req.body?.houseSharePercent ?? 0);
+  const commissionMode = req.body?.commissionMode ?? "professional";
+  const serviceCommissionPercent = Number(req.body?.serviceCommissionPercent ?? 0);
+  if (!["professional", "custom"].includes(commissionMode) || !Number.isFinite(serviceCommissionPercent) || serviceCommissionPercent < 0 || serviceCommissionPercent > 100) return fail(res, 400, "Comissão do serviço inválida.");
   if (!Number.isFinite(houseSharePercent) || houseSharePercent < 0 || houseSharePercent > 100)
     return fail(res, 400, "Retenção para materiais deve estar entre 0% e 100%.");
   if (!Number.isInteger(durationMinutes) || durationMinutes < 5 || durationMinutes > 720
@@ -590,8 +594,8 @@ app.post("/api/services", requireAuth, allowRoles("dono"), (req, res) => {
     return fail(res, 400, "Informe uma duração e um preço válidos.");
   }
   const id = createId();
-  db.prepare("INSERT INTO services (id, tenant_id, name, duration_minutes, price_cents, house_share_percent) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(id, tenant(req), name, durationMinutes, priceCents, houseSharePercent);
+  db.prepare("INSERT INTO services (id, tenant_id, name, duration_minutes, price_cents, house_share_percent, commission_mode, service_commission_percent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(id, tenant(req), name, durationMinutes, priceCents, houseSharePercent, commissionMode, serviceCommissionPercent);
   const professionalIds = Array.isArray(req.body.professionalIds) ? req.body.professionalIds : [];
   const assign = db.prepare(`
     INSERT INTO professional_services (tenant_id, professional_id, service_id)
@@ -609,12 +613,15 @@ app.patch("/api/services/:id", requireAuth, allowRoles("dono"), (req, res) => {
   const duration = Number(req.body?.durationMinutes);
   const price = Number(req.body?.priceCents);
   const houseShare = Number(req.body?.houseSharePercent ?? 0);
+  const commissionMode = req.body?.commissionMode ?? "professional";
+  const serviceCommissionPercent = Number(req.body?.serviceCommissionPercent ?? 0);
+  if (!["professional", "custom"].includes(commissionMode) || !Number.isFinite(serviceCommissionPercent) || serviceCommissionPercent < 0 || serviceCommissionPercent > 100) return fail(res, 400, "Comissão do serviço inválida.");
   if (!Number.isFinite(houseShare) || houseShare < 0 || houseShare > 100) return fail(res, 400, "Retenção do estabelecimento inválida.");
   if (!Number.isInteger(duration) || duration < 5 || duration > 720 || !Number.isInteger(price) || price < 0) {
     return fail(res, 400, "Informe uma duração e um preço válidos.");
   }
-  db.prepare("UPDATE services SET name = ?, duration_minutes = ?, price_cents = ?, active = ?, house_share_percent = ? WHERE id = ? AND tenant_id = ?")
-    .run(name, duration, price, req.body.active === false ? 0 : 1, houseShare, req.params.id, tenant(req));
+  db.prepare("UPDATE services SET name = ?, duration_minutes = ?, price_cents = ?, active = ?, house_share_percent = ?, commission_mode = ?, service_commission_percent = ? WHERE id = ? AND tenant_id = ?")
+    .run(name, duration, price, req.body.active === false ? 0 : 1, houseShare, commissionMode, serviceCommissionPercent, req.params.id, tenant(req));
   const ids = Array.isArray(req.body.professionalIds) ? req.body.professionalIds : null;
   if (ids) {
     const update = db.transaction(() => {
@@ -875,7 +882,7 @@ function professionalEarnings(tenantId, professionalId, month = null) {
   const params = month ? [tenantId, professionalId, month] : [tenantId, professionalId];
   const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, s.name AS serviceName,
     c.name AS clientName, a.price_cents AS priceCents,
-    a.commission_percent AS commissionPercent,
+    a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent,
     cp.amount_cents AS paidCents, cp.paid_at AS paidAt
     FROM appointments a
     JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
@@ -1006,7 +1013,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
   }
   const chosen = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      u.commission_percent AS commission, s.house_share_percent AS houseShare
+      CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END AS commission, s.house_share_percent AS houseShare
     FROM services s
     JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
@@ -1405,7 +1412,7 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
   if (!validDateTime(startsAt) || !serviceId || !professionalId) return fail(res, 400, "Escolha serviço, profissional e horário.");
   const selected = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      u.commission_percent AS commission, s.house_share_percent AS houseShare
+      CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END AS commission, s.house_share_percent AS houseShare
     FROM services s JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
   `).get(business.id, serviceId, professionalId);
