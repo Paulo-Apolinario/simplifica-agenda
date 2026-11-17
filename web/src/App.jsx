@@ -6,7 +6,7 @@ import {
   Wallet, X, Scissors, UserRound, CalendarClock, CalendarX2, Phone, Mail, Sparkles,
   Copy, QrCode, Share2, Link2, Smartphone, Info, ClipboardCheck, UserRoundCheck,
 } from "lucide-react";
-import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 const money = (cents = 0) => new Intl.NumberFormat("pt-BR", {
   style: "currency", currency: "BRL",
