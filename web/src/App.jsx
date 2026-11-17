@@ -322,6 +322,8 @@ const navItems = [
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
   { to: "/comissoes", label: "Comissões da equipe", icon: CircleDollarSign },
+  { to: "/regras-comissao", label: "Regras de comissão", icon: Settings },
+  { to: "/fechamentos", label: "Fechamentos", icon: Wallet },
   { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
@@ -351,8 +353,8 @@ function Shell({ user, onLogout, children }) {
     if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
-    if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes"].includes(item.to);
-    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos"].includes(item.to)) return false;
+    if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes", "/regras-comissao", "/fechamentos"].includes(item.to);
+    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
     return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
   useEffect(() => {
@@ -1901,6 +1903,118 @@ function PublicRequestPage({ token }) {
   </main>;
 }
 
+function CommissionPoliciesPage() {
+  const [data,setData]=useState({services:[],professionals:[],rules:[]});
+  const [pro,setPro]=useState(""),[service,setService]=useState("");
+  const [percent,setPercent]=useState("70"),[retention,setRetention]=useState("0");
+  const [error,setError]=useState(""),[message,setMessage]=useState("");
+  const refresh=useCallback(async()=>{
+    try{
+      const [srv,team,rules]=await Promise.all([api("/services"),api("/professionals"),api("/commission-rules")]);
+      setData({services:srv.services,professionals:team.professionals.filter(x=>x.role==="profissional"&&x.active),rules:rules.rules});
+    }catch(e){setError(e.message);}
+  },[]);
+  useEffect(()=>{refresh();},[refresh]);
+  const save=async e=>{
+    e.preventDefault();setError("");setMessage("");
+    try{await api("/commission-rules",{method:"PUT",body:{
+      professionalId:pro,serviceId:service,commissionPercent:Number(percent),houseSharePercent:Number(retention),
+    }});setMessage("Regra salva para futuros agendamentos.");await refresh();}
+    catch(e){setError(e.message);}
+  };
+  const remove=async rule=>{
+    if(!window.confirm("Remover esta regra? Novos agendamentos usarão a comissão padrão do serviço ou profissional."))return;
+    try{await api("/commission-rules",{method:"DELETE",body:{professionalId:rule.professionalId,serviceId:rule.serviceId}});await refresh();}
+    catch(e){setError(e.message);}
+  };
+  return <>
+    <PageTitle eyebrow="POLÍTICAS DE REPASSE" title="Comissões por profissional e serviço"
+      description="Personalize a divisão de cada serviço para cada profissional, inclusive repasse integral."/>
+    <form className="panel management-panel settings-single-section" onSubmit={save}>
+      <div className="panel-heading"><div><h2>Nova regra personalizada</h2>
+        <p className="panel-subtitle">Tem prioridade sobre a taxa do serviço e a comissão padrão do profissional. Não altera agendamentos já registrados.</p></div></div>
+      <div className="form-grid">
+        <SelectField label="Profissional" value={pro} required onChange={e=>setPro(e.target.value)}>
+          <option value="">Selecione</option>{data.professionals.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </SelectField>
+        <SelectField label="Serviço" value={service} required onChange={e=>setService(e.target.value)}>
+          <option value="">Selecione</option>{data.services.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </SelectField>
+        <Field label="Repasse do serviço ao profissional (%)" type="number" min="0" max="100" step="0.5"
+          value={percent} onChange={e=>setPercent(e.target.value)}/>
+        <Field label="Retenção adicional de materiais (pontos %)" type="number" min="0" max="100" step="0.5"
+          value={retention} onChange={e=>setRetention(e.target.value)}/>
+      </div>
+      <p className="panel-subtitle">Repasse efetivo: {Math.max(0,Number(percent)-Number(retention))}% do valor do serviço.
+        Para repasse integral, use 100% e retenção 0%.</p>
+      <ErrorMessage>{error}</ErrorMessage>{message&&<p className="success-message">{message}</p>}
+      <div className="modal-actions"><Button>Salvar regra</Button></div>
+    </form>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><h2>Regras cadastradas</h2>
+        <p className="panel-subtitle">Exceções aplicáveis somente aos próximos atendimentos.</p></div></div>
+      {data.rules.length?<div className="management-list">{data.rules.map(rule=>
+        <article className="service-row request-item" key={rule.professionalId+"-"+rule.serviceId}>
+          <span className="service-row-icon"><CircleDollarSign size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{rule.professionalName} · {rule.serviceName}</b>
+            <small>{rule.commissionPercent}% de repasse bruto · {rule.houseSharePercent}% de retenção</small></div>
+          <strong>{Math.max(0,rule.commissionPercent-rule.houseSharePercent)}% líquido</strong>
+          <Button variant="secondary" type="button" onClick={()=>remove(rule)}>Remover</Button>
+        </article>)}</div>:<EmptyState icon={Wallet} title="Nenhuma regra especial"
+          description="Os agendamentos usam a configuração padrão enquanto não houver exceção."/>}
+    </section>
+  </>;
+}
+function SettlementsPage() {
+  const [month,setMonth]=useState(localDate().slice(0,7));
+  const [data,setData]=useState({professionals:[],batches:[]});
+  const [error,setError]=useState(""),[message,setMessage]=useState(""),[busy,setBusy]=useState("");
+  const refresh=useCallback(()=>api(`/settlements?month=${encodeURIComponent(month)}`)
+    .then(setData).catch(e=>setError(e.message)),[month]);
+  useEffect(()=>{refresh();},[refresh]);
+  const close=async pro=>{
+    if(!window.confirm(`Registrar como pago o saldo de ${money(pro.dueCents)} de ${pro.professionalName}? Isso não transfere dinheiro.`))return;
+    setBusy(pro.professionalId);setError("");setMessage("");
+    try{
+      const result=await api("/settlements",{method:"POST",body:{month,professionalId:pro.professionalId}});
+      setMessage(`Fechamento registrado: ${money(result.batch.totalCents)} em ${result.batch.count} serviços. Confirme a transferência fora do sistema.`);
+      await refresh();
+    }catch(e){setError(e.message);}finally{setBusy("");}
+  };
+  const due=data.professionals.reduce((sum,p)=>sum+p.dueCents,0);
+  return <>
+    <PageTitle eyebrow="GESTÃO FINANCEIRA" title="Fechamentos e repasses"
+      description="Confira os serviços concluídos e registre os valores efetivamente pagos aos profissionais."/>
+    <div className="month-filter"><label>Mês</label><input type="month" className="input month-input" value={month}
+      onChange={e=>setMonth(e.target.value)}/></div>
+    <section className="stats-grid finance-stats">
+      <StatCard title="Saldo pendente" value={money(due)} icon={Wallet} tone="orange" note="Ainda não registrado como pago"/>
+      <StatCard title="Total de repasses" value={money(data.professionals.reduce((sum,p)=>sum+p.earnedCents,0))}
+        icon={CircleDollarSign} note="Comissões dos serviços concluídos"/>
+    </section>
+    <ErrorMessage>{error}</ErrorMessage>{message&&<p className="success-message">{message}</p>}
+    <section className="panel management-panel"><div className="panel-heading"><div><h2>Fechamento por profissional</h2>
+      <p className="panel-subtitle">O sistema apenas registra o pagamento; ele não envia PIX nem dinheiro.</p></div></div>
+      {data.professionals.length?<div className="management-list">{data.professionals.map(pro=>
+        <article className="service-row request-item" key={pro.professionalId}>
+          <span className="service-row-icon"><Wallet size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{pro.professionalName}</b>
+            <small>{pro.completed} serviços · bruto {money(pro.grossCents)} · já registrado pago {money(pro.paidCents)}</small></div>
+          <strong>{money(pro.dueCents)} pendente</strong>
+          {pro.dueCents>0&&<Button disabled={busy===pro.professionalId}
+            onClick={()=>close(pro)}>Registrar fechamento</Button>}
+        </article>)}</div>:<EmptyState icon={Wallet} title="Sem serviços concluídos" description="Os fechamentos do período aparecerão aqui."/>}
+    </section>
+    <section className="panel management-panel"><div className="panel-heading"><div><h2>Histórico de fechamentos</h2></div></div>
+      {data.batches.length?<div className="management-list">{data.batches.map(b=>
+        <article className="service-row" key={b.id}><icon name="check-circle" inline/>
+          <span className="min-w-0 flex-1"><b>{b.professionalName}</b><small>{b.paidAt} · protocolo {b.id.slice(0,8)}</small></span>
+          <strong>{money(b.totalCents)}</strong></article>)}</div>:
+        <p className="panel-subtitle">Nenhum fechamento registrado neste mês.</p>}
+    </section>
+  </>;
+}
+
 function AccessDenied() {
   return <div className="panel"><EmptyState icon={ShieldCheck} title="Acesso restrito"
     description="Esta área está disponível apenas para o perfil de dono." /></div>;
@@ -1945,6 +2059,8 @@ export default function App() {
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage /> : <AccessDenied />} />
       <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>
       <Route path="/comissoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <TeamCommissionsPage/> : <AccessDenied/>}/>
+      <Route path="/regras-comissao" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <CommissionPoliciesPage/> : <AccessDenied/>}/>
+      <Route path="/fechamentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettlementsPage/> : <AccessDenied/>}/>
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
       <Route path="/recebimentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
