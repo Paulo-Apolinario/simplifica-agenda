@@ -1266,7 +1266,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   const appointment = db.prepare(`
     SELECT id, professional_id AS professionalId, service_id AS serviceId,
       starts_at AS startsAt, ends_at AS endsAt, status, price_cents AS priceCents,
-      payment_method AS paymentMethod, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes
+      payment_method AS paymentMethod, paid_on AS paidOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes
     FROM appointments WHERE id = ? AND tenant_id = ?
   `).get(req.params.id, tenant(req));
   if (!appointment) return fail(res, 404, "Atendimento não encontrado.");
@@ -1285,6 +1285,15 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   if (!statuses.includes(status)) return fail(res, 400, "Status inválido.");
   if (method && !paymentMethods.includes(method)) return fail(res, 400, "Forma de pagamento inválida.");
   if (!Number.isInteger(priceCents) || priceCents < 0) return fail(res, 400, "Valor inválido.");
+  if (appointment.paidOn && cashClosing(tenant(req), appointment.paidOn)
+      && (method !== appointment.paymentMethod || priceCents !== appointment.priceCents || status !== appointment.status))
+    return fail(res, 409, "Pagamento de caixa já fechado não pode ser alterado.");
+  if (appointment.paymentMethod && method !== appointment.paymentMethod)
+    return fail(res, 409, "O pagamento registrado não pode ser alterado diretamente.");
+  if (!appointment.paymentMethod && method && status !== "concluido")
+    return fail(res, 409, "Apenas atendimentos concluídos podem receber pagamento.");
+  if (!appointment.paymentMethod && method && cashClosing(tenant(req), cashDay(tenant(req))))
+    return fail(res, 409, "O caixa de hoje está fechado.");
 
   let startsAt = appointment.startsAt;
   let endsAt = appointment.endsAt;
@@ -1305,6 +1314,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     }
   }
   const update = db.transaction(() => {
+    if (!appointment.paymentMethod && method && cashClosing(tenant(req), cashDay(tenant(req)))) return "closed";
     if (startsAt !== appointment.startsAt && scheduleConflict(res, {
       tenantId: tenant(req),
       professionalId: appointment.professionalId,
@@ -1314,14 +1324,17 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     })) return false;
     db.prepare(`
       UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?,
-        payment_method = ?, price_cents = ?, notes = ?
+        payment_method = ?, paid_on = CASE WHEN payment_method = '' AND ? != '' THEN ? ELSE paid_on END,
+        paid_at = CASE WHEN payment_method = '' AND ? != '' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE paid_at END,
+        price_cents = ?, notes = ?
       WHERE id = ? AND tenant_id = ?
-    `).run(startsAt, endsAt, status, method || "",
+    `).run(startsAt, endsAt, status, method || "", method || "", cashDay(tenant(req)), method || "",
       priceCents, req.body?.notes === undefined ? appointment.notes : String(req.body.notes),
       appointment.id, tenant(req));
     return true;
   });
-  if (!update()) return;
+  if (update === "closed") return fail(res, 409, "O caixa de hoje já está fechado.");
+  if (!update) return;
   const updated = auditSnapshot(tenant(req), appointment.id);
   if (JSON.stringify(updated) !== JSON.stringify(auditSnapshotFromOriginal(appointment)) || (req.body?.notes !== undefined && String(req.body.notes) !== appointment.notes)) {
     recordAppointmentAudit(tenant(req), appointment.id, appointment.startsAt !== updated.startsAt ? "remarcacao" : appointment.status !== updated.status ? "status" : appointment.paymentMethod !== updated.paymentMethod ? "pagamento" : "edicao", req.user, appointment);
@@ -1475,6 +1488,25 @@ app.put("/api/settings", requireAuth, allowRoles("dono"), (req, res) => {
   res.json({ ok: true });
 });
 
+
+function cashDay(tenantId) { return localNow(tenantId).slice(0, 10); }
+function validCashDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + "T12:00:00Z");
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+function cashClosing(tenantId, date) {
+  return db.prepare("SELECT id FROM daily_cash_closings WHERE tenant_id = ? AND cash_date = ?").get(tenantId, date);
+}
+function cashDaySummary(tenantId, date) {
+  const methods = Object.fromEntries(paymentMethods.map(method => [method, 0]));
+  const rows = db.prepare(`SELECT id, price_cents AS priceCents, payment_method AS paymentMethod, paid_at AS paidAt, starts_at AS startsAt
+    FROM appointments WHERE tenant_id = ? AND paid_on = ? AND status = 'concluido' AND payment_method != ''
+    ORDER BY paid_at DESC, id DESC`).all(tenantId, date);
+  for (const row of rows) methods[row.paymentMethod] = (methods[row.paymentMethod] || 0) + row.priceCents;
+  return { date, receiptCount: rows.length, methods, expectedCashCents: methods.dinheiro,
+    expectedTotalCents: rows.reduce((sum, row) => sum + row.priceCents, 0), receipts: rows };
+}
 app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
@@ -1486,18 +1518,80 @@ app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, r
   })) });
 });
 
+
 app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const method = String(req.body?.paymentMethod ?? "");
   if (!paymentMethods.includes(method)) return fail(res, 400, "Informe a forma de pagamento.");
-  const beforeAudit = auditSnapshot(tenant(req), req.params.id);
-  const result = db.prepare(`UPDATE appointments SET payment_method = ?
-    WHERE id = ? AND tenant_id = ? AND status = 'concluido' AND payment_method = ''`)
-    .run(method, req.params.id, tenant(req));
-  if (!result.changes) return fail(res, 409, "Atendimento não encontrado, não concluído ou já pago.");
-  recordAppointmentAudit(tenant(req), req.params.id, "pagamento", req.user, beforeAudit);
+  const before = auditSnapshot(tenant(req), req.params.id);
+  const day = cashDay(tenant(req));
+  const result = db.transaction(() => {
+    if (cashClosing(tenant(req), day)) return "closed";
+    const updated = db.prepare(`UPDATE appointments
+      SET payment_method = ?, paid_on = ?, paid_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ? AND tenant_id = ? AND status = 'concluido' AND payment_method = ''`)
+      .run(method, day, req.params.id, tenant(req));
+    if (!updated.changes) return "conflict";
+    recordAppointmentAudit(tenant(req), req.params.id, "pagamento", req.user, before);
+    return "ok";
+  })();
+  if (result === "closed") return fail(res, 409, "O caixa de hoje já foi fechado. Novos recebimentos só podem ser lançados no próximo dia.");
+  if (result !== "ok") return fail(res, 409, "Atendimento não encontrado, não concluído ou já pago.");
   res.json({ ok: true });
 });
 
+
+
+app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const date = String(req.query.date ?? cashDay(tenant(req)));
+  if (!validCashDate(date)) return fail(res, 400, "Data inválida.");
+  const summary = cashDaySummary(tenant(req), date);
+  const closing = db.prepare(`SELECT id, cash_date AS cashDate, closed_by_name AS closedByName,
+    closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
+    expected_cash_cents AS expectedCashCents, counted_cash_cents AS countedCashCents,
+    difference_cents AS differenceCents, receipt_count AS receiptCount, notes,
+    method_totals_json AS methodsJson
+    FROM daily_cash_closings WHERE tenant_id = ? AND cash_date = ?`).get(tenant(req), date);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ...summary, today: cashDay(tenant(req)), closing: closing ?
+    { ...closing, methods: JSON.parse(closing.methodsJson), methodsJson: undefined } : null });
+});
+
+app.get("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const rows = db.prepare(`SELECT id, cash_date AS cashDate, closed_by_name AS closedByName,
+    closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
+    expected_cash_cents AS expectedCashCents, counted_cash_cents AS countedCashCents,
+    difference_cents AS differenceCents, receipt_count AS receiptCount, notes
+    FROM daily_cash_closings WHERE tenant_id = ? ORDER BY cash_date DESC LIMIT 60`).all(tenant(req));
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ closings: rows });
+});
+
+app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const date = String(req.body?.date ?? "");
+  const counted = req.body?.countedCashCents;
+  const notes = String(req.body?.notes ?? "").trim();
+  if (!validCashDate(date) || date > cashDay(tenant(req)))
+    return fail(res, 400, "Selecione uma data válida que não seja futura.");
+  if (!Number.isSafeInteger(counted) || counted < 0 || counted > 100000000000)
+    return fail(res, 400, "Informe o valor em dinheiro contado, em centavos.");
+  if (notes.length > 500) return fail(res, 400, "Observação deve ter até 500 caracteres.");
+  const result = db.transaction(() => {
+    if (cashClosing(tenant(req), date)) return null;
+    const summary = cashDaySummary(tenant(req), date);
+    const difference = counted - summary.expectedCashCents;
+    const id = createId();
+    db.prepare(`INSERT INTO daily_cash_closings
+      (id, tenant_id, cash_date, closed_by, closed_by_name, expected_total_cents, expected_cash_cents,
+       counted_cash_cents, difference_cents, method_totals_json, receipt_count, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, tenant(req), date, req.user.id, req.user.name || "Usuário",
+      summary.expectedTotalCents, summary.expectedCashCents, counted, difference,
+      JSON.stringify(summary.methods), summary.receiptCount, notes);
+    return { id, date, differenceCents: difference };
+  })();
+  if (!result) return fail(res, 409, "Esse dia já possui um fechamento de caixa.");
+  res.status(201).json({ closing: result });
+});
 
 app.get("/api/reports/appointment-audit", requireAuth, allowRoles("dono"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));

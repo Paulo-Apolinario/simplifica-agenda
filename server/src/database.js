@@ -249,6 +249,28 @@ db.exec(`
     ON appointment_audit(tenant_id, appointment_id, created_at DESC);
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS daily_cash_closings (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    cash_date TEXT NOT NULL,
+    closed_by TEXT NOT NULL REFERENCES users(id),
+    closed_by_name TEXT NOT NULL,
+    expected_total_cents INTEGER NOT NULL CHECK (expected_total_cents >= 0),
+    expected_cash_cents INTEGER NOT NULL CHECK (expected_cash_cents >= 0),
+    counted_cash_cents INTEGER NOT NULL CHECK (counted_cash_cents >= 0),
+    difference_cents INTEGER NOT NULL,
+    method_totals_json TEXT NOT NULL,
+    receipt_count INTEGER NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    closed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE (tenant_id, cash_date)
+  );
+  CREATE INDEX IF NOT EXISTS daily_cash_closings_history_idx
+    ON daily_cash_closings(tenant_id, cash_date DESC);
+`);
+ensureColumn("appointments", "paid_on", "TEXT");
+ensureColumn("appointments", "paid_at", "TEXT");
 ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
 ensureColumn("commission_payments", "batch_id", "TEXT");
 ensureColumn("whatsapp_notifications", "delivery_state", "TEXT NOT NULL DEFAULT 'pending'");
