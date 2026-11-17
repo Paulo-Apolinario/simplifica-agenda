@@ -301,7 +301,7 @@ app.post("/api/auth/staff-login", limitAttempts("staff-ip", 20, 15 * 60 * 1000),
   const slug = String(req.body?.slug ?? "").trim().toLowerCase();
   const code = String(req.body?.staffCode ?? "").trim();
   const password = String(req.body?.password ?? "");
-  if (!slug || !/^\\d{3}$/.test(code) || !password) return fail(res, 400, "Informe comércio, código de três dígitos e senha.");
+  if (!slug || !/^\d{3}$/.test(code) || !password) return fail(res, 400, "Informe comércio, código de três dígitos e senha.");
   const user = db.prepare(`SELECT u.*, t.slug FROM users u JOIN tenants t ON t.id = u.tenant_id
     WHERE t.slug = ? AND u.staff_code = ? AND u.role = 'profissional' AND u.active = 1`).get(slug, code);
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
@@ -320,7 +320,7 @@ app.post("/api/auth/activate-professional", limitAttempts("staff-activate", 8, 1
   const staffCode = String(req.body?.staffCode ?? "").trim();
   const token = String(req.body?.activationToken ?? "");
   const password = String(req.body?.password ?? "");
-  if (!/^\\d{3}$/.test(staffCode) || !slug || !token) return fail(res, 400, "Informe comércio, código e código de ativação.");
+  if (!/^\d{3}$/.test(staffCode) || !slug || !token) return fail(res, 400, "Informe comércio, código e código de ativação.");
   if (!staffPasswordValid(password)) return fail(res, 400, "A senha deve ter 6 a 8 caracteres, com letras e números.");
   const member = db.prepare(`SELECT u.* FROM users u JOIN tenants t ON t.id = u.tenant_id
     WHERE t.slug = ? AND u.staff_code = ? AND u.role = 'profissional' AND u.active = 1`).get(slug, staffCode);
