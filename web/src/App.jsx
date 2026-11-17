@@ -847,6 +847,98 @@ function TeamHours({ professional, onClose }) {
   </Modal>;
 }
 
+function ProfessionalEarningsPage() {
+  const [month, setMonth] = useState(localDate().slice(0, 7));
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setData(null);
+    api(`/professional/earnings?month=${encodeURIComponent(month)}`)
+      .then(result => { setData(result); setError(""); })
+      .catch(reason => setError(reason.message));
+  }, [month]);
+  return <>
+    <PageTitle eyebrow="MINHAS COMISSÕES" title="Meus ganhos"
+      description="Confira suas comissões de serviços concluídos e os pagamentos registrados pelo comércio."/>
+    <div className="month-filter"><label htmlFor="earnings-month">Mês de referência</label>
+      <input id="earnings-month" className="input month-input" type="month" value={month} onChange={event => setMonth(event.target.value)}/></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    {!data ? !error && <Loading/> : <>
+      <section className="stats-grid finance-stats">
+        <StatCard title="Saldo total a receber" value={money(data.allTime.dueCents)} note="Comissões de todos os períodos não pagas" icon={Wallet} tone="green"/>
+        <StatCard title="Comissões deste mês" value={money(data.earnedCents)} note="Serviços concluídos no período" icon={ClipboardCheck} tone="blue"/>
+        <StatCard title="Pagamentos registrados" value={money(data.allTime.paidCents)} note="Histórico total de comissões pagas" icon={CheckCheck} tone="purple"/>
+      </section>
+      <section className="panel management-panel">
+        <div className="panel-heading"><div><p className="eyebrow">DETALHAMENTO</p><h2>Serviços prestados</h2>
+          <p className="panel-subtitle">Os valores abaixo são comissões, não o preço integral dos serviços. Somente o proprietário registra o pagamento.</p></div></div>
+        {data.services.length ? <div className="management-list">{data.services.map(item =>
+          <article className="service-row" key={item.id}>
+            <span className="service-row-icon"><Wallet size={18}/></span>
+            <div className="min-w-0 flex-1"><b>{item.serviceName} · {item.clientName}</b>
+              <small>{dateTimeLabel(item.startsAt)} · {item.commissionPercent}% de comissão</small></div>
+            <strong>{money(item.earnedCents)}</strong>
+            <span className={`status-badge ${item.paid ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+              {item.paid ? "Pago" : "A receber"}</span>
+          </article>)}</div> : <EmptyState icon={Wallet} title="Sem ganhos registrados neste mês"
+            description="A comissão aparece quando um serviço atribuído a você é concluído."/>}
+      </section>
+    </>}
+  </>;
+}
+
+function TeamCommissionsPage() {
+  const [month, setMonth] = useState(localDate().slice(0, 7));
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(null);
+  const refresh = useCallback(async () => {
+    try {
+      const result = await api(`/commissions?month=${encodeURIComponent(month)}`);
+      setItems(result.commissions); setError("");
+    } catch(reason) { setError(reason.message); }
+  }, [month]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const registerPayment = async item => {
+    if (!window.confirm(`Confirmar pagamento da comissão de ${item.professionalName} no valor de ${money(item.earnedCents)}? Essa operação será registrada como paga.`)) return;
+    setSaving(item.id);
+    try {
+      await api(`/commissions/${item.id}/pay`, { method: "POST" });
+      await refresh();
+    } catch (reason) { setError(reason.message); }
+    finally { setSaving(null); }
+  };
+  const unpaid = items.filter(item => !item.paid);
+  return <>
+    <PageTitle eyebrow="CONTROLE DA EQUIPE" title="Comissões da equipe"
+      description="Registre o pagamento de comissões pelos serviços concluídos; o saldo do profissional é atualizado automaticamente."/>
+    <div className="month-filter"><label htmlFor="commissions-month">Mês</label>
+      <input id="commissions-month" className="input month-input" type="month" value={month}
+        onChange={event => setMonth(event.target.value)}/></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <section className="stats-grid finance-stats">
+      <StatCard title="Pendente no mês" value={money(unpaid.reduce((sum,item)=>sum+item.earnedCents,0))}
+        note="Comissões de serviços concluídos" icon={Wallet} tone="orange"/>
+      <StatCard title="Pago no mês" value={money(items.filter(item=>item.paid).reduce((sum,item)=>sum+item.paidCents,0))}
+        note="Pagamentos registrados" icon={CheckCheck} tone="green"/>
+    </section>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><h2>Comissões por serviço</h2>
+        <p className="panel-subtitle">Registrar pagamento não transfere dinheiro. Confirme apenas após pagar o profissional.</p></div></div>
+      {items.length ? <div className="management-list">{items.map(item =>
+        <article className="service-row" key={item.id}>
+          <span className="service-row-icon"><CircleDollarSign size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{item.professionalName} · {item.serviceName}</b>
+            <small>{dateTimeLabel(item.startsAt)} · {item.commissionPercent}% de comissão</small></div>
+          <strong>{money(item.earnedCents)}</strong>
+          {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Pago</span> :
+            <Button disabled={saving === item.id} onClick={()=>registerPayment(item)}>{saving === item.id ? "Salvando..." : "Registrar pagamento"}</Button>}
+        </article>)}</div> : <EmptyState icon={Wallet} title="Sem comissões neste mês"
+          description="Conclua os atendimentos para registrar comissões."/>}
+    </section>
+  </>;
+}
+
 function ProfessionalWorkPage() {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [data, setData] = useState({ services: [], totals: { appointments: 0, completed: 0, serviceValueCents: 0 } });
@@ -882,7 +974,7 @@ function ProfessionalWorkPage() {
       <StatCard title="Meus agendamentos" value={data.totals.appointments} note="No período" icon={CalendarDays} />
       <StatCard title="Serviços realizados" value={data.totals.completed} note="Concluídos" icon={CheckCheck} tone="green"/>
       <StatCard title="Valor dos serviços realizados" value={money(data.totals.serviceValueCents)}
-        note="Valor dos serviços, não comissão ou pagamento" icon={Scissors} tone="blue"/>
+        note="Valor bruto; veja comissões em Meus ganhos" icon={Scissors} tone="blue"/>
     </section>
     <section className="panel management-panel">
       <div className="panel-heading"><div><p className="eyebrow">REGISTRO DE SERVIÇOS</p>
@@ -1301,6 +1393,8 @@ export default function App() {
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage /> : <AccessDenied />} />
+      <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>
+      <Route path="/comissoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <TeamCommissionsPage/> : <AccessDenied/>}/>
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
       <Route path="/recebimentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
