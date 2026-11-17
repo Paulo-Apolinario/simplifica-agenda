@@ -273,6 +273,25 @@ test("commercial setup, authenticated account and staff password rotation", asyn
       name: "Outro cliente", phone: "85977776665",
       serviceId: "unassigned-service", professionalId: staffId, startsAt: "2030-01-08T16:30:00",
     })).status, 409);
+    // Customer management link uses a secret token; the receipt is not a final confirmation.
+    assert.match(publicBooking.body.managementToken, /^[a-f0-9]{64}$/);
+    assert.equal(publicBooking.body.status, "agendado");
+    const token = publicBooking.body.managementToken;
+    const receipt = await request(`/public/manage/${token}`);
+    assert.equal(receipt.status, 200);
+    assert.equal(receipt.body.appointment.status, "agendado");
+    assert.equal(receipt.body.appointment.businessName, "Comércio Teste");
+    assert.equal((await request("/public/manage/" + "0".repeat(64))).status, 404);
+    assert.equal((await request(`/public/manage/${token}/reschedule`, "POST", {
+      startsAt: "2030-01-08T16:30:00",
+    })).status, 200);
+    assert.equal((await request(`/public/manage/${token}/reschedule`, "POST", {
+      startsAt: "2030-01-08T16:31:00",
+    })).status, 400);
+    assert.equal((await request("/requests")).status, 403);
+    const afterReschedule = await request(`/public/manage/${token}`);
+    assert.equal(afterReschedule.body.appointment.status, "agendado");
+
 
 
     const anonymous = db.prepare("SELECT c.name FROM appointments a JOIN clients c ON c.id = a.client_id WHERE a.id = ?")
@@ -292,6 +311,42 @@ test("commercial setup, authenticated account and staff password rotation", asyn
       email: "dono@teste.local", password: "Nova-Senha-Forte-1234",
     });
     assert.equal(commercialReturn.status, 200);
+    const newPublicRequests = await request("/requests");
+    assert.equal(newPublicRequests.status, 200);
+    assert.equal(newPublicRequests.body.requests.some(item => item.id === publicBooking.body.id && item.status === "agendado"), true);
+    assert.equal((await request(`/requests/${publicBooking.body.id}`, "PATCH", {action:"confirm"})).status, 200);
+    assert.equal((await request(`/requests/${publicBooking.body.id}`, "PATCH", {action:"confirm"})).status, 409);
+    assert.equal((await request(`/public/manage/${token}`)).body.appointment.status, "confirmado");
+    assert.equal((await request(`/public/manage/${token}/cancel`, "POST", {})).status, 200);
+    assert.equal((await request(`/public/manage/${token}`)).body.appointment.status, "cancelado");
+    assert.equal((await request(`/requests/${publicBooking.body.id}`, "PATCH", {action:"confirm"})).status, 409);
+    assert.equal((await request("/settings/booking", "PATCH", {
+      bookingMinNoticeMinutes: 30, bookingMaxDays: 60, bookingSlotIntervalMinutes: 15,
+      bookingCancellationHours: 24, bookingAllowCancellation: false,
+    })).status, 200);
+    assert.equal((await request("/settings")).body.settings.bookingSlotIntervalMinutes, 15);
+    assert.equal((await request("/settings/booking", "PATCH", {
+      bookingMinNoticeMinutes: -20, bookingMaxDays: 0, bookingSlotIntervalMinutes: 17,
+      bookingCancellationHours: 24,
+    })).status, 400);
+    assert.equal((await request("/public/comercio-teste/slots?serviceId=unassigned-service&professionalId=" + staffId + "&date=2030-01-08")).body.slots.length, 0);
+    assert.equal((await request("/services/s-test", "PATCH", {
+      name: "Corte sem taxa", durationMinutes: 30, priceCents: 7500,
+      houseSharePercent: 0, commissionMode: "custom", serviceCommissionPercent: 100,
+      publicEnabled: true,
+    })).status, 200);
+    const fullShare = (await request("/services")).body.services.find(item=>item.id===serviceId);
+    assert.equal(fullShare.serviceCommissionPercent, 100);
+    assert.equal(fullShare.commissionMode, "custom");
+    const unchangedHistorical = db.prepare("SELECT commission_percent AS commission FROM appointments WHERE id = ?").get("a-prof-test");
+    assert.equal(unchangedHistorical.commission, 40);
+    // Hide one service from the public link without disabling it for internal staff.
+    assert.equal((await request("/services/unassigned-service", "PATCH", {
+      name:"Coloração sem vínculo", durationMinutes:30, priceCents:12000,
+      houseSharePercent:10, publicEnabled:false, commissionMode:"professional",
+    })).status, 200);
+    assert.equal((await request("/public/comercio-teste")).body.services.some(v=>v.id==="unassigned-service"), false);
+
     // Owner records payment; professional sees accurate due/paid balance.
     const listCommissions = await request("/commissions?month=2026-11");
     assert.equal(listCommissions.status, 200);
