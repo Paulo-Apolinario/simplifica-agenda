@@ -126,4 +126,32 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS sessions_expires_idx ON sessions(expires_at);
 `);
 
+
+/* Additive migration: preserve existing staff, logins, schedules and services. */
+const userColumns = db.prepare("PRAGMA table_info(users)").all().map(column => column.name);
+if (!userColumns.includes("staff_code")) db.exec("ALTER TABLE users ADD COLUMN staff_code TEXT");
+if (!userColumns.includes("activation_hash")) db.exec("ALTER TABLE users ADD COLUMN activation_hash TEXT");
+if (!userColumns.includes("activation_expires_at")) db.exec("ALTER TABLE users ADD COLUMN activation_expires_at INTEGER");
+db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS staff_code_by_tenant_idx
+  ON users(tenant_id, staff_code) WHERE staff_code IS NOT NULL`);
+db.transaction(() => {
+  const existing = db.prepare(`SELECT id, tenant_id FROM users
+    WHERE role = 'profissional' ORDER BY tenant_id, created_at, id`).all();
+  const getMax = db.prepare(`SELECT COALESCE(MAX(CAST(staff_code AS INTEGER)), 0) AS max_code
+    FROM users WHERE tenant_id = ? AND role = 'profissional'`);
+  const assign = db.prepare("UPDATE users SET staff_code = ? WHERE id = ? AND staff_code IS NULL");
+  for (const member of existing) {
+    const next = getMax.get(member.tenant_id).max_code + 1;
+    if (next > 999) throw new Error("Limite de 999 profissionais por comércio excedido.");
+    assign.run(String(next).padStart(3, "0"), member.id);
+  }
+})();
+
+export function allocateStaffCode(tenantId) {
+  const max = db.prepare(`SELECT COALESCE(MAX(CAST(staff_code AS INTEGER)), 0) AS max_code
+    FROM users WHERE tenant_id = ? AND role = 'profissional'`).get(tenantId).max_code;
+  if (max >= 999) throw new Error("Limite de 999 profissionais por comércio excedido.");
+  return String(max + 1).padStart(3, "0");
+}
+
 export const createId = () => randomUUID();
