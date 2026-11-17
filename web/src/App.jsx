@@ -353,7 +353,7 @@ function Shell({ user, onLogout, children }) {
     if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
-    if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes", "/regras-comissao", "/fechamentos"].includes(item.to);
+    if (user.role === "recepcao") return !["/financeiro", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes", "/regras-comissao", "/fechamentos"].includes(item.to);
     if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
     return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
@@ -1395,6 +1395,102 @@ function BookingSharePage({ user }) {
   </>;
 }
 
+
+function DailyCashClosing() {
+  const [date, setDate] = useState(localDate().slice(0, 10));
+  const [summary, setSummary] = useState(null);
+  const [closings, setClosings] = useState([]);
+  const [counted, setCounted] = useState("");
+  const [notes, setNotes] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [updated, setUpdated] = useState(0);
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      api(`/cash/daily?date=${encodeURIComponent(date)}`),
+      api("/cash/closings")
+    ]).then(([day, history]) => {
+      if (!active) return;
+      setSummary(day);
+      setClosings(history.closings);
+      setCounted((day.expectedCashCents / 100).toFixed(2));
+      setError("");
+    }).catch(reason => { if (active) setError(reason.message); });
+    return () => { active = false; };
+  }, [date, updated]);
+  const closeDay = async () => {
+    const input = String(counted).trim().replace(",", ".");
+    if (!/^\d+(?:\.\d{1,2})?$/.test(input)) {
+      setError("Informe o valor em dinheiro contado, com até duas casas decimais."); return;
+    }
+    const countedCashCents = Math.round(Number(input) * 100);
+    if (!Number.isSafeInteger(countedCashCents)) {
+      setError("Valor informado inválido."); return;
+    }
+    if (!window.confirm(`Confirmar fechamento de ${date}? O registro ficará bloqueado para edição.`)) return;
+    setBusy(true); setError("");
+    try {
+      await api("/cash/closings", {method:"POST", body:{date, countedCashCents, notes}});
+      setUpdated(n => n + 1);
+      setNotes("");
+    } catch (reason) { setError(reason.message); }
+    finally { setBusy(false); }
+  };
+  const methods = summary?.closing?.methods || summary?.methods || {};
+  return <section className="panel management-panel">
+    <div className="panel-heading">
+      <div><p className="eyebrow">CONFERÊNCIA DIÁRIA</p><h2>Fechamento diário de caixa</h2>
+        <p className="panel-subtitle">Confira os pagamentos recebidos na data. O valor contado refere-se apenas ao dinheiro físico.</p></div>
+      <input className="input" type="date" aria-label="Data do caixa" value={date}
+        max={summary?.today || localDate().slice(0,10)} onChange={e => setDate(e.target.value)}/>
+    </div>
+    <ErrorMessage>{error}</ErrorMessage>
+    {!summary ? <p className="report-empty">Carregando o caixa...</p> : <>
+      <div className="stats-grid finance-stats">
+        <StatCard title="Total recebido" value={money(summary.closing?.expectedTotalCents ?? summary.expectedTotalCents)} note={`${summary.closing?.receiptCount ?? summary.receiptCount} recebimento(s)`} icon={Wallet} tone="green"/>
+        <StatCard title="Dinheiro esperado" value={money(summary.closing?.expectedCashCents ?? summary.expectedCashCents)} note="Somente pagamentos em espécie" icon={CircleDollarSign} tone="blue"/>
+        <StatCard title="Situação" value={summary.closing ? "Fechado" : "Aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : "Aguardando conferência"} icon={CheckCheck} tone={summary.closing ? "green" : "orange"}/>
+      </div>
+      <div className="management-list">
+        {Object.entries(paymentNames).map(([key,label]) => <div className="service-row" key={key}>
+          <span className="service-row-icon"><Wallet size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{label}</b></div>
+          <strong>{money(methods[key] || 0)}</strong>
+        </div>)}
+      </div>
+      {summary.closing ? <div className="panel" style={{marginTop:16}}>
+        <b>Fechado por {summary.closing.closedByName}</b>
+        <p className="panel-subtitle">Dinheiro contado: {money(summary.closing.countedCashCents)} · Diferença: {money(summary.closing.differenceCents)}</p>
+        {summary.closing.notes && <p className="panel-subtitle">Observação: {summary.closing.notes}</p>}
+      </div> : <>
+        <div className="month-filter" style={{marginTop:16}}>
+          <label htmlFor="counted-cash">Dinheiro contado (R$)</label>
+          <input id="counted-cash" className="input month-input" inputMode="decimal"
+            value={counted} onChange={e => setCounted(e.target.value)} placeholder="0,00"/>
+        </div>
+        <div className="month-filter">
+          <label htmlFor="cash-notes">Observações da conferência</label>
+          <textarea id="cash-notes" className="input" maxLength={500} value={notes}
+            onChange={e => setNotes(e.target.value)} placeholder="Informe uma justificativa se houver diferença no dinheiro contado."/>
+        </div>
+        <Button disabled={busy || date > (summary.today || date)} onClick={closeDay}>
+          {busy ? "Fechando..." : "Confirmar fechamento do dia"}
+        </Button>
+      </>}
+    </>}
+    <div className="panel-heading" style={{marginTop:24}}><div><p className="eyebrow">REGISTROS</p><h3>Últimos fechamentos</h3></div></div>
+    {closings.length ? <div className="management-list">{closings.map(item =>
+      <article className="service-row" key={item.id}>
+        <span className="service-row-icon"><Check size={18}/></span>
+        <div className="min-w-0 flex-1"><b>{item.cashDate} · {item.closedByName}</b>
+          <small>{item.receiptCount} recebimento(s) · Diferença: {money(item.differenceCents)}</small></div>
+        <strong>{money(item.expectedTotalCents)}</strong>
+      </article>)}</div> : <p className="report-empty">Ainda não existem fechamentos registrados.</p>}
+    <p className="panel-subtitle">Recebimentos antigos sem data registrada não entram automaticamente na conferência diária.</p>
+  </section>;
+}
+
 function ReceivablesPage({ user }) {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [items, setItems] = useState([]);
@@ -1457,6 +1553,7 @@ function ReceivablesPage({ user }) {
           <strong>{money(item.priceCents)}</strong>
         </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
     </section>
+    <DailyCashClosing/>
   </>;
 }
 
