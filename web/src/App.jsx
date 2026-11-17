@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, CircleDollarSign, Clock3, Download, ExternalLink, LayoutDashboard,
   LogOut, Menu, Moon, MoreHorizontal, Plus, Search, Settings, ShieldCheck, Sun, Users,
   Wallet, X, Scissors, UserRound, CalendarClock, CalendarX2, Phone, Mail, Sparkles,
-  Copy, QrCode, Share2, Link2, Smartphone, Info, ClipboardCheck, UserRoundCheck,
+  Copy, QrCode, Share2, Link2, Smartphone, Info, ClipboardCheck, UserRoundCheck, Upload,
 } from "lucide-react";
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
@@ -332,6 +332,7 @@ function Shell({ user, onLogout, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
+  const [businessLogo, setBusinessLogo] = useState("");
   const isDemo = user.tenantId === "tenant-salao-demo";
   const visibleNavItems = navItems.filter((item) => {
     if (user.role === "dono" && item.to === "/minha-conta") return false;
@@ -342,7 +343,10 @@ function Shell({ user, onLogout, children }) {
     return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
   useEffect(() => {
-    api("/settings").then(({ settings }) => settings?.businessName && setBusinessName(settings.businessName)).catch(() => {});
+    api("/settings").then(({ settings }) => {
+      if (settings?.businessName) setBusinessName(settings.businessName);
+      setBusinessLogo(settings?.logoUrl || "");
+    }).catch(() => {});
   }, [location.pathname]);
   const pageName = visibleNavItems.find((item) => item.to === location.pathname)?.label ?? "Simplifica Agenda";
   return (
@@ -354,7 +358,7 @@ function Shell({ user, onLogout, children }) {
           <span className="brand-type"><b>simplifica<span>.</span></b><small>AGENDA INTELIGENTE</small></span>
         </Link>
         <div className="business-switcher">
-          <span className="business-avatar">{businessName.slice(0, 1)}</span>
+          <span className="business-avatar">{businessLogo ? <img src={businessLogo} alt="" className="business-logo-img"/> : businessName.slice(0, 1)}</span>
           <span className="min-w-0 flex-1"><b>{businessName}</b><small>{user.slug === "studio-bela-vista" ? "Ambiente de demonstração" : "Meu negócio"}</small></span>
           <ChevronDown size={15} className="text-slate-400" />
         </div>
@@ -1475,61 +1479,140 @@ const weekdays = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Q
 function SettingsPage({ user, onUserUpdated }) {
   const [settings, setSettings] = useState(null);
   const [hours, setHours] = useState([]);
+  const [tab, setTab] = useState("business");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  useEffect(() => { api("/settings").then((data) => { setSettings(data.settings); setHours(data.hours); }).catch((reason) => setError(reason.message)); }, []);
-  const updateHour = (weekday, key, value) => setHours((current) => current.map((hour) => hour.weekday === weekday ? { ...hour, [key]: value } : hour));
-  const submit = async (event) => {
-    event.preventDefault(); setError(""); setMessage("");
-    try { await api("/settings", { method: "PUT", body: { ...settings, hours } }); setMessage("Configurações salvas com sucesso."); }
-    catch (reason) { setError(reason.message); }
+  const [saving, setSaving] = useState(false);
+  const [logoBusy, setLogoBusy] = useState(false);
+  const [logoError, setLogoError] = useState("");
+  useEffect(() => {
+    api("/settings").then(data => {
+      setSettings(data.settings);
+      setHours(data.hours);
+    }).catch(reason => setError(reason.message));
+  }, []);
+  const updateHour = (weekday, key, value) =>
+    setHours(current => current.map(hour => hour.weekday === weekday ? { ...hour, [key]: value } : hour));
+  const save = async event => {
+    event.preventDefault();
+    setSaving(true); setError(""); setMessage("");
+    try {
+      await api("/settings", { method: "PUT", body: { ...settings, hours } });
+      setMessage("Alterações salvas com sucesso.");
+    } catch (reason) { setError(reason.message); }
+    finally { setSaving(false); }
+  };
+  const uploadLogo = async event => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setLogoError("");
+    setMessage("");
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type) || file.size > 500 * 1024 || !file.size) {
+      setLogoError("Selecione PNG, JPG ou WebP de até 500 KB.");
+      return;
+    }
+    setLogoBusy(true);
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error("Não foi possível ler a imagem."));
+        reader.readAsDataURL(file);
+      });
+      const response = await api("/settings/logo", { method: "POST", body: { image: dataUrl } });
+      setSettings(previous => ({ ...previous, logoUrl: response.logoUrl }));
+      setMessage("Logo atualizada! Ela já está disponível na página pública.");
+    } catch (reason) { setLogoError(reason.message); }
+    finally { setLogoBusy(false); }
+  };
+  const removeLogo = async () => {
+    if (!window.confirm("Remover a logo personalizada e voltar à imagem padrão?")) return;
+    setLogoError(""); setLogoBusy(true);
+    try {
+      await api("/settings/logo", { method: "DELETE" });
+      setSettings(previous => ({ ...previous, logoUrl: "" }));
+      setMessage("Logo removida. A imagem padrão será utilizada.");
+    } catch (reason) { setLogoError(reason.message); }
+    finally { setLogoBusy(false); }
   };
   if (!settings) return error ? <ErrorMessage>{error}</ErrorMessage> : <Loading />;
   return <>
-    <PageTitle eyebrow="O SEU ESPAÇO, DO SEU JEITO" title="Configurações do estabelecimento" description="Personalize seus dados, horários e contato de WhatsApp para clientes." />
-    <form onSubmit={submit} className="settings-layout">
-      <section className="panel settings-panel"><div className="panel-heading"><div><p className="eyebrow">IDENTIDADE DO NEGÓCIO</p><h2>Seu espaço</h2></div><ShieldCheck size={20} className="text-emerald-500" /></div>
-        <div className="settings-logo-row"><img src={settings.logoUrl || "/assets/simplifica-perfil.svg"} alt="" /><span><b>Logo do negócio</b><small>Adicione uma URL de imagem para personalizar seu perfil público.</small></span></div>
+    <PageTitle eyebrow="PERSONALIZAÇÃO E GESTÃO" title="Configurações do estabelecimento"
+      description="Organize os dados comerciais, os horários e a segurança da sua conta." />
+    <div className="settings-tab-bar" role="tablist" aria-label="Seções das configurações">
+      <button type="button" role="tab" aria-selected={tab === "business"} className={tab === "business" ? "active" : ""}
+        onClick={() => { setTab("business"); setError(""); setMessage(""); }}><Settings size={16}/> Estabelecimento</button>
+      <button type="button" role="tab" aria-selected={tab === "hours"} className={tab === "hours" ? "active" : ""}
+        onClick={() => { setTab("hours"); setError(""); setMessage(""); }}><Clock3 size={16}/> Horários</button>
+      <button type="button" role="tab" aria-selected={tab === "account"} className={tab === "account" ? "active" : ""}
+        onClick={() => { setTab("account"); setError(""); setMessage(""); }}><ShieldCheck size={16}/> Minha conta</button>
+    </div>
+    {tab === "business" && <form onSubmit={save} className="settings-single-section">
+      <section className="panel settings-panel">
+        <div className="panel-heading"><div><p className="eyebrow">IDENTIDADE E CONTATO</p><h2>Dados do estabelecimento</h2>
+          <p className="panel-subtitle">Informações visíveis aos clientes na página de agendamento.</p></div></div>
+        <div className="settings-logo-upload">
+          <img src={settings.logoUrl || "/assets/simplifica-perfil.svg"} alt="Logo atual do estabelecimento"/>
+          <div className="settings-logo-content">
+            <b>Logo do estabelecimento</b>
+            <small>PNG, JPG ou WebP de até 500 KB. A imagem é salva automaticamente quando selecionada.</small>
+            <div className="settings-logo-actions">
+              <label className="button button-secondary settings-file-action">
+                <Upload size={15}/> {logoBusy ? "Enviando..." : settings.logoUrl ? "Trocar imagem" : "Selecionar imagem"}
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadLogo} disabled={logoBusy} />
+              </label>
+              {settings.logoUrl && <Button type="button" variant="secondary" disabled={logoBusy} onClick={removeLogo}>
+                <X size={14}/> Remover</Button>}
+            </div>
+            <ErrorMessage>{logoError}</ErrorMessage>
+          </div>
+        </div>
         <div className="form-stack mt-5">
-          <Field label="Nome do negócio" required value={settings.businessName} onChange={(e) => setSettings({ ...settings, businessName: e.target.value })} />
-          <Field label="Endereço da logo (opcional)" placeholder="/assets/simplifica-perfil.svg" value={settings.logoUrl} onChange={(e) => setSettings({ ...settings, logoUrl: e.target.value })} />
-          <Field label="Telefone do estabelecimento" type="tel" maxLength={40} value={settings.phone ?? ""} onChange={(e) => setSettings({ ...settings, phone: e.target.value })} />
-          <Field label="WhatsApp do estabelecimento" type="tel" inputMode="tel" placeholder="(85) 99999-9999" required={false}
-            value={settings.whatsapp ?? ""} onChange={(e) => setSettings({ ...settings, whatsapp: e.target.value })} />
-          <p className="panel-subtitle">Informe DDD e número. O WhatsApp é usado para os clientes entrarem em contato com o comércio; não envia mensagens automaticamente.</p>
-          {settings.whatsapp && whatsappUrl(settings.whatsapp, "Olá! Gostaria de falar com o estabelecimento.") &&
-            <a className="button button-whatsapp" href={whatsappUrl(settings.whatsapp, "Olá! Gostaria de falar com o estabelecimento.")}
-              target="_blank" rel="noreferrer"><Phone size={15}/> Testar meu WhatsApp</a>}
-          <Field label="Endereço" value={settings.address} onChange={(e) => setSettings({ ...settings, address: e.target.value })} />
-          <SelectField label="Aparência" value={settings.theme} onChange={(e) => { setSettings({ ...settings, theme: e.target.value }); document.documentElement.classList.toggle("dark", e.target.value === "escuro"); }}>
-            <option value="claro">Modo claro</option><option value="escuro">Modo escuro</option>
-          </SelectField>
+          <Field label="Nome do estabelecimento" required maxLength={120} value={settings.businessName || ""}
+            onChange={event => setSettings({ ...settings, businessName: event.target.value })}/>
+          <Field label="Endereço" value={settings.address || ""}
+            onChange={event => setSettings({ ...settings, address: event.target.value })}/>
+          <div className="form-grid">
+            <Field label="Telefone" type="tel" maxLength={40} value={settings.phone || ""}
+              onChange={event => setSettings({ ...settings, phone: event.target.value })}/>
+            <Field label="WhatsApp" type="tel" placeholder="(85) 99999-9999" value={settings.whatsapp || ""}
+              onChange={event => setSettings({ ...settings, whatsapp: event.target.value })}/>
+          </div>
+          <p className="panel-subtitle">O WhatsApp abre uma conversa com o cliente, mas não envia mensagens automáticas.</p>
+          <SelectField label="Aparência" value={settings.theme} onChange={event => {
+            setSettings({ ...settings, theme: event.target.value });
+            document.documentElement.classList.toggle("dark", event.target.value === "escuro");
+          }}><option value="claro">Modo claro</option><option value="escuro">Modo escuro</option></SelectField>
         </div>
       </section>
-      <section className="panel settings-panel"><div className="panel-heading"><div><p className="eyebrow">HORÁRIOS DE FUNCIONAMENTO</p><h2>Quando você atende</h2></div><Clock3 size={20} className="text-blue-500" /></div>
-        <p className="panel-subtitle">Os clientes poderão agendar dentro destes horários.</p>
-        <div className="business-hours-list">{hours.map((hour) => <div className="hours-row" key={hour.weekday}><b>{weekdays[hour.weekday]}</b>
-          <label className="hours-check"><input type="checkbox" checked={!!hour.opensAt && !!hour.closesAt} onChange={(e) => {
-            updateHour(hour.weekday, "opensAt", e.target.checked ? "09:00" : ""); updateHour(hour.weekday, "closesAt", e.target.checked ? "18:00" : "");
-          }} /> Aberto</label>
-          {hour.opensAt && <><input className="input hours-input" type="time" value={hour.opensAt} onChange={(e) => updateHour(hour.weekday, "opensAt", e.target.value)} />
-            <span>às</span><input className="input hours-input" type="time" value={hour.closesAt} onChange={(e) => updateHour(hour.weekday, "closesAt", e.target.value)} /></>}
-        </div>)}</div>
-        <div className="public-url-card"><span className="shortcut-icon blue"><ExternalLink size={17} /></span><span><b>Sua página de agendamento</b><small>Abra a página pública do seu estabelecimento pelo menu lateral.</small></span></div>
+      <div className="settings-save"><ErrorMessage>{error}</ErrorMessage>{message && <span className="success-message">{message}</span>}
+        <Button disabled={saving}><Check size={16}/> {saving ? "Salvando..." : "Salvar alterações"}</Button></div>
+    </form>}
+    {tab === "hours" && <form onSubmit={save} className="settings-single-section">
+      <section className="panel settings-panel">
+        <div className="panel-heading"><div><p className="eyebrow">AGENDA DO COMÉRCIO</p><h2>Horários de funcionamento</h2>
+          <p className="panel-subtitle">Defina os dias e horários disponíveis para agendamento.</p></div><Clock3 size={20}/></div>
+        <div className="business-hours-list">{hours.map(hour =>
+          <div className="hours-row" key={hour.weekday}>
+            <b>{weekdays[hour.weekday]}</b>
+            <label className="hours-check"><input type="checkbox" checked={!!hour.opensAt && !!hour.closesAt}
+              onChange={event => setHours(previous => previous.map(item => item.weekday === hour.weekday ?
+                { ...item, opensAt: event.target.checked ? "09:00" : "", closesAt: event.target.checked ? "18:00" : "" } : item))}/> Aberto</label>
+            {hour.opensAt && <><input className="input hours-input" type="time" value={hour.opensAt}
+              onChange={event => updateHour(hour.weekday, "opensAt", event.target.value)}/>
+              <span>às</span><input className="input hours-input" type="time" value={hour.closesAt}
+              onChange={event => updateHour(hour.weekday, "closesAt", event.target.value)}/></>}
+          </div>)}</div>
       </section>
-      <div className="settings-save"><ErrorMessage>{error}</ErrorMessage><span className="success-message">{message}</span><Button><Check size={16} /> Salvar configurações</Button></div>
-    </form>
-    <section className="settings-account-section" aria-label="Minha conta e segurança">
-      <div className="settings-section-intro">
-        <p className="eyebrow">ACESSO E SEGURANÇA</p>
-        <h2>Minha conta</h2>
-        <p className="panel-subtitle">Atualize seus dados pessoais e senha, sem sair das configurações do estabelecimento.</p>
-      </div>
-      <AccountPage user={user} onUserUpdated={onUserUpdated} embedded />
-    </section>
+      <div className="settings-save"><ErrorMessage>{error}</ErrorMessage>{message && <span className="success-message">{message}</span>}
+        <Button disabled={saving}><Check size={16}/> {saving ? "Salvando..." : "Salvar horários"}</Button></div>
+    </form>}
+    {tab === "account" && <div className="settings-single-section">
+      <AccountPage user={user} onUserUpdated={onUserUpdated} embedded/>
+    </div>}
   </>;
 }
-
 function PublicBooking({ slug }) {
   const [data, setData] = useState(null);
   const [serviceId, setServiceId] = useState("");
