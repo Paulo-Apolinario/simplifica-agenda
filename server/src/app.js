@@ -1364,11 +1364,12 @@ function managedPublicAppointment(token) {
   if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token)) return null;
   return db.prepare(`SELECT a.id, a.tenant_id AS tenantId, a.starts_at AS startsAt,
     a.ends_at AS endsAt, a.status, a.professional_id AS professionalId,
-    a.service_id AS serviceId, a.price_cents AS priceCents, c.name AS clientName,
+    a.service_id AS serviceId, a.price_cents AS priceCents, t.slug AS slug, c.name AS clientName,
     s.name AS serviceName, u.name AS professionalName, b.business_name AS businessName,
     b.whatsapp, b.booking_allow_cancellation AS allowCancellation,
     b.booking_cancellation_hours AS cancelHours
-    FROM appointments a JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
+    FROM appointments a JOIN tenants t ON t.id=a.tenant_id
+    JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
     JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
     JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
     JOIN business_settings b ON b.tenant_id=a.tenant_id
@@ -1509,6 +1510,7 @@ app.get("/api/public/manage/:token", (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.json({ appointment: {
     protocol: record.id.slice(0, 8).toUpperCase(), businessName: record.businessName,
+    slug:record.slug, serviceId:record.serviceId, professionalId:record.professionalId,
     clientName: record.clientName, serviceName: record.serviceName, professionalName: record.professionalName,
     startsAt: record.startsAt, status: record.status, priceCents: record.priceCents,
     whatsapp: record.whatsapp, canManage,
