@@ -40,9 +40,10 @@ export function cashClosingPdf({ businessName, closing, opening, receipts }) {
   lines.push("Observacoes: " + (closing.notes || "Nenhuma"));
   lines.push("Documento gerado a partir do fechamento registrado.");
   if (!closing.receiptsSnapshotJson) lines.push("Registro historico: detalhes reconstituidos dos pagamentos atuais.");
-  const perPage = 57;
+  const perPage = 56;
+  const wrapped = lines.flatMap(line => plain(line).match(/.{1,96}/g) || [""]);
   const pages = [];
-  for (let i = 0; i < lines.length; i += perPage) pages.push(lines.slice(i, i + perPage));
+  for (let i = 0; i < wrapped.length; i += perPage) pages.push(wrapped.slice(i, i + perPage));
   const objects = [null];
   const add = content => { objects.push(content); return objects.length - 1; };
   const catalog = add("");
