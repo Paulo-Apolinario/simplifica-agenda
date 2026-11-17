@@ -194,6 +194,18 @@ app.use("/api", (req, res, next) => {
   next();
 });
 
+// The demonstration tenant is strictly read-only; presentation data stays intact.
+const DEMO_TENANT_ID = "tenant-salao-demo";
+const isDemoTenant = (tenantId) => tenantId === DEMO_TENANT_ID;
+app.use("/api", (req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  if (req.path.startsWith("/auth/") || req.path.startsWith("/installation/")) return next();
+  if (req.session?.user && isDemoTenant(req.session.user.tenantId)) {
+    return fail(res, 403, "A demonstração é somente leitura. Entre com uma conta comercial para salvar alterações.");
+  }
+  next();
+});
+
 // Installation is only possible while the database has no businesses.
 const demoEnabled = process.env.DEMO_MODE === "true"
   || (process.env.NODE_ENV !== "production" && process.env.DEMO_MODE !== "false");
@@ -760,7 +772,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
       UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?,
         payment_method = ?, price_cents = ?, notes = ?
       WHERE id = ? AND tenant_id = ?
-    `).run(startsAt, endsAt, status, method || (status === "concluido" ? "dinheiro" : ""),
+    `).run(startsAt, endsAt, status, method || "",
       priceCents, req.body?.notes === undefined ? appointment.notes : String(req.body.notes),
       appointment.id, tenant(req));
     return true;
@@ -838,12 +850,35 @@ app.put("/api/settings", requireAuth, allowRoles("dono"), (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
+  if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
+  const rows = appointmentRows(tenant(req), "AND substr(a.starts_at, 1, 7) = ? AND a.status = 'concluido'", [month]);
+  res.json({ month, receivables: rows.map(row => ({
+    id: row.id, clientName: row.clientName, serviceName: row.serviceName, professionalName: row.professionalName,
+    startsAt: row.startsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod,
+    paid: Boolean(row.paymentMethod),
+  })) });
+});
+
+app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const method = String(req.body?.paymentMethod ?? "");
+  if (!paymentMethods.includes(method)) return fail(res, 400, "Informe a forma de pagamento.");
+  const result = db.prepare(`UPDATE appointments SET payment_method = ?
+    WHERE id = ? AND tenant_id = ? AND status = 'concluido' AND payment_method = ''`)
+    .run(method, req.params.id, tenant(req));
+  if (!result.changes) return fail(res, 409, "Atendimento não encontrado, não concluído ou já pago.");
+  res.json({ ok: true });
+});
+
 app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const revenue = db.prepare(`
-    SELECT coalesce(sum(price_cents), 0) AS revenue_cents,
-      count(*) AS completed_count
+    SELECT coalesce(sum(CASE WHEN payment_method != '' THEN price_cents ELSE 0 END), 0) AS revenue_cents,
+      coalesce(sum(CASE WHEN payment_method = '' THEN price_cents ELSE 0 END), 0) AS pending_cents,
+      count(*) AS completed_count,
+      count(*) FILTER (WHERE payment_method = '') AS pending_count
     FROM appointments WHERE tenant_id = ? AND substr(starts_at, 1, 7) = ? AND status = 'concluido'
   `).get(tenant(req), month);
   const byService = db.prepare(`
@@ -868,11 +903,12 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
     HAVING date(max(a.starts_at)) <= date(?, '-30 days')
     ORDER BY lastVisit
   `).all(tenant(req), localNow(tenant(req)).slice(0, 10));
-  res.json({ month, revenueCents: revenue.revenue_cents, completedCount: revenue.completed_count,
+  res.json({ month, revenueCents: revenue.revenue_cents, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,
     byService, byProfessional, inactiveClients });
 });
 
 app.get("/api/export/clients.csv", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  if (isDemoTenant(req.user.tenantId)) return fail(res, 403, "Exportações são exclusivas do ambiente comercial.");
   const clients = db.prepare("SELECT name, phone, email, notes, created_at FROM clients WHERE tenant_id = ? ORDER BY name")
     .all(tenant(req));
   sendCsv(res, "clientes.csv", ["Nome", "Telefone", "E-mail", "Observações", "Cadastro"], clients.map((c) =>
@@ -880,6 +916,7 @@ app.get("/api/export/clients.csv", requireAuth, allowRoles("dono", "recepcao"), 
 });
 
 app.get("/api/export/appointments.csv", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  if (isDemoTenant(req.user.tenantId)) return fail(res, 403, "Exportações são exclusivas do ambiente comercial.");
   const rows = appointmentRows(tenant(req));
   sendCsv(res, "atendimentos.csv",
     ["Data e hora", "Cliente", "Telefone", "Serviço", "Profissional", "Status", "Valor (centavos)", "Pagamento"],
@@ -888,6 +925,10 @@ app.get("/api/export/appointments.csv", requireAuth, allowRoles("dono", "recepca
 });
 
 app.get("/api/export/backup", requireAuth, allowRoles("dono"), async (_req, res, next) => {
+  if (isDemoTenant(_req.user.tenantId)) return fail(res, 403, "Backup indisponível na demonstração.");
+  if (db.prepare("SELECT count(*) AS total FROM tenants").get().total > 1) {
+    return fail(res, 403, "Backup completo indisponível em instalação com vários comércios. Use o procedimento administrativo isolado.");
+  }
   const backupPath = path.join(os.tmpdir(), `simplifica-agenda-${crypto.randomUUID()}.sqlite`);
   try {
     await db.backup(backupPath);
@@ -971,6 +1012,10 @@ app.get("/api/public/:slug/slots", (req, res) => {
 });
 
 app.post("/api/public/:slug/appointments", (req, res) => {
+  if (req.params.slug === "studio-bela-vista") {
+    const demo = db.prepare("SELECT id FROM tenants WHERE slug = ? AND id = ?").get(req.params.slug, DEMO_TENANT_ID);
+    if (demo) return fail(res, 403, "Página demonstrativa: reservas reais estão desativadas.");
+  }
   const business = db.prepare("SELECT id, timezone FROM tenants JOIN business_settings ON business_settings.tenant_id = tenants.id WHERE slug = ?").get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
   const name = requiredText(req.body?.name, "Nome");
