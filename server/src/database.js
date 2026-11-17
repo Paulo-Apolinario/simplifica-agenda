@@ -269,6 +269,22 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS daily_cash_closings_history_idx
     ON daily_cash_closings(tenant_id, cash_date DESC);
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS daily_cash_openings (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    cash_date TEXT NOT NULL,
+    opening_cash_cents INTEGER NOT NULL CHECK (opening_cash_cents >= 0),
+    opened_by TEXT NOT NULL REFERENCES users(id),
+    opened_by_name TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    opened_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(tenant_id, cash_date)
+  );
+  CREATE INDEX IF NOT EXISTS cash_opening_history_idx ON daily_cash_openings(tenant_id, cash_date DESC);
+`);
+ensureColumn("daily_cash_closings", "opening_cash_cents", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("daily_cash_closings", "receipts_snapshot_json", "TEXT");
 ensureColumn("appointments", "paid_on", "TEXT");
 ensureColumn("appointments", "paid_at", "TEXT");
 
