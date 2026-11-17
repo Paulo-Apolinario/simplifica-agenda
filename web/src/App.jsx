@@ -818,7 +818,7 @@ function AgendaPage({ user }) {
     </div>
     {modal === "new" && <AppointmentForm initialDate={date} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {modal === "block" && <BlockForm initialDate={date} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
-    {selected && <AppointmentDetails appointment={selected} readOnly={user.role === "profissional" || user.tenantId === "tenant-salao-demo"} onClose={() => setSelected(null)} onUpdated={() => { setSelected(null); refresh(); }} />}
+    {selected && <AppointmentDetails appointment={selected} readOnly={user.role === "profissional" || user.tenantId === "tenant-salao-demo"} canCompleteService={user.role === "profissional"} onClose={() => setSelected(null)} onUpdated={() => { setSelected(null); refresh(); }} />}
   </>;
 }
 
