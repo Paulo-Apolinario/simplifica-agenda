@@ -515,3 +515,27 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
 .settings-section-intro { margin: 0 0 12px; }
 .settings-section-intro h2 { font-size: 17px; font-weight: 700; margin: 5px 0; }
 .settings-account-section > .panel { max-width: 100%; }
+
+/* Configurações compactas, organizadas por seção */
+.settings-tab-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; padding-bottom: 3px; }
+.settings-tab-bar button { display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px; border: 1px solid var(--line, #e2e8f0); border-radius: 10px; color: #64748b; background: var(--surface, #fff); font-size: 12px; font-weight: 600; cursor: pointer; }
+.settings-tab-bar button.active { color: #2563eb; border-color: #bfdbfe; background: #eff6ff; }
+.settings-single-section { display: grid; max-width: 920px; gap: 14px; }
+.settings-single-section > .panel { min-width: 0; }
+.settings-single-section .settings-save { grid-column: auto; }
+.settings-logo-upload { display: flex; gap: 16px; align-items: center; padding: 13px; border: 1px solid #e8edf4; border-radius: 12px; background: #fbfdff; }
+.settings-logo-upload > img { flex: 0 0 auto; width: 90px; height: 90px; border-radius: 15px; object-fit: cover; background: #eaf1ff; }
+.settings-logo-content { display: grid; gap: 7px; min-width: 0; }
+.settings-logo-content > b { font-size: 12px; }
+.settings-logo-content > small { color: #64748b; font-size: 10px; line-height: 1.5; }
+.settings-logo-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.settings-file-action { position: relative; display: inline-flex; align-items: center; gap: 7px; cursor: pointer; overflow: hidden; }
+.settings-file-action input[type="file"] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.settings-file-action:focus-within { outline: 2px solid #2563eb; outline-offset: 2px; }
+.business-logo-img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+@media (max-width: 760px) {
+  .settings-tab-bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+  .settings-tab-bar button { justify-content: center; gap: 5px; flex-direction: column; padding: 10px 5px; font-size: 10px; }
+  .settings-logo-upload { align-items: flex-start; flex-wrap: wrap; }
+  .settings-logo-upload > img { width: 72px; height: 72px; }
+}
