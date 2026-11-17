@@ -1000,6 +1000,62 @@ app.post("/api/commissions/:id/pay", requireAuth, allowRoles("dono"), (req, res)
 });
 
 // Each professional can see and complete only their own work, without editing finances.
+// Period closing records commission disbursements without triggering actual bank transfers.
+app.get("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
+  const month=String(req.query.month||localNow(tenant(req)).slice(0,7));
+  if(!validMonth(month))return fail(res,400,"Mês inválido.");
+  const items=db.prepare(`SELECT a.id,a.professional_id AS professionalId,u.name AS professionalName,
+    a.price_cents AS priceCents,a.commission_percent AS commissionPercent,
+    a.house_share_percent AS houseSharePercent,a.starts_at AS startsAt,
+    cp.amount_cents AS paidCents,cp.batch_id AS batchId
+    FROM appointments a JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    LEFT JOIN commission_payments cp ON cp.appointment_id=a.id AND cp.tenant_id=a.tenant_id
+    WHERE a.tenant_id=? AND a.status='concluido' AND substr(a.starts_at,1,7)=?
+    ORDER BY u.name,a.starts_at`).all(tenant(req),month);
+  const summaries=new Map();
+  for(const item of items) {
+    const cur=summaries.get(item.professionalId)||{
+      professionalId:item.professionalId,professionalName:item.professionalName,completed:0,grossCents:0,
+      earnedCents:0,paidCents:0,dueCents:0};
+    const earned=commissionCents(item);
+    cur.completed++;cur.grossCents+=item.priceCents;cur.earnedCents+=earned;
+    cur.paidCents+=item.paidCents??0;cur.dueCents+=item.paidCents===null?earned:0;
+    summaries.set(item.professionalId,cur);
+  }
+  const batches=db.prepare(`SELECT b.id,b.period,b.total_cents AS totalCents,b.paid_at AS paidAt,
+    u.name AS professionalName FROM payout_batches b
+    JOIN users u ON u.id=b.professional_id AND u.tenant_id=b.tenant_id
+    WHERE b.tenant_id=? AND b.period=? ORDER BY b.paid_at DESC`).all(tenant(req),month);
+  res.setHeader("Cache-Control","no-store");
+  res.json({month,professionals:[...summaries.values()],batches});
+});
+app.post("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
+  const professionalId=String(req.body?.professionalId||"");
+  const month=String(req.body?.month||"");
+  if(!validMonth(month))return fail(res,400,"Mês inválido.");
+  if(!db.prepare("SELECT 1 FROM users WHERE id=? AND tenant_id=? AND role='profissional'").get(professionalId,tenant(req)))
+    return fail(res,404,"Profissional não encontrado.");
+  const complete=db.prepare(`SELECT a.id,a.price_cents AS priceCents,
+    a.commission_percent AS commissionPercent,a.house_share_percent AS houseSharePercent
+    FROM appointments a LEFT JOIN commission_payments cp ON cp.appointment_id=a.id
+    WHERE a.tenant_id=? AND a.professional_id=? AND a.status='concluido'
+      AND substr(a.starts_at,1,7)=? AND cp.appointment_id IS NULL`);
+  const batchId=createId();
+  const result=db.transaction(()=>{
+    const rows=complete.all(tenant(req),professionalId,month);
+    if(!rows.length)return null;
+    const total=rows.reduce((sum,row)=>sum+commissionCents(row),0);
+    db.prepare(`INSERT INTO payout_batches (id,tenant_id,professional_id,period,total_cents,created_by)
+      VALUES (?,?,?,?,?,?)`).run(batchId,tenant(req),professionalId,month,total,req.user.id);
+    const pay=db.prepare(`INSERT INTO commission_payments (appointment_id,tenant_id,professional_id,amount_cents,batch_id)
+      VALUES (?,?,?,?,?)`);
+    rows.forEach(row=>pay.run(row.id,tenant(req),professionalId,commissionCents(row),batchId));
+    return {id:batchId,totalCents:total,count:rows.length};
+  })();
+  if(!result)return fail(res,409,"Não existem serviços concluídos pendentes para este profissional e período.");
+  res.status(201).json({batch:result,message:"Fechamento registrado. Nenhuma transferência financeira foi efetuada."});
+});
+
 app.get("/api/professional/my-services", requireAuth, allowRoles("profissional"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
