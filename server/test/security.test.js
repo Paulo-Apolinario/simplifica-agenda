@@ -100,15 +100,15 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(paidReport.body.pendingCents, 0);
 
     // Professional must be scoped to assigned work, without financial edit rights.
-    const profPassword = "Senha-Profissional-1234";
-    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?")
-      .run(await bcrypt.hash(profPassword, 12), staffId);
+    const profPassword = "Abcd123";
+    db.prepare("UPDATE users SET password_hash = ?, staff_code = ? WHERE id = ?")
+      .run(await bcrypt.hash(profPassword, 12), "001", staffId);
     db.prepare(`INSERT INTO appointments (id, tenant_id, client_id, professional_id, service_id,
       starts_at, ends_at, status, price_cents) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmado', ?)`)
       .run("a-prof-test", login.body.user.tenantId, clientId, staffId, serviceId,
         "2026-11-10T11:00:00", "2026-11-10T11:30:00", 7500);
-    const professionalLogin = await request("/auth/login", "POST", {
-      email: "pro@teste.local", password: profPassword,
+    const professionalLogin = await request("/auth/staff-login", "POST", {
+      slug: "comercio-teste", staffCode: "001", password: profPassword,
     });
     assert.equal(professionalLogin.status, 200);
     assert.equal(professionalLogin.body.user.role, "profissional");
@@ -149,6 +149,38 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     })).status, 200);
     assert.equal((await request("/export/backup")).status, 403);
 
+    const createdStaff = await request("/team-members", "POST", {
+      name: "Profissional Sem Email", role: "profissional", commissionPercent: 30, serviceIds: [serviceId],
+    });
+    assert.equal(createdStaff.status, 201);
+    assert.equal(createdStaff.body.staffCode, "002");
+    assert.ok(createdStaff.body.activationToken);
+    const wrongActivation = await request("/auth/activate-professional", "POST", {
+      slug: "comercio-teste", staffCode: "002", activationToken: "errado", password: "Abcd123",
+    });
+    assert.equal(wrongActivation.status, 403);
+    const activation = await request("/auth/activate-professional", "POST", {
+      slug: "comercio-teste", staffCode: "002", activationToken: createdStaff.body.activationToken, password: "Abcd123",
+    });
+    assert.equal(activation.status, 200);
+    assert.equal((await request("/auth/activate-professional", "POST", {
+      slug: "comercio-teste", staffCode: "002", activationToken: createdStaff.body.activationToken, password: "Abcd123",
+    })).status, 403);
+    const staffCodeLogin = await request("/auth/staff-login", "POST", {
+      slug: "comercio-teste", staffCode: "002", password: "Abcd123",
+    });
+    assert.equal(staffCodeLogin.status, 200);
+    assert.equal(staffCodeLogin.body.user.staffCode, "002");
+    assert.equal(staffCodeLogin.body.user.email, "");
+    assert.equal((await request("/auth/login", "POST", {
+      email: `${createdStaff.body.id}@staff.invalid`, password: "Abcd123",
+    })).status, 401);
+    assert.equal((await request("/auth/login", "POST", {
+      email: "dono@teste.local", password: "Nova-Senha-Forte-1234",
+    })).status, 200);
+    const newActivation = await request(`/team-members/${createdStaff.body.id}/activation`, "POST");
+    assert.equal(newActivation.status, 200);
+    assert.equal(newActivation.body.staffCode, "002");
     const member = await request("/team-members", "POST", {
       name: "Recepcionista", email: "recepcao@teste.local", password: "Senha-Inicial-1234",
       role: "recepcao",
