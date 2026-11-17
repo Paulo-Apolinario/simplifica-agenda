@@ -1009,8 +1009,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
       u.commission_percent AS commission, s.house_share_percent AS houseShare
     FROM services s
-    JOIN professional_services ps ON ps.service_id = s.id AND ps.tenant_id = s.tenant_id
-    JOIN users u ON u.id = ps.professional_id AND u.tenant_id = s.tenant_id
+    JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
   `).get(tenant(req), serviceId, professionalId);
   const client = clientId ? db.prepare("SELECT id FROM clients WHERE id = ? AND tenant_id = ?").get(clientId, tenant(req)) : null;
