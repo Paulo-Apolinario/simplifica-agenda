@@ -271,6 +271,14 @@ db.exec(`
 `);
 ensureColumn("appointments", "paid_on", "TEXT");
 ensureColumn("appointments", "paid_at", "TEXT");
+
+// Preserve old "paid" records without assuming a transfer actually happened.
+// Legacy rows become unverified; only explicitly confirmed transfers reduce salary balances.
+const wasConfirmed = db.prepare("PRAGMA table_info(commission_payments)").all().some(col => col.name === "transfer_confirmed");
+ensureColumn("commission_payments", "transfer_confirmed", "INTEGER NOT NULL DEFAULT 1");
+if (!wasConfirmed) db.exec("UPDATE commission_payments SET transfer_confirmed = 0");
+ensureColumn("appointments", "completed_on", "TEXT");
+ensureColumn("appointments", "payment_reconciled_by", "TEXT");
 ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
 ensureColumn("commission_payments", "batch_id", "TEXT");
 ensureColumn("whatsapp_notifications", "delivery_state", "TEXT NOT NULL DEFAULT 'pending'");
