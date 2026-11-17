@@ -1531,8 +1531,8 @@ function DailyCashClosing({ revision, user }) {
     {!summary ? <p className="report-empty">Carregando o caixa...</p> : <>
       <div className="stats-grid finance-stats">
         <StatCard title="Total recebido" value={money(summary.closing?.expectedTotalCents ?? summary.expectedTotalCents)} note={`${summary.closing?.receiptCount ?? summary.receiptCount} recebimento(s)`} icon={Wallet} tone="green"/>
-        <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents : summary.expectedDrawerCashCents)} note="Saldo inicial + recebimentos em espécie" icon={CircleDollarSign} tone="blue"/>
-        <StatCard title="Situação" value={summary.closing ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.closing ? "green" : "orange"}/>
+        <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents + (summary.closing.supplyCents || 0) - (summary.closing.withdrawalCents || 0) : summary.expectedDrawerCashCents)} note="Saldo inicial + recebimentos em espécie" icon={CircleDollarSign} tone="blue"/>
+        <StatCard title="Situação" value={summary.cashState === "closed" ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.closing ? "green" : "orange"}/>
       </div>
       {summary.opening ? <div className="panel" style={{marginTop:16}}>
         <b>Abertura registrada por {summary.opening.openedByName}</b>
@@ -1559,7 +1559,7 @@ function DailyCashClosing({ revision, user }) {
       {summary.closing ? <div className="panel" style={{marginTop:16}}>
         <b>Fechado por {summary.closing.closedByName}</b>
         <p className="panel-subtitle">Saldo inicial: {money(summary.closing.openingCashCents)} · Dinheiro recebido: {money(summary.closing.expectedCashCents)}</p>
-        <a className="button button-secondary" href={`/api/cash/closings/${encodeURIComponent(summary.closing.id)}/pdf`}><Download size={16}/> Baixar PDF deste fechamento</a>
+        {isOwner && <Button variant="secondary" onClick={()=>downloadPdf(summary.closing.id,date)}><Download size={16}/> Baixar PDF deste fechamento</Button>}
         <p className="panel-subtitle">Dinheiro contado: {money(summary.closing.countedCashCents)} · Diferença: {money(summary.closing.differenceCents)}</p>
         {summary.closing.notes && <p className="panel-subtitle">Observação: {summary.closing.notes}</p>}
       </div> : summary.opening ? <>
@@ -1585,7 +1585,7 @@ function DailyCashClosing({ revision, user }) {
         <div className="min-w-0 flex-1"><b>{item.cashDate} · {item.closedByName}</b>
           <small>{item.receiptCount} recebimento(s) · Diferença: {money(item.differenceCents)}</small></div>
         <strong>{money(item.expectedTotalCents)}</strong>
-        <a className="button button-secondary" href={`/api/cash/closings/${encodeURIComponent(item.id)}/pdf`}><Download size={15}/> PDF</a>
+        <Button variant="secondary" onClick={()=>downloadPdf(item.id,item.cashDate)}><Download size={15}/> PDF</Button>
       </article>)}</div> : <p className="report-empty">Ainda não existem fechamentos registrados.</p>}
     <p className="panel-subtitle">Recebimentos antigos sem data registrada não entram automaticamente na conferência diária.</p>
   </section>;
