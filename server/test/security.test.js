@@ -314,6 +314,36 @@ test("commercial setup, authenticated account and staff password rotation", asyn
       email: "dono@teste.local", password: "Nova-Senha-Forte-1234",
     });
     assert.equal(commercialReturn.status, 200);
+    // Regression: the original appointment at 18:00 is outside a newly shortened
+    // professional schedule. Reception must still conclude it and record Pix,
+    // without implicitly asking to reschedule it.
+    db.prepare(`INSERT INTO appointments
+      (id, tenant_id, client_id, professional_id, service_id, starts_at,
+       ends_at, status, price_cents)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmado', ?)`)
+      .run("legacy-late-appointment", login.body.user.tenantId, clientId, staffId, serviceId,
+        "2026-11-17T18:00:00", "2026-11-17T18:30:00", 2500);
+    db.prepare(`UPDATE professional_hours SET closes_at = '17:00'
+      WHERE tenant_id = ? AND professional_id = ? AND weekday = 2`)
+      .run(login.body.user.tenantId, staffId);
+    const completeLate = await request("/appointments/legacy-late-appointment", "PATCH", {
+      startsAt: "2026-11-17T18:00", status: "concluido", paymentMethod: "pix", priceCents: 2500,
+    });
+    assert.equal(completeLate.status, 200, JSON.stringify(completeLate.body));
+    const completedLate = db.prepare(`SELECT status, starts_at AS startsAt, payment_method AS paymentMethod,
+      price_cents AS priceCents FROM appointments WHERE id=?`).get("legacy-late-appointment");
+    assert.deepEqual(completedLate, {
+      status: "concluido", startsAt: "2026-11-17T18:00:00", paymentMethod: "pix", priceCents: 2500,
+    });
+    // A real reschedule must continue respecting the professional's new hours.
+    const badReschedule = await request("/appointments/legacy-late-appointment", "PATCH", {
+      startsAt: "2030-01-08T18:00",
+    });
+    assert.equal(badReschedule.status, 400);
+    assert.match(badReschedule.body.error, /fora do expediente/);
+    assert.equal(db.prepare("SELECT starts_at AS startsAt FROM appointments WHERE id=?")
+      .get("legacy-late-appointment").startsAt, "2026-11-17T18:00:00");
+
     const newPublicRequests = await request("/requests");
     assert.equal(newPublicRequests.status, 200);
     assert.equal(newPublicRequests.body.requests.some(item => item.id === publicBooking.body.id && item.status === "agendado"), true);
