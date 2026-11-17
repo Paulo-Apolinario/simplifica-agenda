@@ -1474,6 +1474,37 @@ function DailyCashClosing({ revision, user }) {
     } catch (reason) { setError(reason.message); }
     finally { setBusy(false); }
   };
+
+  const downloadPdf = async (id, cashDate) => {
+    setPdfBusy(id); setError("");
+    try {
+      const blob = await api(`/cash/closings/${encodeURIComponent(id)}/pdf`);
+      if (!(blob instanceof Blob) || (blob.type && !blob.type.includes("pdf")))
+        throw new Error("Não foi possível obter o arquivo PDF.");
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `fechamento-caixa-${cashDate}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 3000);
+    } catch (err) { setError(err.message); }
+    finally { setPdfBusy(""); }
+  };
+  const recordMovement = async () => {
+    const cents = parseCash(movementAmount);
+    if (cents === null || cents <= 0) return setError("Informe um valor positivo.");
+    if (movementReason.trim().length < 5) return setError("Informe o motivo (mínimo de 5 caracteres).");
+    if (!window.confirm(`Registrar ${movementType} de ${money(cents)}?`)) return;
+    setBusy(true);setError("");
+    try {
+      await api("/cash/movements", {method:"POST",body:{
+        type:movementType, amountCents:cents, reason:movementReason.trim()
+      }});
+      setMovementAmount("");setMovementReason("");setUpdated(n=>n+1);
+    } catch(err) {setError(err.message);} finally {setBusy(false);}
+  };
   const closeDay = async () => {
     const countedCashCents = parseCash(counted);
     if (countedCashCents === null) {
