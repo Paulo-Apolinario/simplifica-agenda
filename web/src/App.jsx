@@ -257,7 +257,7 @@ function Shell({ user, onLogout, children }) {
         </Link>
         <div className="business-switcher">
           <span className="business-avatar">{businessName.slice(0, 1)}</span>
-          <span className="min-w-0 flex-1"><b>{businessName}</b><small>Plano demonstração</small></span>
+          <span className="min-w-0 flex-1"><b>{businessName}</b><small>{user.slug === "studio-bela-vista" ? "Ambiente de demonstração" : "Meu negócio"}</small></span>
           <ChevronDown size={15} className="text-slate-400" />
         </div>
         <nav className="sidebar-nav" aria-label="Navegação principal">
@@ -270,7 +270,7 @@ function Shell({ user, onLogout, children }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <Link className="public-link" to="/agendar/studio-bela-vista" target="_blank">
+          <Link className="public-link" to={`/agendar/${encodeURIComponent(user.slug || "studio-bela-vista")}`} target="_blank">
             <ExternalLink size={16} /><span><b>Agendamento online</b><small>Veja a página pública</small></span>
             <ArrowRight size={15} />
           </Link>
