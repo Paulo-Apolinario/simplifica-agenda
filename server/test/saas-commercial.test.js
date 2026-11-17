@@ -84,6 +84,24 @@ test("SaaS operator, individual commissions, settlement and WhatsApp notice stat
     const paid=(await request("/settlements?month=2030-01")).body;
     assert.equal(paid.professionals[0].dueCents,0);
     assert.equal(paid.batches.length,1);
+    const csv=await fetch(base+"/api/settlements/export.csv?month=2030-01",{
+      headers:{Cookie:cookie},
+    });
+    assert.equal(csv.status,200);
+    assert.match(await csv.text(),/Pedro/);
+    const another=await request("/saas/businesses","POST",{
+      businessName:"Barbearia Outro",slug:"barbearia-outro",ownerName:"Carlos",
+      ownerEmail:"carlos@exemplo.com",plan:"profissional",
+    },true);
+    assert.equal(another.status,201);
+    db.prepare(`INSERT INTO users (id,tenant_id,name,email,password_hash,role)
+      VALUES (?,?,?,?,?,'profissional')`)
+      .run("other-professional",another.body.business.id,"Equipe Outra",
+        "outro@staff.invalid",await bcrypt.hash("Another1234567",12));
+    assert.equal((await request("/commission-rules","PUT",{
+      professionalId:"other-professional",serviceId,commissionPercent:100,
+    })).status,404);
+
     // No Meta credentials and no opt-in: should never claim that the customer was notified.
     db.prepare(`INSERT INTO appointments (id,tenant_id,client_id,professional_id,service_id,
       starts_at,ends_at,price_cents,booking_source) VALUES (?,?,?,?,?,?,?,?, 'public')`)
@@ -92,6 +110,23 @@ test("SaaS operator, individual commissions, settlement and WhatsApp notice stat
     assert.equal(confirmation.status,200);
     assert.equal(confirmation.body.whatsappState,"no-consent");
     assert.equal((await request("/requests")).body.requests.find(x=>x.id==="request-saas").whatsappDeliveryState,"no-consent");
+    db.prepare(`INSERT INTO appointments (id,tenant_id,client_id,professional_id,service_id,
+      starts_at,ends_at,price_cents,booking_source,whatsapp_opt_in)
+      VALUES (?,?,?,?,?,?,?,?, 'public',1)`)
+      .run("request-consent",tenant,clientId,proId,serviceId,
+        "2030-01-09T11:00:00","2030-01-09T11:30:00",10000);
+    const noProvider=await request("/requests/request-consent","PATCH",{action:"confirm"});
+    assert.equal(noProvider.status,200);
+    assert.equal(noProvider.body.whatsappState,"not-configured");
+    db.prepare(`INSERT INTO appointments (id,tenant_id,client_id,professional_id,service_id,
+      starts_at,ends_at,price_cents,booking_source)
+      VALUES (?,?,?,?,?,?,?,?, 'public')`)
+      .run("request-reject",tenant,clientId,proId,serviceId,
+        "2030-01-09T12:00:00","2030-01-09T12:30:00",10000);
+    const reject=await request("/requests/request-reject","PATCH",{action:"reject"});
+    assert.equal(reject.status,200);
+    assert.equal(reject.body.whatsappState,"no-consent");
+
     assert.equal((await request("/requests/request-saas/whatsapp-opened","POST",{status:"confirmado"})).status,200);
     assert.ok((await request("/requests")).body.requests.find(x=>x.id==="request-saas").whatsappOpenedAt);
     assert.equal((await request("/commission-rules","PUT",{
