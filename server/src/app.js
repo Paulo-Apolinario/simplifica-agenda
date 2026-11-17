@@ -1032,8 +1032,8 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
     db.prepare(`
       INSERT INTO appointments
         (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at,
-         price_cents, commission_percent, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         price_cents, commission_percent, house_share_percent, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, tenant(req), resolvedClientId, professionalId, serviceId, normalizedStart, endsAt,
       chosen.price, chosen.commission, chosen.houseShare, String(req.body?.notes ?? "").trim());
     return true;
