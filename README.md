@@ -17,7 +17,7 @@ npm install
 npm run dev
 ```
 
-O comando inicia o servidor Express em `http://localhost:3000` e o Vite em `http://localhost:5173`. O banco SQLite e os dados de demonstração são criados automaticamente no primeiro início, em `server/data/simplifica-agenda.sqlite`.
+O comando inicia o servidor Express em `http://localhost:3000` e o Vite em `http://localhost:5173`. O banco SQLite é criado automaticamente no primeiro início. Em desenvolvimento, o projeto mantém os dados demonstrativos por padrão; defina `DEMO_MODE=false` para testar uma instalação limpa.
 
 Para criar ou completar os dados de demonstração manualmente:
 
@@ -33,14 +33,16 @@ O seed é idempotente: pode ser executado novamente sem duplicar os registros. P
 - **Recepção:** `recepcao@simplifica.local` / `Agenda123!`
 - **Página de agendamento:** `http://localhost:5173/agendar/studio-bela-vista`
 
-Copie `.env.example` para `.env` para ajustar a porta, o banco, as credenciais do seed e a chave de sessão. O `.env` e os bancos locais são ignorados pelo Git. Troque as credenciais de demonstração antes de usar o sistema com dados reais.
+Copie `.env.example` para `.env` para ajustar a porta, o banco, as credenciais do seed e a chave de sessão. O `.env` e os bancos locais são ignorados pelo Git. **Não use credenciais e dados demonstrativos em instalações comerciais.**
 
 ## Docker
 
-Configure `.env` na raiz com, no mínimo, uma chave de sessão aleatória:
+Configure `.env` na raiz com uma chave de sessão aleatória e, na instalação comercial, um token de instalação diferente:
 
 ```env
 SESSION_SECRET=gere-uma-chave-aleatoria-com-pelo-menos-32-caracteres
+INSTALL_TOKEN=gere-um-segundo-segredo-aleatorio-de-pelo-menos-32-caracteres
+DEMO_MODE=false
 ```
 
 Para gerar uma chave localmente:
@@ -107,3 +109,14 @@ npm test
 ```
 
 Os testes cobrem sobreposição de intervalos, encaixes contíguos, atendimentos cancelados e bloqueios de agenda.
+
+## Instalação comercial e modo de demonstração (versão em preparação)
+
+**Mantenha o modo demonstrativo para apresentações**, mas execute-o em um banco/volume e endereço separados dos clientes reais.
+
+- **Comércio real:** configure `NODE_ENV=production`, `DEMO_MODE=false`, `SESSION_SECRET` e `INSTALL_TOKEN` distintos e aleatórios, com pelo menos 32 caracteres. Na primeira visita, a tela "Configure seu comércio" solicita o código `INSTALL_TOKEN` e cadastra empresa, identificador e dono. Depois da criação, a configuração inicial é bloqueada automaticamente. Defina os serviços, horários e profissionais após entrar.
+- **Demonstração:** use `DEMO_MODE=true` apenas em uma instalação **separada**. O cadastro de demonstração é mantido e o login informa as credenciais demo. O modo demo não substitui a criação de um administrador comercial.
+- **Ambiente local de desenvolvimento:** mantém o seed demonstrativo por padrão. Para testar o primeiro acesso sem demo, defina `DEMO_MODE=false` e utilize um banco SQLite vazio.
+- **Persistência:** `docker compose down` conserva o volume. Um banco já existente não é limpo ao alternar `DEMO_MODE`; para iniciar uma nova instalação use um volume novo, preservando backups antes de qualquer operação de exclusão.
+- **Segurança:** não reutilize `INSTALL_TOKEN` entre clientes; não versionar `.env`; não exponha a porta 3000 diretamente à internet. Para acesso remoto, configure um proxy HTTPS e `COOKIE_SECURE=true`. Em uma rede local via HTTP, `COOKIE_SECURE=false` pode ser necessário, mas a rede deve ser confiável.
+- **Aviso:** ainda são necessários testes de ponta a ponta, limitação de tentativas de autenticação, proteção de rotas de agendamento público, backup por empresa e homologação antes de instalar em produção.
