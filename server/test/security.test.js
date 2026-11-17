@@ -83,7 +83,7 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal((await request("/settings")).body.settings.logoUrl, uploadedLogo.body.logoUrl);
     // Saving ordinary settings must never allow a second arbitrary logo URL.
     assert.equal((await request("/settings", "PUT", {
-      businessName: "Comércio Teste", logoUrl: "https://example.invalid/logo.svg",
+      businessName: "Comércio Teste", logoUrl: "https://example.invalid/logo.svg", whatsapp: "85999999999",
     })).status, 200);
     assert.equal((await request("/settings")).body.settings.logoUrl, uploadedLogo.body.logoUrl);
     const publicBusiness = await request("/public/comercio-teste");
