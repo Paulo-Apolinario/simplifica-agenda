@@ -984,9 +984,8 @@ app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("
   if (!["agendado", "confirmado"].includes(appointment.status)) {
     return fail(res, 409, "Este atendimento não pode ser concluído novamente.");
   }
-  if (appointment.startsAt > localNow(tenant(req))) {
-    return fail(res, 400, "O serviço só pode ser concluído após o horário de início.");
-  }
+  // Explicit confirmation in the professional UI permits a service performed ahead of schedule.
+  // Completion is always restricted to the assigned professional and recorded as unpaid.
   const result = db.prepare(`
     UPDATE appointments SET status = 'concluido'
     WHERE id = ? AND tenant_id = ? AND professional_id = ?
@@ -1136,7 +1135,7 @@ app.delete("/api/blocked-slots/:id", requireAuth, allowRoles("dono", "recepcao",
 });
 
 app.get("/api/settings", requireAuth, (req, res) => {
-  const settings = db.prepare("SELECT business_name AS businessName, logo_url AS logoUrl, address, phone, timezone, theme FROM business_settings WHERE tenant_id = ?")
+  const settings = db.prepare("SELECT business_name AS businessName, logo_url AS logoUrl, address, phone, whatsapp, timezone, theme FROM business_settings WHERE tenant_id = ?")
     .get(tenant(req));
   const hours = db.prepare("SELECT weekday, opens_at AS opensAt, closes_at AS closesAt FROM business_hours WHERE tenant_id = ? ORDER BY weekday")
     .all(tenant(req));
@@ -1146,12 +1145,21 @@ app.get("/api/settings", requireAuth, (req, res) => {
 app.put("/api/settings", requireAuth, allowRoles("dono"), (req, res) => {
   const businessName = requiredText(req.body?.businessName, "Nome do negócio");
   const theme = req.body?.theme === "escuro" ? "escuro" : "claro";
+  const rawWhatsApp = String(req.body?.whatsapp ?? "").trim();
+  const whatsapp = rawWhatsApp.replace(/[^\d]/g, "");
+  if (rawWhatsApp && !/^(?:55)?\d{10,11}$/.test(whatsapp))
+    return fail(res, 400, "WhatsApp inválido. Informe DDD e número brasileiro.");
+  const phone = String(req.body?.phone ?? "").trim();
+  if (phone.length > 40) return fail(res, 400, "Telefone inválido.");
+  const address = String(req.body?.address ?? "").trim();
+  if (address.length > 300) return fail(res, 400, "Endereço muito longo.");
+
   const update = db.transaction(() => {
     db.prepare(`
       UPDATE business_settings SET business_name = ?, logo_url = ?, address = ?,
-        phone = ?, theme = ? WHERE tenant_id = ?
-    `).run(businessName, String(req.body?.logoUrl ?? "").trim(), String(req.body?.address ?? "").trim(),
-      String(req.body?.phone ?? "").trim(), theme, tenant(req));
+        phone = ?, whatsapp = ?, theme = ? WHERE tenant_id = ?
+    `).run(businessName, String(req.body?.logoUrl ?? "").trim(), address,
+      phone, whatsapp, theme, tenant(req));
     if (Array.isArray(req.body?.hours)) {
       const save = db.prepare(`
         INSERT INTO business_hours (tenant_id, weekday, opens_at, closes_at) VALUES (?, ?, ?, ?)
@@ -1271,7 +1279,7 @@ app.get("/api/export/backup", requireAuth, allowRoles("dono"), async (_req, res,
 app.get("/api/public/:slug", (req, res) => {
   const business = db.prepare(`
     SELECT t.id AS tenantId, t.slug, b.business_name AS businessName, b.logo_url AS logoUrl,
-      b.phone, b.address
+      b.phone, b.whatsapp, b.address
     FROM tenants t JOIN business_settings b ON b.tenant_id = t.id WHERE t.slug = ?
   `).get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
