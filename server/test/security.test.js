@@ -57,6 +57,18 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(login.status, 200);
     assert.equal(login.body.user.slug, "comercio-teste");
     assert.equal((await request("/account")).body.account.name, "Administrador");
+    const configured = await request("/settings", "PUT", {
+      businessName: "Comércio Teste", logoUrl: "", address: "Rua Teste, Fortaleza",
+      phone: "8530303030", whatsapp: "(85) 99999-9999", theme: "claro",
+    });
+    assert.equal(configured.status, 200);
+    assert.equal((await request("/settings")).body.settings.whatsapp, "85999999999");
+    assert.equal((await request("/settings", "PUT", {
+      businessName: "Comércio Teste", whatsapp: "invalido",
+    })).status, 400);
+    const publicBusiness = await request("/public/comercio-teste");
+    assert.equal(publicBusiness.body.business.whatsapp, "85999999999");
+
 
     const blockedOrigin = await request("/account", "PATCH", {
       currentPassword: "Password-Forte-1234", name: "Invasor",
@@ -152,6 +164,16 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     })).status, 403);
     assert.equal((await request("/professional/my-services/a-prof-test/complete", "POST")).status, 200);
     assert.equal((await request("/professional/my-services/a-prof-test/complete", "POST")).status, 409);
+    db.prepare(`INSERT INTO appointments (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, status, price_cents)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'agendado', ?)`).run(
+        "future-prof-service", login.body.user.tenantId, clientId, staffId, serviceId,
+        "2031-11-17T17:00:00", "2031-11-17T17:30:00", 7500);
+    assert.equal((await request("/professional/my-services/future-prof-service/complete", "POST")).status, 200);
+    const futureCompleted = db.prepare("SELECT status, payment_method AS paymentMethod FROM appointments WHERE id = ?")
+      .get("future-prof-service");
+    assert.equal(futureCompleted.status, "concluido");
+    assert.equal(futureCompleted.paymentMethod, "");
+
     const staffWork = await request("/professional/my-services?month=2026-11");
     assert.equal(staffWork.body.totals.completed, 2);
     // Only personal blocks are permitted for staff. Blocking with a reason does not need a client.
