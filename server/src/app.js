@@ -1107,6 +1107,26 @@ app.get("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
   res.setHeader("Cache-Control","no-store");
   res.json({month,professionals:[...summaries.values()],batches});
 });
+app.get("/api/settlements/export.csv", requireAuth, allowRoles("dono"), (req,res)=>{
+  const month=String(req.query.month||"");
+  if(!validMonth(month))return fail(res,400,"Mês inválido.");
+  const rows=db.prepare(`SELECT a.starts_at AS startsAt,u.name AS professionalName,
+    s.name AS serviceName,a.price_cents AS priceCents,a.commission_percent AS commissionPercent,
+    a.house_share_percent AS houseSharePercent, cp.amount_cents AS paidCents,
+    cp.batch_id AS batchId,cp.paid_at AS paidAt
+    FROM appointments a JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
+    LEFT JOIN commission_payments cp ON cp.appointment_id=a.id AND cp.tenant_id=a.tenant_id
+    WHERE a.tenant_id=? AND a.status='concluido' AND substr(a.starts_at,1,7)=?
+    ORDER BY u.name,a.starts_at`).all(tenant(req),month);
+  sendCsv(res,`fechamentos-${month}.csv`,
+    ["Data","Profissional","Serviço","Preço em centavos","Comissão bruta (%)",
+     "Retenção (%)","Repasse em centavos","Pago","Lote","Registrado em"],
+    rows.map(row=>[row.startsAt,row.professionalName,row.serviceName,row.priceCents,
+      row.commissionPercent,row.houseSharePercent,commissionCents(row),
+      row.paidCents!==null?"Sim":"Não",row.batchId||"",row.paidAt||""]));
+});
+
 app.post("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
   const professionalId=String(req.body?.professionalId||"");
   const month=String(req.body?.month||"");
