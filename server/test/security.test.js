@@ -107,6 +107,11 @@ test("commercial setup, authenticated account and staff password rotation", asyn
       starts_at, ends_at, status, price_cents) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmado', ?)`)
       .run("a-prof-test", login.body.user.tenantId, clientId, staffId, serviceId,
         "2026-11-10T11:00:00", "2026-11-10T11:30:00", 7500);
+    db.prepare("UPDATE appointments SET commission_percent = 40 WHERE id = ?").run("a-prof-test");
+    db.prepare("INSERT INTO professional_services (tenant_id, professional_id, service_id) VALUES (?, ?, ?)")
+      .run(login.body.user.tenantId, staffId, serviceId);
+    db.prepare("INSERT INTO professional_hours (tenant_id, professional_id, weekday, opens_at, closes_at) VALUES (?, ?, ?, ?, ?)")
+      .run(login.body.user.tenantId, staffId, 2, "09:00", "18:00");
     const professionalLogin = await request("/auth/staff-login", "POST", {
       slug: "comercio-teste", staffCode: "001", password: profPassword,
     });
@@ -120,12 +125,47 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal((await request("/professional/my-services/a-prof-test/complete", "POST")).status, 409);
     const staffWork = await request("/professional/my-services?month=2026-11");
     assert.equal(staffWork.body.totals.completed, 2);
+    // Only personal blocks are permitted for staff. Blocking with a reason does not need a client.
+    const deniedBlock = await request("/blocked-slots", "POST", {
+      professionalId: "another-professional", startsAt: "2030-01-08T12:00:00",
+      endsAt: "2030-01-08T13:00:00", reason: "Almoço",
+    });
+    assert.equal(deniedBlock.status, 403);
+    const ownBlock = await request("/blocked-slots", "POST", {
+      startsAt: "2030-01-08T12:00:00", endsAt: "2030-01-08T13:00:00", reason: "Almoço",
+    });
+    assert.equal(ownBlock.status, 201);
+    const schedule = await request("/schedule?from=2030-01-08T00:00:00&to=2030-01-09T00:00:00");
+    assert.equal(schedule.body.blockedSlots.some(row => row.id === ownBlock.body.id && row.reason === "Almoço"), true);
+    const anonymousAppointment = await request("/appointments", "POST", {
+      professionalId: staffId, serviceId, startsAt: "2030-01-08T10:00:00", notes: "Sem cadastro de cliente",
+    });
+    assert.equal(anonymousAppointment.status, 201);
+    const anonymous = db.prepare("SELECT c.name FROM appointments a JOIN clients c ON c.id = a.client_id WHERE a.id = ?")
+      .get(anonymousAppointment.body.id);
+    assert.equal(anonymous.name, "Cliente não informado");
+    const staffEarnings = await request("/professional/earnings?month=2026-11");
+    assert.equal(staffEarnings.status, 200);
+    assert.equal(staffEarnings.body.dueCents, 3000);
+    assert.equal(staffEarnings.body.services.find(row=>row.id === "a-prof-test").earnedCents, 3000);
+    assert.equal((await request(`/blocked-slots/${ownBlock.body.id}`, "DELETE")).status, 204);
+
     assert.equal((await request("/team-members")).status, 403);
     assert.equal((await request("/receivables?month=2026-11")).status, 403);
     const commercialReturn = await request("/auth/login", "POST", {
       email: "dono@teste.local", password: "Nova-Senha-Forte-1234",
     });
     assert.equal(commercialReturn.status, 200);
+    // Owner records payment; professional sees accurate due/paid balance.
+    const listCommissions = await request("/commissions?month=2026-11");
+    assert.equal(listCommissions.status, 200);
+    assert.equal(listCommissions.body.commissions.find(row => row.id === "a-prof-test").earnedCents, 3000);
+    const payCommission = await request("/commissions/a-prof-test/pay", "POST");
+    assert.equal(payCommission.status, 200);
+    assert.equal(payCommission.body.amountCents, 3000);
+    assert.equal((await request("/commissions/a-prof-test/pay", "POST")).status, 409);
+    assert.equal((await request("/appointments/a-prof-test", "PATCH", { priceCents: 1 })).status, 409);
+
 
     // Demo can browse but cannot change appointments, settings, or export real data.
     const demoHash = await bcrypt.hash("Demo-Senha-Forte-1234", 12);
