@@ -1062,6 +1062,7 @@ app.patch("/api/commissions/:id", requireAuth, allowRoles("dono"), (req, res) =>
   if (![percentage, house].every(v => Number.isFinite(v) && v >= 0 && v <= 100))
     return fail(res, 400, "Percentuais devem estar entre 0% e 100%.");
   if (reason.length < 5 || reason.length > 250) return fail(res, 400, "Informe o motivo do ajuste (5 a 250 caracteres).");
+  const beforeAudit = auditSnapshot(tenant(req), appointment.id);
   db.transaction(() => {
     db.prepare("UPDATE appointments SET commission_percent = ?, house_share_percent = ? WHERE id = ? AND tenant_id = ?")
       .run(percentage, house, appointment.id, tenant(req));
@@ -1071,7 +1072,7 @@ app.patch("/api/commissions/:id", requireAuth, allowRoles("dono"), (req, res) =>
       .run(createId(), tenant(req), appointment.id, req.user.id,
         appointment.commissionPercent, percentage, appointment.houseSharePercent, house, reason);
   })();
-  recordAppointmentAudit(tenant(req), appointment.id, "comissao", req.user, appointment);
+  recordAppointmentAudit(tenant(req), appointment.id, "comissao", req.user, beforeAudit);
   res.json({ ok: true, earnedCents: commissionCents({
     priceCents: db.prepare("SELECT price_cents FROM appointments WHERE id = ?").get(appointment.id).price_cents,
     commissionPercent: percentage, houseSharePercent: house,
@@ -1201,13 +1202,14 @@ app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("
   }
   // Explicit confirmation in the professional UI permits a service performed ahead of schedule.
   // Completion is always restricted to the assigned professional and recorded as unpaid.
+  const beforeAudit = auditSnapshot(tenant(req), appointment.id);
   const result = db.prepare(`
     UPDATE appointments SET status = 'concluido'
     WHERE id = ? AND tenant_id = ? AND professional_id = ?
     AND status IN ('agendado', 'confirmado')
   `).run(appointment.id, tenant(req), req.user.id);
   if (!result.changes) return fail(res, 409, "Atendimento já atualizado.");
-  recordAppointmentAudit(tenant(req), appointment.id, "conclusao", req.user, appointment);
+  recordAppointmentAudit(tenant(req), appointment.id, "conclusao", req.user, beforeAudit);
   res.json({ ok: true });
 });
 
@@ -1487,11 +1489,12 @@ app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, r
 app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const method = String(req.body?.paymentMethod ?? "");
   if (!paymentMethods.includes(method)) return fail(res, 400, "Informe a forma de pagamento.");
+  const beforeAudit = auditSnapshot(tenant(req), req.params.id);
   const result = db.prepare(`UPDATE appointments SET payment_method = ?
     WHERE id = ? AND tenant_id = ? AND status = 'concluido' AND payment_method = ''`)
     .run(method, req.params.id, tenant(req));
   if (!result.changes) return fail(res, 409, "Atendimento não encontrado, não concluído ou já pago.");
-  recordAppointmentAudit(tenant(req), req.params.id, "pagamento", req.user);
+  recordAppointmentAudit(tenant(req), req.params.id, "pagamento", req.user, beforeAudit);
   res.json({ ok: true });
 });
 
@@ -1791,10 +1794,11 @@ app.post("/api/public/manage/:token/cancel", limitAttempts("manage-cancel", 15, 
   if (!row.allowCancellation || !["agendado", "confirmado"].includes(row.status) ||
     localNow(row.tenantId) >= addLocalMinutes(row.startsAt, -row.cancelHours * 60))
     return fail(res, 409, "Cancelamento não permitido. Contate o estabelecimento.");
+  const beforeAudit = auditSnapshot(row.tenantId, row.id);
   const changed = db.prepare("UPDATE appointments SET status='cancelado' WHERE id=? AND tenant_id=? AND status IN ('agendado','confirmado')")
     .run(row.id, row.tenantId);
   if (!changed.changes) return fail(res, 409, "O atendimento foi atualizado. Recarregue a página.");
-  recordAppointmentAudit(row.tenantId, row.id, "cancelamento", {role:"cliente"});
+  recordAppointmentAudit(row.tenantId, row.id, "cancelamento", {role:"cliente"}, beforeAudit);
   queueWhatsAppNotification(row.tenantId,row.id,"cancelado");
   const whatsappState=await notifyStatusWhatsApp(row.tenantId,row.id,"cancelado");
   db.prepare(`UPDATE whatsapp_notifications SET delivery_state=? WHERE tenant_id=? AND appointment_id=? AND status='cancelado'`)
@@ -1823,6 +1827,7 @@ app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedul
     return fail(res, 400, "Fora do expediente.");
   if (!publicIntervalAllowed(row.tenantId, row.professionalId, normalized))
     return fail(res, 400, "Escolha um horário da agenda disponível.");
+  const beforeAudit = auditSnapshot(row.tenantId, row.id);
   const changed = db.transaction(() => {
     if (findScheduleConflict(db, { tenantId:row.tenantId, professionalId:row.professionalId,
       startsAt:normalized, endsAt, excludeAppointmentId:row.id })) return false;
@@ -1831,7 +1836,7 @@ app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedul
       .run(normalized, endsAt, row.id, row.tenantId).changes > 0;
   })();
   if (!changed) return fail(res, 409, "Horário ocupado ou solicitação alterada. Escolha outro horário.");
-  recordAppointmentAudit(row.tenantId, row.id, "remarcacao", {role:"cliente"});
+  recordAppointmentAudit(row.tenantId, row.id, "remarcacao", {role:"cliente"}, beforeAudit);
   res.json({ ok:true, status:"agendado", startsAt:normalized, message:"Remarcação solicitada. Aguarde nova confirmação." });
 });
 
@@ -1922,11 +1927,12 @@ app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), async
   const action=String(req.body?.action ?? "");
   if (!["confirm","reject"].includes(action)) return fail(res,400,"Ação inválida.");
   const next=action==="confirm"?"confirmado":"cancelado";
+  const beforeAudit = auditSnapshot(tenant(req), req.params.id);
   const changed=db.prepare(`UPDATE appointments SET status=?
     WHERE id=? AND tenant_id=? AND booking_source='public' AND status='agendado'`)
     .run(next,req.params.id,tenant(req));
   if (!changed.changes) return fail(res,409,"Solicitação não encontrada ou já analisada.");
-  recordAppointmentAudit(tenant(req), req.params.id, action === "confirm" ? "confirmacao" : "cancelamento", req.user);
+  recordAppointmentAudit(tenant(req), req.params.id, action === "confirm" ? "confirmacao" : "cancelamento", req.user, beforeAudit);
   queueWhatsAppNotification(tenant(req),req.params.id,next);
   const whatsappState=await notifyStatusWhatsApp(tenant(req),req.params.id,next);
   db.prepare(`UPDATE whatsapp_notifications SET delivery_state=?
