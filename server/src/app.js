@@ -292,6 +292,8 @@ app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",2
   const name=requiredText(req.body?.businessName,"Estabelecimento",120);
   const ownerName=requiredText(req.body?.ownerName,"Proprietário",120);
   const email=requiredText(req.body?.ownerEmail,"E-mail do proprietário",200).toLowerCase();
+  if(db.prepare("SELECT 1 FROM users WHERE lower(email)=? LIMIT 1").get(email))
+    return fail(res,409,"Este e-mail já está cadastrado em outro estabelecimento.");
   const slug=String(req.body?.slug||"").trim().toLowerCase();
   const plan=String(req.body?.plan||"comercial").trim();
   if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)||slug.length>80||
@@ -425,6 +427,8 @@ app.post("/api/auth/login", limitAttempts("login", 15, 15 * 60 * 1000), async (r
 
   if (candidates.length > 1) return fail(res, 400, "Informe o identificador do negócio para entrar.");
   const user = candidates[0];
+  if(user && db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(user.tenant_id)?.status==="suspended")
+    return fail(res,403,"O acesso do estabelecimento está suspenso. Contate o suporte.");
   if (!user || user.role === "profissional" || !(await bcrypt.compare(password, user.password_hash))) {
     return fail(res, 401, "E-mail ou senha incorretos.");
   }
@@ -1559,6 +1563,8 @@ app.get("/api/public/:slug", (req, res) => {
     FROM tenants t JOIN business_settings b ON b.tenant_id = t.id WHERE t.slug = ?
   `).get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
+  if(db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(business.tenantId)?.status==="suspended")
+    return fail(res,403,"Este estabelecimento está temporariamente indisponível.");
   const services = db.prepare(`
     SELECT id, name, duration_minutes AS durationMinutes, price_cents AS priceCents
     FROM services WHERE tenant_id = ? AND active = 1 AND public_enabled = 1 ORDER BY name
@@ -1629,6 +1635,8 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
   }
   const business = db.prepare("SELECT id, timezone FROM tenants JOIN business_settings ON business_settings.tenant_id = tenants.id WHERE slug = ?").get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
+  if(db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(business.id)?.status==="suspended")
+    return fail(res,403,"Este estabelecimento está temporariamente indisponível.");
   const name = requiredText(req.body?.name, "Nome", 120);
   const phone = requiredText(req.body?.phone, "Telefone", 20);
   const digits = phone.replace(/\D/g, "");
