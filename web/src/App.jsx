@@ -324,7 +324,7 @@ const navItems = [
   { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
-  { to: "/configuracoes", label: "Configurações", icon: Settings },
+  { to: "/configuracoes", label: "Configurações do estabelecimento", icon: Settings },
   { to: "/minha-conta", label: "Minha conta", icon: ShieldCheck },
 ];
 
@@ -1480,9 +1480,9 @@ function SettingsPage() {
     try { await api("/settings", { method: "PUT", body: { ...settings, hours } }); setMessage("Configurações salvas com sucesso."); }
     catch (reason) { setError(reason.message); }
   };
-  if (!settings) return <Loading />;
+  if (!settings) return error ? <ErrorMessage>{error}</ErrorMessage> : <Loading />;
   return <>
-    <PageTitle eyebrow="O SEU ESPAÇO, DO SEU JEITO" title="Configurações" description="Mantenha as informações do seu negócio sempre atualizadas." />
+    <PageTitle eyebrow="O SEU ESPAÇO, DO SEU JEITO" title="Configurações do estabelecimento" description="Personalize seus dados, horários e contato de WhatsApp para clientes." />
     <form onSubmit={submit} className="settings-layout">
       <section className="panel settings-panel"><div className="panel-heading"><div><p className="eyebrow">IDENTIDADE DO NEGÓCIO</p><h2>Seu espaço</h2></div><ShieldCheck size={20} className="text-emerald-500" /></div>
         <div className="settings-logo-row"><img src={settings.logoUrl || "/assets/simplifica-perfil.svg"} alt="" /><span><b>Logo do negócio</b><small>Adicione uma URL de imagem para personalizar seu perfil público.</small></span></div>
