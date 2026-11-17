@@ -539,3 +539,47 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
   .settings-logo-upload { align-items: flex-start; flex-wrap: wrap; }
   .settings-logo-upload > img { width: 72px; height: 72px; }
 }
+
+/* Página pública: conforto de leitura e interação por toque no celular. */
+.public-page { min-height: 100dvh; }
+.public-booking-card { width: min(100%, 760px); padding: clamp(18px, 3vw, 32px); }
+.public-business { align-items: flex-start; }
+.public-business-logo { width: 68px; height: 68px; border-radius: 16px; }
+.public-business h1 { font-size: clamp(21px, 3vw, 27px); line-height: 1.25; }
+.public-business p:not(.eyebrow) { font-size: 12px; line-height: 1.5; }
+.public-form { gap: 17px; }
+.booking-step { margin-top: 10px; font-size: 14px; }
+.booking-step > span { width: 27px; height: 27px; font-size: 12px; }
+.public-service-grid { gap: 10px; }
+.public-service-card { min-height: 76px; padding: 12px; gap: 11px; border-radius: 12px; cursor: pointer; }
+.public-service-card b { font-size: 13px; }
+.public-service-card small { font-size: 11px; }
+.public-service-card .shortcut-icon { width: 38px; height: 38px; }
+.public-form .input { min-height: 46px; font-size: 16px; }
+.slot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(75px, 1fr)); gap: 9px; }
+.slot-button { min-height: 46px; border-radius: 10px; font-size: 13px; cursor: pointer; }
+.public-contact { display: inline-flex; align-items: center; gap: 7px; margin-top: 8px; color: #147d45; font-size: 12px; font-weight: 650; }
+.public-empty-note { margin: 3px 0; padding: 12px; border-radius: 10px; background: #f4f7fc; color: #64748b; font-size: 12px; line-height: 1.5; }
+.public-demo-notice { display: flex; align-items: center; gap: 8px; margin: 15px 0 0; padding: 12px; border-radius: 10px; color: #72540e; background: #fff7dd; font-size: 12px; line-height: 1.5; }
+.public-booking-summary { display: grid; gap: 7px; padding: 15px; border-radius: 12px; background: #f1f6ff; border: 1px solid #d7e5ff; color: #334155; font-size: 12px; }
+.public-booking-summary b { font-size: 14px; color: #1d4ed8; }
+.public-submit { width: 100%; min-height: 50px; justify-content: center; font-size: 14px; }
+.public-privacy { font-size: 11px; line-height: 1.5; text-align: center; }
+.public-business .eyebrow { font-size: 10px; }
+.public-booking-card button:focus-visible, .public-booking-card input:focus-visible, .public-booking-card select:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }
+@media (max-width: 760px) {
+  .public-page { padding: 0 10px 20px; }
+  .public-booking-card { margin: 8px auto; padding: 19px 15px 22px; border-radius: 16px; }
+  .public-topbar { height: 60px; }
+  .public-business-logo { width: 60px; height: 60px; }
+  .public-form { gap: 15px; }
+  .public-service-grid { grid-template-columns: 1fr; }
+  .public-form .form-grid { grid-template-columns: 1fr; gap: 12px; }
+  .slot-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .public-service-card { min-height: 72px; }
+}
+@media (max-width: 380px) {
+  .public-business { gap: 10px; }
+  .public-business-logo { width: 52px; height: 52px; }
+  .slot-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
