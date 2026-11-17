@@ -854,8 +854,8 @@ app.get("/api/schedule", requireAuth, (req, res) => {
   const blockedSlots = db.prepare(`
     SELECT b.id, b.professional_id AS professionalId, b.starts_at AS startsAt,
       b.ends_at AS endsAt, b.reason, b.created_by_user_id AS createdByUserId,
-      COALESCE(creator.name, "Não identificado") AS createdByName,
-      COALESCE(pro.name, "Equipe completa") AS professionalName
+      COALESCE(creator.name, 'Não identificado') AS createdByName,
+      COALESCE(pro.name, 'Equipe completa') AS professionalName
     FROM blocked_slots b
     LEFT JOIN users creator ON creator.id = b.created_by_user_id AND creator.tenant_id = b.tenant_id
     LEFT JOIN users pro ON pro.id = b.professional_id AND pro.tenant_id = b.tenant_id
