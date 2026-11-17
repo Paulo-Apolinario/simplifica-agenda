@@ -1475,6 +1475,25 @@ app.put("/api/settings", requireAuth, allowRoles("dono"), (req, res) => {
   res.json({ ok: true });
 });
 
+
+function cashDay(tenantId) { return localNow(tenantId).slice(0, 10); }
+function validCashDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + "T12:00:00Z");
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+function cashClosing(tenantId, date) {
+  return db.prepare("SELECT id FROM daily_cash_closings WHERE tenant_id = ? AND cash_date = ?").get(tenantId, date);
+}
+function cashDaySummary(tenantId, date) {
+  const methods = Object.fromEntries(paymentMethods.map(method => [method, 0]));
+  const rows = db.prepare(`SELECT id, price_cents AS priceCents, payment_method AS paymentMethod, paid_at AS paidAt, starts_at AS startsAt
+    FROM appointments WHERE tenant_id = ? AND paid_on = ? AND status = 'concluido' AND payment_method != ''
+    ORDER BY paid_at DESC, id DESC`).all(tenantId, date);
+  for (const row of rows) methods[row.paymentMethod] = (methods[row.paymentMethod] || 0) + row.priceCents;
+  return { date, receiptCount: rows.length, methods, expectedCashCents: methods.dinheiro,
+    expectedTotalCents: rows.reduce((sum, row) => sum + row.priceCents, 0), receipts: rows };
+}
 app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
