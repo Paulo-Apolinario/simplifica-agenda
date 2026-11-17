@@ -4,6 +4,7 @@ import {
   ChevronLeft, ChevronRight, CircleDollarSign, Clock3, Download, ExternalLink, LayoutDashboard,
   LogOut, Menu, Moon, MoreHorizontal, Plus, Search, Settings, ShieldCheck, Sun, Users,
   Wallet, X, Scissors, UserRound, CalendarClock, CalendarX2, Phone, Mail, Sparkles,
+  Copy, QrCode, Share2, Link2, Smartphone, Info,
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
@@ -286,8 +287,9 @@ const navItems = [
   { to: "/agenda", label: "Agenda", icon: CalendarDays },
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços e equipe", icon: Scissors },
-  { to: "/financeiro", label: "Financeiro e relatórios", icon: Wallet },
+  { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
+  { to: "/financeiro", label: "Relatórios", icon: Wallet },
   { to: "/configuracoes", label: "Configurações", icon: Settings },
   { to: "/minha-conta", label: "Minha conta", icon: ShieldCheck },
 ];
@@ -296,8 +298,11 @@ function Shell({ user, onLogout, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
-  const visibleNavItems = navItems.filter((item) =>
-    user.role === "dono" || !["/financeiro", "/recebimentos", "/configuracoes"].includes(item.to));
+  const isDemo = user.tenantId === "tenant-salao-demo";
+  const visibleNavItems = navItems.filter((item) => {
+    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta"].includes(item.to)) return false;
+    return user.role === "dono" || !["/financeiro", "/recebimentos", "/configuracoes"].includes(item.to);
+  });
   useEffect(() => {
     api("/settings").then(({ settings }) => settings?.businessName && setBusinessName(settings.businessName)).catch(() => {});
   }, [location.pathname]);
@@ -325,10 +330,6 @@ function Shell({ user, onLogout, children }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <Link className="public-link" to={`/agendar/${encodeURIComponent(user.slug || "studio-bela-vista")}`} target="_blank">
-            <ExternalLink size={16} /><span><b>Agendamento online</b><small>Veja a página pública</small></span>
-            <ArrowRight size={15} />
-          </Link>
           <div className="profile-card">
             <span className="profile-avatar">{user.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
             <div className="min-w-0 flex-1"><b>{user.name}</b><small>{user.role === "dono" ? "Proprietária" : user.role === "recepcao" ? "Recepção" : "Profissional"}</small></div>
@@ -343,7 +344,7 @@ function Shell({ user, onLogout, children }) {
         }}>Ambiente demonstrativo · somente visualização. Para cadastrar, alterar e receber pagamentos, utilize uma conta comercial.</div>}
         <header className="topbar">
           <button className="icon-button mobile-menu-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menu"><Menu size={21} /></button>
-          <div className="topbar-breadcrumb"><span>Studio</span><ChevronRight size={14} /><b>{pageName}</b></div>
+          <div className="topbar-breadcrumb"><span>{businessName}</span><ChevronRight size={14} /><b>{pageName}</b></div>
           <div className="topbar-right">
             <span className="today-pill"><span /> Sistema funcionando</span>
             <span className="topbar-date">{dateLabel(localDate(), { weekday: "short", day: "2-digit", month: "short" })}</span>
@@ -837,6 +838,65 @@ function ServicesPage({ user }) {
   </>;
 }
 
+function BookingSharePage({ user }) {
+  const publicPath = `/agendar/${encodeURIComponent(user.slug || "")}`;
+  const [baseUrl, setBaseUrl] = useState("");
+  const [message, setMessage] = useState("");
+  useEffect(() => { setBaseUrl(window.location.origin); }, []);
+  const link = baseUrl ? `${baseUrl}${publicPath}` : publicPath;
+  const isLocal = /^(localhost|127\\.0\\.0\\.1)$/i.test((() => {
+    try { return new URL(link).hostname; } catch { return ""; }
+  })());
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setMessage("Link copiado. Compartilhe com seus clientes.");
+    } catch {
+      setMessage("Não foi possível copiar automaticamente. Selecione e copie o endereço acima.");
+    }
+  };
+  const whatsapp = `https://wa.me/?text=${encodeURIComponent(
+    `Agende seu horário em nosso estabelecimento: ${link}`
+  )}`;
+  return <>
+    <PageTitle eyebrow="AGENDAMENTO PARA CLIENTES" title="Divulgar meu agendamento"
+      description="Compartilhe sua página pública sem dar acesso ao painel administrativo."/>
+    <div className="management-grid booking-sharing-grid">
+      <section className="panel management-panel booking-share-panel">
+        <div className="panel-heading">
+          <div><p className="eyebrow">LINK EXCLUSIVO</p><h2>Sua página de agendamento</h2>
+            <p className="panel-subtitle">O cliente escolhe serviço, profissional, data e horário. A solicitação aparece na agenda do estabelecimento.</p></div>
+          <Link2 size={20} className="text-blue-500"/>
+        </div>
+        <div className="booking-url-box">
+          <input className="input" aria-label="Endereço de agendamento" value={link} readOnly onFocus={event => event.target.select()}/>
+          <Button type="button" onClick={copyLink}><Copy size={16}/> Copiar link</Button>
+        </div>
+        <div className="booking-share-actions">
+          <a className="button button-secondary" href={publicPath} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Ver página do cliente</a>
+          <a className="button button-secondary" href={whatsapp} target="_blank" rel="noreferrer"><Share2 size={16}/> Enviar por WhatsApp</a>
+        </div>
+        {message && <p role="status" className="success-message">{message}</p>}
+        {isLocal && <p className="booking-share-notice"><Info size={17}/> Este link usa localhost. Ele funciona neste computador, mas para clientes em outros dispositivos será necessário publicar a página em HTTPS ou usar um endereço acessível na rede.</p>}
+        {user.tenantId === "tenant-salao-demo" && <p className="booking-share-notice"><Info size={17}/> Esta é uma demonstração de compartilhamento. A reserva pública demonstrativa não grava solicitações reais.</p>}
+      </section>
+      <section className="panel management-panel booking-qr-panel">
+        <div className="panel-heading">
+          <div><p className="eyebrow">DIVULGAÇÃO</p><h2>QR Code</h2>
+            <p className="panel-subtitle">Exiba no balcão ou compartilhe com seu cliente.</p></div>
+          <QrCode size={20} className="text-blue-500"/>
+        </div>
+        {baseUrl && <img
+          className="booking-qr-image"
+          alt="QR Code que direciona para a página pública de agendamentos"
+          src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=12&data=${encodeURIComponent(link)}`}
+        />}
+        <p className="booking-qr-caption">O QR Code é gerado por um serviço externo e requer conexão com a internet. Não compartilha dados de clientes, apenas o endereço público de agendamento.</p>
+      </section>
+    </div>
+  </>;
+}
+
 function ReceivablesPage({ user }) {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [items, setItems] = useState([]);
@@ -1094,10 +1154,11 @@ export default function App() {
       <Route path="/agenda" element={<AgendaPage user={user} />} />
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={<ServicesPage user={user} />} />
+      <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
-      <Route path="/recebimentos" element={user.role === "dono" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
-      <Route path="/configuracoes" element={user.role === "dono" ? <SettingsPage /> : <AccessDenied />} />
-      <Route path="/minha-conta" element={<AccountPage user={user} onUserUpdated={setUser} />} />
+      <Route path="/recebimentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
+      <Route path="/configuracoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettingsPage /> : <AccessDenied />} />
+      <Route path="/minha-conta" element={user.tenantId !== "tenant-salao-demo" ? <AccountPage user={user} onUserUpdated={setUser} /> : <AccessDenied />} />
       <Route path="*" element={<OverviewPage user={user} />} />
     </Routes>
   </Shell>;

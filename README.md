@@ -164,3 +164,15 @@ O salão de demonstração pode ser visitado para apresentação da interface e 
 
 Um atendimento `concluido` sem `payment_method` fica em **A receber**. O sistema não supõe pagamento em dinheiro. Na nova tela `Caixa e recebimentos`, o proprietário registra a forma de pagamento, e o valor passa para **Recebido**. O registro evita cobrança duplicada via mesma rota. Ainda faltam histórico/auditoria de estornos, parcelas e integração com meios de pagamento; não trate a tela como conciliação bancária ou comprovante fiscal.
 
+
+## Divulgação do agendamento público e acesso administrativo
+
+A agenda interna permanece em `/agenda`. A opção **Link de agendamento** abre uma tela de divulgação em `/compartilhar`, que oferece o endereço público específico do estabelecimento, cópia, abertura e compartilhamento por WhatsApp. O QR Code exibido nesta versão é carregado de um gerador externo (`api.qrserver.com`), recebendo **somente o endereço público** e exigindo internet. Para operação totalmente offline e controle completo, substituir futuramente por geração local com biblioteca dedicada.
+
+Um endereço `localhost` funciona apenas na própria máquina; **não use um QR Code de localhost para clientes**. Para acesso por outros celulares, é necessário um domínio HTTPS ou endereço de rede acessível.
+
+No perfil de demonstração, o menu oculta as áreas de edição exclusiva de conta, recebimentos e configurações. A visualização da agenda, serviços, clientes, relatórios e exemplo de compartilhamento permanece disponível, com as operações de escrita bloqueadas no servidor.
+
+### Aba do navegador e cache
+
+A interface agora declara explicitamente o ícone `simplifica-perfil.svg` como favicon. Ao testar em `localhost:3000` (servidor de build), execute `npm run build` antes de iniciar `npm start`, ou use o Vite `http://localhost:5173` com `npm run dev`. Caso uma versão anterior do PWA ainda apareça, limpe os dados/cache da origem e remova o service worker antigo pelas ferramentas do navegador. Use uma porta/domínio distinto para outros projetos que compartilhem `localhost`.
