@@ -1359,6 +1359,21 @@ function publicStartAllowed(tenantId, startsAt) {
   return startsAt >= addLocalMinutes(now, policy.minNotice)
     && startsAt <= addLocalMinutes(now, policy.maxDays * 1440);
 }
+function publicIntervalAllowed(tenantId, professionalId, startsAt) {
+  const weekday = new Date(startsAt.slice(0,10)+"T12:00:00Z").getUTCDay();
+  const hours = db.prepare(`SELECT bh.opens_at AS businessOpens, ph.opens_at AS professionalOpens,
+    ph.professional_id AS hasProfessionalHours
+    FROM business_hours bh
+    LEFT JOIN professional_hours ph ON ph.tenant_id=bh.tenant_id
+      AND ph.professional_id=? AND ph.weekday=bh.weekday
+    WHERE bh.tenant_id=? AND bh.weekday=?`).get(professionalId, tenantId, weekday);
+  if (!hours?.businessOpens) return false;
+  const opens = hours.hasProfessionalHours && hours.professionalOpens > hours.businessOpens
+    ? hours.professionalOpens : hours.businessOpens;
+  const minute = Number(startsAt.slice(11,13))*60+Number(startsAt.slice(14,16));
+  const first = Number(opens.slice(0,2))*60+Number(opens.slice(3,5));
+  return minute >= first && (minute-first) % bookingPolicy(tenantId).interval === 0;
+}
 function managementHash(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
 function managedPublicAppointment(token) {
   if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token)) return null;
@@ -1470,8 +1485,9 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
   const normalizedStart = startsAt.length === 16 ? `${startsAt}:00` : startsAt;
   if (!publicStartAllowed(business.id, normalizedStart)) return fail(res, 400, "Horário fora da antecedência ou janela de reservas permitida.");
   const endsAt = addLocalMinutes(normalizedStart, selected.duration);
-  if (!withinWorkingHours(business.id, professionalId, normalizedStart, endsAt)) {
-    return fail(res, 400, "O horário está fora do expediente deste profissional.");
+  if (!withinWorkingHours(business.id, professionalId, normalizedStart, endsAt) ||
+      !publicIntervalAllowed(business.id, professionalId, normalizedStart)) {
+    return fail(res, 400, "Horário fora da agenda disponível do profissional.");
   }
   const id = createId();
   const accessToken = crypto.randomBytes(32).toString("hex");
@@ -1547,13 +1563,7 @@ app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedul
   const endsAt = addLocalMinutes(normalized, selected.duration);
   if (!withinWorkingHours(row.tenantId, row.professionalId, normalized, endsAt))
     return fail(res, 400, "Fora do expediente.");
-  const policy = bookingPolicy(row.tenantId);
-  const weekday = new Date(normalized.slice(0,10)+"T12:00:00Z").getUTCDay();
-  const open = db.prepare("SELECT opens_at AS opensAt FROM business_hours WHERE tenant_id=? AND weekday=?")
-    .get(row.tenantId, weekday)?.opensAt;
-  const minutes = Number(normalized.slice(11,13))*60 + Number(normalized.slice(14,16));
-  const openMinutes = open ? Number(open.slice(0,2))*60 + Number(open.slice(3,5)) : 0;
-  if ((minutes-openMinutes) % policy.interval !== 0)
+  if (!publicIntervalAllowed(row.tenantId, row.professionalId, normalized))
     return fail(res, 400, "Escolha um horário da agenda disponível.");
   const changed = db.transaction(() => {
     if (findScheduleConflict(db, { tenantId:row.tenantId, professionalId:row.professionalId,
