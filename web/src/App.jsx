@@ -1556,7 +1556,7 @@ function DailyCashClosing({ revision, user }) {
           <strong>{money(methods[key] || 0)}</strong>
         </div>)}
       </div>
-      {summary.closing ? <div className="panel" style={{marginTop:16}}>
+      {summary.cashState === "closed" && !summary.closing ? <p className="panel-subtitle">Caixa encerrado. Histórico e PDF exclusivos do administrador.</p> : summary.closing ? <div className="panel" style={{marginTop:16}}>
         <b>Fechado por {summary.closing.closedByName}</b>
         <p className="panel-subtitle">Saldo inicial: {money(summary.closing.openingCashCents)} · Dinheiro recebido: {money(summary.closing.expectedCashCents)}</p>
         {isOwner && <Button variant="secondary" onClick={()=>downloadPdf(summary.closing.id,date)}><Download size={16}/> Baixar PDF deste fechamento</Button>}
@@ -1578,6 +1578,7 @@ function DailyCashClosing({ revision, user }) {
         </Button>
       </> : <p className="panel-subtitle">Abra o caixa do dia para habilitar o fechamento.</p>}
     </>}
+    {isOwner && <>
     <div className="panel-heading" style={{marginTop:24}}><div><p className="eyebrow">REGISTROS</p><h3>Últimos fechamentos</h3></div></div>
     {closings.length ? <div className="management-list">{closings.map(item =>
       <article className="service-row" key={item.id}>
@@ -1588,6 +1589,7 @@ function DailyCashClosing({ revision, user }) {
         <Button variant="secondary" onClick={()=>downloadPdf(item.id,item.cashDate)}><Download size={15}/> PDF</Button>
       </article>)}</div> : <p className="report-empty">Ainda não existem fechamentos registrados.</p>}
     <p className="panel-subtitle">Recebimentos antigos sem data registrada não entram automaticamente na conferência diária.</p>
+      </>}
   </section>;
 }
 
