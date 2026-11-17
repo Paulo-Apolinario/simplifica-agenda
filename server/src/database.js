@@ -271,6 +271,61 @@ db.exec(`
 `);
 ensureColumn("appointments", "paid_on", "TEXT");
 ensureColumn("appointments", "paid_at", "TEXT");
+
+// Preserve old "paid" records without assuming a transfer actually happened.
+// Legacy rows become unverified; only explicitly confirmed transfers reduce salary balances.
+const wasConfirmed = db.prepare("PRAGMA table_info(commission_payments)").all().some(col => col.name === "transfer_confirmed");
+ensureColumn("commission_payments", "transfer_confirmed", "INTEGER NOT NULL DEFAULT 1");
+if (!wasConfirmed) db.exec("UPDATE commission_payments SET transfer_confirmed = 0");
+ensureColumn("appointments", "completed_on", "TEXT");
+ensureColumn("appointments", "payment_reconciled_by", "TEXT");
+
+function businessDateFromTimestamp(timestamp, timezone) {
+  const parsed = new Date(timestamp.endsWith("Z") ? timestamp : timestamp.replace(" ", "T") + "Z");
+  if (Number.isNaN(parsed.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone || "America/Sao_Paulo",
+    year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(parsed);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+// Recover exact historic receipt/completion dates only from traceable audit events.
+// If the source has no timestamp, leave the record pending manual reconciliation.
+db.transaction(() => {
+  const rows = db.prepare(`SELECT a.id, a.tenant_id AS tenantId, a.payment_method AS method,
+      a.paid_on AS paidOn, a.completed_on AS completedOn, a.status,
+      b.timezone
+    FROM appointments a JOIN business_settings b ON b.tenant_id = a.tenant_id
+    WHERE (a.payment_method != '' AND a.paid_on IS NULL)
+       OR (a.status = 'concluido' AND a.completed_on IS NULL)`).all();
+  const events = db.prepare(`SELECT action, created_at AS createdAt, after_json AS afterJson
+    FROM appointment_audit WHERE tenant_id = ? AND appointment_id = ?
+    ORDER BY created_at ASC, rowid ASC`);
+  const pay = db.prepare("UPDATE appointments SET paid_on = ?, paid_at = COALESCE(paid_at, ?) WHERE id = ? AND tenant_id = ?");
+  const complete = db.prepare("UPDATE appointments SET completed_on = ? WHERE id = ? AND tenant_id = ?");
+  for (const row of rows) {
+    const history = events.all(row.tenantId, row.id);
+    if (row.method && !row.paidOn) {
+      const event = history.find(event => event.action === "pagamento" && (() => {
+        try { return Boolean(JSON.parse(event.afterJson || "{}").paymentMethod); } catch { return false; }
+      })());
+      if (event) {
+        const date = businessDateFromTimestamp(event.createdAt, row.timezone);
+        if (date) pay.run(date, event.createdAt, row.id, row.tenantId);
+      }
+    }
+    if (row.status === "concluido" && !row.completedOn) {
+      const event = history.find(event => {
+        try { return JSON.parse(event.afterJson || "{}").status === "concluido"
+          && (event.action === "conclusao" || event.action === "status"); }
+        catch { return false; }
+      });
+      if (event) {
+        const date = businessDateFromTimestamp(event.createdAt, row.timezone);
+        if (date) complete.run(date, row.id, row.tenantId);
+      }
+    }
+  }
+})();
 ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
 ensureColumn("commission_payments", "batch_id", "TEXT");
 ensureColumn("whatsapp_notifications", "delivery_state", "TEXT NOT NULL DEFAULT 'pending'");

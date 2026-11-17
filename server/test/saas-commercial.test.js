@@ -74,17 +74,17 @@ test("SaaS operator, individual commissions, settlement and WhatsApp notice stat
     assert.equal(booking.status,201,JSON.stringify(booking.body));
     const snapshot=db.prepare("SELECT commission_percent AS commission,house_share_percent AS house FROM appointments WHERE id=?").get(booking.body.id);
     assert.deepEqual(snapshot,{commission:90,house:10});
-    db.prepare("UPDATE appointments SET status='concluido' WHERE id=?").run(booking.body.id);
-    const preview=(await request("/settlements?month=2030-01")).body;
+    db.prepare("UPDATE appointments SET status='concluido', completed_on='2026-10-10' WHERE id=?").run(booking.body.id);
+    const preview=(await request("/settlements?period=2026-10-1")).body;
     assert.equal(preview.professionals[0].dueCents,8000);
-    const closed=await request("/settlements","POST",{professionalId:proId,month:"2030-01"});
+    const closed=await request("/settlements","POST",{professionalId:proId,period:"2026-10-1"});
     assert.equal(closed.status,201,JSON.stringify(closed.body));
     assert.equal(closed.body.batch.totalCents,8000);
-    assert.equal((await request("/settlements","POST",{professionalId:proId,month:"2030-01"})).status,409);
-    const paid=(await request("/settlements?month=2030-01")).body;
+    assert.equal((await request("/settlements","POST",{professionalId:proId,period:"2026-10-1"})).status,409);
+    const paid=(await request("/settlements?period=2026-10-1")).body;
     assert.equal(paid.professionals[0].dueCents,0);
     assert.equal(paid.batches.length,1);
-    const csv=await fetch(base+"/api/settlements/export.csv?month=2030-01",{
+    const csv=await fetch(base+"/api/settlements/export.csv?period=2026-10-1",{
       headers:{Cookie:cookie},
     });
     assert.equal(csv.status,200);

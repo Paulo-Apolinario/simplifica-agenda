@@ -135,12 +135,12 @@ function tenant(req) {
 }
 
 
-const auditFields = "id, status, starts_at AS startsAt, ends_at AS endsAt, price_cents AS priceCents, payment_method AS paymentMethod, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent";
+const auditFields = "id, status, starts_at AS startsAt, ends_at AS endsAt, price_cents AS priceCents, payment_method AS paymentMethod, paid_on AS paidOn, completed_on AS completedOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent";
 function auditSnapshot(tenantId, appointmentId) {
   return db.prepare(`SELECT ${auditFields} FROM appointments WHERE tenant_id = ? AND id = ?`).get(tenantId, appointmentId) ?? null;
 }
 function auditSnapshotFromOriginal(row) {
-  return {id: row.id, status: row.status, startsAt: row.startsAt, endsAt: row.endsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod, commissionPercent: row.commissionPercent, houseSharePercent: row.houseSharePercent};
+  return {id: row.id, status: row.status, startsAt: row.startsAt, endsAt: row.endsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod, paidOn: row.paidOn, completedOn: row.completedOn, commissionPercent: row.commissionPercent, houseSharePercent: row.houseSharePercent};
 }
 function recordAppointmentAudit(tenantId, appointmentId, action, actor, before = null) {
   const after = auditSnapshot(tenantId, appointmentId);
@@ -156,7 +156,7 @@ function recordAppointmentAudit(tenantId, appointmentId, action, actor, before =
 function appointmentRows(tenantId, where = "", params = []) {
   return db.prepare(`
     SELECT a.id, a.starts_at AS startsAt, a.ends_at AS endsAt, a.status,
-      a.price_cents AS priceCents, a.payment_method AS paymentMethod,
+      a.price_cents AS priceCents, a.payment_method AS paymentMethod, a.paid_on AS paidOn,
       a.commission_percent AS commissionPercent, a.notes,
       c.id AS clientId, c.name AS clientName, c.phone AS clientPhone,
       s.id AS serviceId, s.name AS serviceName, s.duration_minutes AS durationMinutes,
@@ -1008,12 +1008,12 @@ app.get("/api/schedule", requireAuth, (req, res) => {
 const commissionCents = row => Math.round(row.priceCents * Math.max(0,
   row.commissionPercent - (row.houseSharePercent ?? 0)) / 100);
 function professionalEarnings(tenantId, professionalId, month = null) {
-  const whereMonth = month ? " AND substr(a.starts_at, 1, 7) = ?" : "";
+  const whereMonth = month ? " AND substr(COALESCE(a.completed_on, a.starts_at), 1, 7) = ?" : "";
   const params = month ? [tenantId, professionalId, month] : [tenantId, professionalId];
   const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, s.name AS serviceName,
     c.name AS clientName, a.price_cents AS priceCents,
     a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent,
-    cp.amount_cents AS paidCents, cp.paid_at AS paidAt
+    CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents, cp.paid_at AS paidAt
     FROM appointments a
     JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
     JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
@@ -1040,11 +1040,11 @@ app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
   const rows = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
     a.starts_at AS startsAt, a.price_cents AS priceCents,
     a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent, s.name AS serviceName,
-    cp.amount_cents AS paidCents, cp.paid_at AS paidAt
+    CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents, cp.paid_at AS paidAt
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
     JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
     LEFT JOIN commission_payments cp ON cp.appointment_id = a.id AND cp.tenant_id = a.tenant_id
-    WHERE a.tenant_id = ? AND a.status = 'concluido' AND substr(a.starts_at, 1, 7) = ?
+    WHERE a.tenant_id = ? AND a.status = 'concluido' AND substr(COALESCE(a.completed_on, a.starts_at), 1, 7) = ?
     ORDER BY a.starts_at DESC`).all(tenant(req), month);
   res.json({ month, commissions: rows.map(row => ({...row,
     earnedCents: commissionCents(row), paid: row.paidCents !== null })) });
@@ -1079,100 +1079,108 @@ app.patch("/api/commissions/:id", requireAuth, allowRoles("dono"), (req, res) =>
   }) });
 });
 
-app.post("/api/commissions/:id/pay", requireAuth, allowRoles("dono"), (req, res) => {
-  const row = db.prepare(`SELECT id, professional_id AS professionalId,
-    price_cents AS priceCents, commission_percent AS commissionPercent,
-    house_share_percent AS houseSharePercent
-    FROM appointments WHERE id = ? AND tenant_id = ? AND status = 'concluido'`)
-    .get(req.params.id, tenant(req));
-  if (!row) return fail(res, 404, "Serviço concluído não encontrado.");
-  const amount = commissionCents(row);
-  try {
-    db.prepare(`INSERT INTO commission_payments (appointment_id, tenant_id, professional_id, amount_cents)
-      VALUES (?, ?, ?, ?)`).run(row.id, tenant(req), row.professionalId, amount);
-  } catch (error) {
-    if (error.code?.startsWith("SQLITE_CONSTRAINT")) return fail(res, 409, "Comissão já registrada como paga.");
-    throw error;
-  }
-  res.json({ ok: true, amountCents: amount });
+app.post("/api/commissions/:id/pay", requireAuth, allowRoles("dono"), (_req, res) => {
+  return fail(res, 409, "Repasses individuais foram desativados. Confirme os pagamentos na apuração quinzenal.");
 });
 
 // Each professional can see and complete only their own work, without editing finances.
 // Period closing records commission disbursements without triggering actual bank transfers.
-app.get("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
-  const month=String(req.query.month||localNow(tenant(req)).slice(0,7));
-  if(!validMonth(month))return fail(res,400,"Mês inválido.");
-  const items=db.prepare(`SELECT a.id,a.professional_id AS professionalId,u.name AS professionalName,
-    a.price_cents AS priceCents,a.commission_percent AS commissionPercent,
-    a.house_share_percent AS houseSharePercent,a.starts_at AS startsAt,
-    cp.amount_cents AS paidCents,cp.batch_id AS batchId
-    FROM appointments a JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
-    LEFT JOIN commission_payments cp ON cp.appointment_id=a.id AND cp.tenant_id=a.tenant_id
-    WHERE a.tenant_id=? AND a.status='concluido' AND substr(a.starts_at,1,7)=?
-    ORDER BY u.name,a.starts_at`).all(tenant(req),month);
-  const summaries=new Map();
-  for(const item of items) {
-    const cur=summaries.get(item.professionalId)||{
-      professionalId:item.professionalId,professionalName:item.professionalName,completed:0,pendingServices:0,grossCents:0,
-      earnedCents:0,paidCents:0,dueCents:0};
-    const earned=commissionCents(item);
-    cur.completed++;cur.grossCents+=item.priceCents;cur.earnedCents+=earned;
-    cur.paidCents+=item.paidCents??0;cur.dueCents+=item.paidCents===null?earned:0;
-    if(item.paidCents===null)cur.pendingServices++;
-    summaries.set(item.professionalId,cur);
-  }
-  const batches=db.prepare(`SELECT b.id,b.period,b.total_cents AS totalCents,b.paid_at AS paidAt,
-    u.name AS professionalName FROM payout_batches b
-    JOIN users u ON u.id=b.professional_id AND u.tenant_id=b.tenant_id
-    WHERE b.tenant_id=? AND b.period=? ORDER BY b.paid_at DESC`).all(tenant(req),month);
-  res.setHeader("Cache-Control","no-store");
-  res.json({month,professionals:[...summaries.values()],batches});
-});
-app.get("/api/settlements/export.csv", requireAuth, allowRoles("dono"), (req,res)=>{
-  const month=String(req.query.month||"");
-  if(!validMonth(month))return fail(res,400,"Mês inválido.");
-  const rows=db.prepare(`SELECT a.starts_at AS startsAt,u.name AS professionalName,
-    s.name AS serviceName,a.price_cents AS priceCents,a.commission_percent AS commissionPercent,
-    a.house_share_percent AS houseSharePercent, cp.amount_cents AS paidCents,
-    cp.batch_id AS batchId,cp.paid_at AS paidAt
-    FROM appointments a JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
-    JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
-    LEFT JOIN commission_payments cp ON cp.appointment_id=a.id AND cp.tenant_id=a.tenant_id
-    WHERE a.tenant_id=? AND a.status='concluido' AND substr(a.starts_at,1,7)=?
-    ORDER BY u.name,a.starts_at`).all(tenant(req),month);
-  sendCsv(res,`fechamentos-${month}.csv`,
-    ["Data","Profissional","Serviço","Preço em centavos","Comissão bruta (%)",
-     "Retenção (%)","Repasse em centavos","Pago","Lote","Registrado em"],
-    rows.map(row=>[row.startsAt,row.professionalName,row.serviceName,row.priceCents,
-      row.commissionPercent,row.houseSharePercent,commissionCents(row),
-      row.paidCents!==null?"Sim":"Não",row.batchId||"",row.paidAt||""]));
-});
 
-app.post("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
-  const professionalId=String(req.body?.professionalId||"");
-  const month=String(req.body?.month||"");
-  if(!validMonth(month))return fail(res,400,"Mês inválido.");
-  if(!db.prepare("SELECT 1 FROM users WHERE id=? AND tenant_id=? AND role='profissional'").get(professionalId,tenant(req)))
-    return fail(res,404,"Profissional não encontrado.");
-  const complete=db.prepare(`SELECT a.id,a.price_cents AS priceCents,
-    a.commission_percent AS commissionPercent,a.house_share_percent AS houseSharePercent
-    FROM appointments a LEFT JOIN commission_payments cp ON cp.appointment_id=a.id
-    WHERE a.tenant_id=? AND a.professional_id=? AND a.status='concluido'
-      AND substr(a.starts_at,1,7)=? AND cp.appointment_id IS NULL`);
-  const batchId=createId();
-  const result=db.transaction(()=>{
-    const rows=complete.all(tenant(req),professionalId,month);
-    if(!rows.length)return null;
-    const total=rows.reduce((sum,row)=>sum+commissionCents(row),0);
-    db.prepare(`INSERT INTO payout_batches (id,tenant_id,professional_id,period,total_cents,created_by)
-      VALUES (?,?,?,?,?,?)`).run(batchId,tenant(req),professionalId,month,total,req.user.id);
-    const pay=db.prepare(`INSERT INTO commission_payments (appointment_id,tenant_id,professional_id,amount_cents,batch_id)
-      VALUES (?,?,?,?,?)`);
-    rows.forEach(row=>pay.run(row.id,tenant(req),professionalId,commissionCents(row),batchId));
-    return {id:batchId,totalCents:total,count:rows.length};
+function fortnightWindow(period) {
+  const match = /^(\d{4})-(\d{2})-(1|2)$/.exec(period);
+  if (!match) return null;
+  const year = Number(match[1]), month = Number(match[2]), half = Number(match[3]);
+  if (month < 1 || month > 12) return null;
+  const last = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { start: `${match[1]}-${match[2]}-${half === 1 ? "01" : "16"}`,
+    end: `${match[1]}-${match[2]}-${half === 1 ? "15" : String(last).padStart(2, "0")}`, half, period };
+}
+function fortnightServices(tenantId, period) {
+  const window = fortnightWindow(period);
+  if (!window) return null;
+  const items = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
+    a.price_cents AS priceCents, a.commission_percent AS commissionPercent,
+    a.house_share_percent AS houseSharePercent, a.starts_at AS startsAt,
+    COALESCE(a.completed_on, substr(a.starts_at, 1, 10)) AS earnedOn,
+    CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents,
+    CASE WHEN cp.transfer_confirmed = 0 THEN 1 ELSE 0 END AS legacyUnverified
+    FROM appointments a
+    JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
+    LEFT JOIN commission_payments cp ON cp.appointment_id = a.id AND cp.tenant_id = a.tenant_id
+    WHERE a.tenant_id = ? AND a.status = 'concluido'
+      AND COALESCE(a.completed_on, substr(a.starts_at, 1, 10)) BETWEEN ? AND ?
+    ORDER BY u.name, earnedOn, a.id`).all(tenantId, window.start, window.end);
+  return { window, items };
+}
+app.get("/api/settlements", requireAuth, allowRoles("dono"), (req, res) => {
+  const period = String(req.query.period ?? `${localNow(tenant(req)).slice(0, 7)}-${Number(localNow(tenant(req)).slice(8, 10)) <= 15 ? 1 : 2}`);
+  const data = fortnightServices(tenant(req), period);
+  if (!data) return fail(res, 400, "Quinzena inválida.");
+  const summaries = new Map();
+  for (const item of data.items) {
+    const current = summaries.get(item.professionalId) || {
+      professionalId: item.professionalId, professionalName: item.professionalName,
+      completed: 0, pendingServices: 0, grossCents: 0, earnedCents: 0, paidCents: 0,
+      dueCents: 0, legacyUnverified: 0,
+    };
+    const earned = commissionCents(item);
+    current.completed++;
+    current.grossCents += item.priceCents;
+    current.earnedCents += earned;
+    current.paidCents += item.paidCents ?? 0;
+    current.dueCents += item.paidCents === null ? earned : 0;
+    if (item.paidCents === null) current.pendingServices++;
+    if (item.legacyUnverified) current.legacyUnverified++;
+    summaries.set(item.professionalId, current);
+  }
+  const batches = db.prepare(`SELECT b.id, b.period, b.total_cents AS totalCents,
+    b.paid_at AS paidAt, u.name AS professionalName FROM payout_batches b
+    JOIN users u ON u.id = b.professional_id AND u.tenant_id = b.tenant_id
+    WHERE b.tenant_id = ? AND b.period = ? ORDER BY b.paid_at DESC`)
+    .all(tenant(req), period);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ period, start: data.window.start, end: data.window.end,
+    professionals: [...summaries.values()], batches });
+});
+app.get("/api/settlements/export.csv", requireAuth, allowRoles("dono"), (req, res) => {
+  const period = String(req.query.period ?? "");
+  const data = fortnightServices(tenant(req), period);
+  if (!data) return fail(res, 400, "Quinzena inválida.");
+  sendCsv(res, `saldos-profissionais-${period}.csv`,
+    ["Data do atendimento", "Data do crédito", "Profissional", "Valor bruto (centavos)", "Comissão líquida (centavos)", "Repasse confirmado", "Lançamento antigo a conferir"],
+    data.items.map(row => [row.startsAt, row.earnedOn, row.professionalName, row.priceCents,
+      commissionCents(row), row.paidCents === null ? "Não" : "Sim", row.legacyUnverified ? "Sim" : "Não"]));
+});
+app.post("/api/settlements", requireAuth, allowRoles("dono"), (req, res) => {
+  const period = String(req.body?.period ?? "");
+  const professionalId = String(req.body?.professionalId ?? "");
+  const data = fortnightServices(tenant(req), period);
+  if (!data) return fail(res, 400, "Quinzena inválida.");
+  if (data.window.end >= cashDay(tenant(req)))
+    return fail(res, 409, "A quinzena ainda não terminou. O repasse só pode ser confirmado após o encerramento do período.");
+  if (!db.prepare("SELECT 1 FROM users WHERE id = ? AND tenant_id = ? AND role = 'profissional'")
+    .get(professionalId, tenant(req))) return fail(res, 404, "Profissional não encontrado.");
+  const batchId = createId();
+  const result = db.transaction(() => {
+    const pending = fortnightServices(tenant(req), period).items
+      .filter(row => row.professionalId === professionalId && row.paidCents === null);
+    if (!pending.length) return null;
+    const amount = pending.reduce((sum, row) => sum + commissionCents(row), 0);
+    db.prepare(`INSERT INTO payout_batches (id, tenant_id, professional_id, period, total_cents, created_by)
+      VALUES (?, ?, ?, ?, ?, ?)`).run(batchId, tenant(req), professionalId, period, amount, req.user.id);
+    const add = db.prepare(`INSERT INTO commission_payments (appointment_id, tenant_id, professional_id, amount_cents, batch_id, transfer_confirmed)
+      VALUES (?, ?, ?, ?, ?, 1)
+      ON CONFLICT(appointment_id) DO UPDATE SET amount_cents = excluded.amount_cents,
+      batch_id = excluded.batch_id, paid_at = datetime('now'), transfer_confirmed = 1
+      WHERE commission_payments.tenant_id = excluded.tenant_id AND commission_payments.transfer_confirmed = 0`);
+    for (const row of pending) {
+      const updated = add.run(row.id, tenant(req), professionalId, commissionCents(row), batchId);
+      if (updated.changes !== 1) throw new Error("Conflito ao registrar o repasse.");
+    }
+    return { id: batchId, totalCents: amount, count: pending.length };
   })();
-  if(!result)return fail(res,409,"Não existem serviços concluídos pendentes para este profissional e período.");
-  res.status(201).json({batch:result,message:"Fechamento registrado. Nenhuma transferência financeira foi efetuada."});
+  if (!result) return fail(res, 409, "Sem saldo pendente para esse profissional na quinzena.");
+  res.status(201).json({ batch: result, message: "Repasse efetivo confirmado e registrado; nenhuma transferência automática foi realizada." });
 });
 
 app.get("/api/professional/my-services", requireAuth, allowRoles("profissional"), (req, res) => {
@@ -1204,10 +1212,10 @@ app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("
   // Completion is always restricted to the assigned professional and recorded as unpaid.
   const beforeAudit = auditSnapshot(tenant(req), appointment.id);
   const result = db.prepare(`
-    UPDATE appointments SET status = 'concluido'
+    UPDATE appointments SET status = 'concluido', completed_on = ?
     WHERE id = ? AND tenant_id = ? AND professional_id = ?
     AND status IN ('agendado', 'confirmado')
-  `).run(appointment.id, tenant(req), req.user.id);
+  `).run(cashDay(tenant(req)), appointment.id, tenant(req), req.user.id);
   if (!result.changes) return fail(res, 409, "Atendimento já atualizado.");
   recordAppointmentAudit(tenant(req), appointment.id, "conclusao", req.user, beforeAudit);
   res.json({ ok: true });
@@ -1266,7 +1274,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   const appointment = db.prepare(`
     SELECT id, professional_id AS professionalId, service_id AS serviceId,
       starts_at AS startsAt, ends_at AS endsAt, status, price_cents AS priceCents,
-      payment_method AS paymentMethod, paid_on AS paidOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes
+      payment_method AS paymentMethod, paid_on AS paidOn, completed_on AS completedOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes
     FROM appointments WHERE id = ? AND tenant_id = ?
   `).get(req.params.id, tenant(req));
   if (!appointment) return fail(res, 404, "Atendimento não encontrado.");
@@ -1288,6 +1296,8 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   if (appointment.paidOn && cashClosing(tenant(req), appointment.paidOn)
       && (method !== appointment.paymentMethod || priceCents !== appointment.priceCents || status !== appointment.status))
     return fail(res, 409, "Pagamento de caixa já fechado não pode ser alterado.");
+  if (appointment.paymentMethod && status !== "concluido")
+    return fail(res, 409, "Não é possível retirar a conclusão de um serviço já recebido.");
   if (appointment.paymentMethod && method !== appointment.paymentMethod)
     return fail(res, 409, "O pagamento registrado não pode ser alterado diretamente.");
   if (!appointment.paymentMethod && method && status !== "concluido")
@@ -1324,11 +1334,12 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     })) return false;
     db.prepare(`
       UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?,
+        completed_on = CASE WHEN ? = 'concluido' AND status != 'concluido' THEN ? ELSE completed_on END,
         payment_method = ?, paid_on = CASE WHEN payment_method = '' AND ? != '' THEN ? ELSE paid_on END,
         paid_at = CASE WHEN payment_method = '' AND ? != '' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE paid_at END,
         price_cents = ?, notes = ?
       WHERE id = ? AND tenant_id = ?
-    `).run(startsAt, endsAt, status, method || "", method || "", cashDay(tenant(req)), method || "",
+    `).run(startsAt, endsAt, status, status, cashDay(tenant(req)), method || "", method || "", cashDay(tenant(req)), method || "",
       priceCents, req.body?.notes === undefined ? appointment.notes : String(req.body.notes),
       appointment.id, tenant(req));
     return true;
@@ -1514,7 +1525,7 @@ app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, r
   res.json({ month, receivables: rows.map(row => ({
     id: row.id, clientName: row.clientName, serviceName: row.serviceName, professionalName: row.professionalName,
     startsAt: row.startsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod,
-    paid: Boolean(row.paymentMethod),
+    paidOn: row.paidOn, paid: Boolean(row.paymentMethod),
   })) });
 });
 
@@ -1540,6 +1551,37 @@ app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao")
 });
 
 
+
+
+app.get("/api/cash/unreconciled", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, a.price_cents AS priceCents,
+    a.payment_method AS paymentMethod, c.name AS clientName, u.name AS professionalName
+    FROM appointments a
+    JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
+    JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
+    WHERE a.tenant_id = ? AND a.status = 'concluido' AND a.payment_method != '' AND a.paid_on IS NULL
+    ORDER BY a.starts_at DESC LIMIT 300`).all(tenant(req));
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ receipts: rows });
+});
+app.post("/api/cash/reconcile/:id", requireAuth, allowRoles("dono"), (req, res) => {
+  const date = String(req.body?.date ?? "");
+  if (!validCashDate(date) || date > cashDay(tenant(req)))
+    return fail(res, 400, "Selecione a data verdadeira do recebimento.");
+  const before = auditSnapshot(tenant(req), req.params.id);
+  const changed = db.transaction(() => {
+    if (cashClosing(tenant(req), date)) return "closed";
+    const result = db.prepare(`UPDATE appointments SET paid_on = ?, payment_reconciled_by = ?
+      WHERE id = ? AND tenant_id = ? AND status = 'concluido'
+        AND payment_method != '' AND paid_on IS NULL`).run(date, req.user.id, req.params.id, tenant(req));
+    if (!result.changes) return "missing";
+    recordAppointmentAudit(tenant(req), req.params.id, "conciliacao", req.user, before);
+    return "ok";
+  })();
+  if (changed === "closed") return fail(res, 409, "A data selecionada possui caixa fechado.");
+  if (changed !== "ok") return fail(res, 409, "Recebimento já conciliado ou não encontrado.");
+  res.json({ ok: true, paidOn: date });
+});
 
 app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const date = String(req.query.date ?? cashDay(tenant(req)));
@@ -1597,7 +1639,7 @@ app.get("/api/reports/appointment-audit", requireAuth, allowRoles("dono"), (req,
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const action = String(req.query.action ?? "").trim();
-  const permitted = ["criacao", "confirmacao", "cancelamento", "remarcacao", "conclusao", "pagamento", "status", "edicao", "comissao"];
+  const permitted = ["criacao", "confirmacao", "cancelamento", "remarcacao", "conclusao", "pagamento", "conciliacao", "status", "edicao", "comissao"];
   if (action && !permitted.includes(action)) return fail(res, 400, "Ação inválida.");
   const rows = db.prepare(`
     SELECT audit.id, audit.appointment_id AS appointmentId, audit.actor_name AS actorName,

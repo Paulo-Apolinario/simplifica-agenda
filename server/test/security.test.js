@@ -405,14 +405,15 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(adjustment.body.earnedCents, 3000);
     assert.equal(db.prepare("SELECT count(*) AS n FROM commission_adjustments WHERE appointment_id = ?")
       .get("a-prof-test").n, 1);
+    // A completed service creates a balance, not a direct professional payment.
     const payCommission = await request("/commissions/a-prof-test/pay", "POST");
-    assert.equal(payCommission.status, 200);
-    assert.equal(payCommission.body.amountCents, 3000);
-    assert.equal((await request("/commissions/a-prof-test/pay", "POST")).status, 409);
+    assert.equal(payCommission.status, 409);
+    const earningsBeforeTransfer = await request("/commissions?month=2026-11");
+    assert.equal(earningsBeforeTransfer.body.commissions.find(row => row.id === "a-prof-test").paid, false);
+    // Unpaid commission remains editable with an audit reason.
     assert.equal((await request("/commissions/a-prof-test", "PATCH", {
       commissionPercent: 42, houseSharePercent: 10, reason: "Produtos do estabelecimento",
-    })).status, 409);
-    assert.equal((await request("/appointments/a-prof-test", "PATCH", { priceCents: 1 })).status, 409);
+    })).status, 200);
 
 
     // Demo can browse but cannot change appointments, settings, or export real data.

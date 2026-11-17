@@ -1396,6 +1396,45 @@ function BookingSharePage({ user }) {
 }
 
 
+
+function UnreconciledCash({ user, onChange }) {
+  const [receipts, setReceipts] = useState([]);
+  const [date, setDate] = useState(localDate().slice(0, 10));
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const fetchReceipts = useCallback(() => api("/cash/unreconciled")
+    .then(result => setReceipts(result.receipts)).catch(err => setError(err.message)), []);
+  useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
+  const reconcile = async receipt => {
+    if (!window.confirm(`Confirma que o pagamento de ${money(receipt.priceCents)} foi recebido em ${date}? A conciliação ficará registrada no histórico.`)) return;
+    setBusy(receipt.id); setError("");
+    try {
+      await api(`/cash/reconcile/${encodeURIComponent(receipt.id)}`, {method:"POST", body:{date}});
+      await fetchReceipts();
+      onChange();
+    } catch (err) { setError(err.message); }
+    finally { setBusy(""); }
+  };
+  if (!receipts.length) return null;
+  return <section className="panel management-panel">
+    <div className="panel-heading"><div><p className="eyebrow">CONCILIAÇÃO</p><h2>Recebimentos anteriores sem data</h2>
+      <p className="panel-subtitle">Estes pagamentos pertencem à empresa, mas ainda não possuem uma data de recebimento comprovada. Não serão duplicados.</p></div>
+      {user.role === "dono" && <input type="date" className="input" aria-label="Data real do pagamento"
+        value={date} max={localDate().slice(0, 10)} onChange={e => setDate(e.target.value)}/>}
+    </div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <div className="management-list">{receipts.map(receipt => <article className="service-row" key={receipt.id}>
+      <span className="service-row-icon"><Clock3 size={18}/></span>
+      <div className="min-w-0 flex-1"><b>{receipt.clientName} · {receipt.professionalName}</b>
+        <small>Atendimento: {dateTimeLabel(receipt.startsAt)} · {paymentNames[receipt.paymentMethod] || receipt.paymentMethod}</small></div>
+      <strong>{money(receipt.priceCents)}</strong>
+      {user.role === "dono" && <Button disabled={busy === receipt.id || !date}
+        onClick={() => reconcile(receipt)}>{busy === receipt.id ? "Salvando..." : "Conciliar"}</Button>}
+    </article>)}</div>
+    {user.role === "recepcao" && <p className="panel-subtitle">Somente o administrador pode confirmar as datas históricas destes pagamentos.</p>}
+  </section>;
+}
+
 function DailyCashClosing({ revision }) {
   const [date, setDate] = useState(localDate().slice(0, 10));
   const [summary, setSummary] = useState(null);
@@ -1551,10 +1590,11 @@ function ReceivablesPage({ user }) {
         <article className="service-row" key={item.id}>
           <span className="service-row-icon"><Check size={18}/></span>
           <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
-            <small>{dateTimeLabel(item.startsAt)} · {paymentNames[item.paymentMethod] || item.paymentMethod}</small></div>
+            <small>Atendimento: {dateTimeLabel(item.startsAt)} · Recebido em: {item.paidOn ? item.paidOn.split("-").reverse().join("/") : "data a conciliar"} · {paymentNames[item.paymentMethod] || item.paymentMethod}</small></div>
           <strong>{money(item.priceCents)}</strong>
         </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
     </section>
+    <UnreconciledCash user={user} onChange={() => setCashRevision(n => n + 1)}/>
     <DailyCashClosing revision={cashRevision}/>
   </>;
 }
@@ -1572,13 +1612,13 @@ function AppointmentAuditReport({ month }) {
     return () => { alive = false; };
   }, [month, action]);
   const labels = { criacao: "Criado", confirmacao: "Confirmado", cancelamento: "Cancelado",
-    remarcacao: "Remarcado", conclusao: "Concluído", pagamento: "Pagamento", status: "Status alterado",
+    remarcacao: "Remarcado", conclusao: "Concluído", pagamento: "Pagamento", conciliacao: "Data do pagamento conciliada", status: "Status alterado",
     edicao: "Editado", comissao: "Comissão ajustada" };
   const detail = event => {
     const before = event.before || {}, after = event.after || {};
     const changes = [
       ["Status", "status"], ["Horário", "startsAt"], ["Valor", "priceCents"],
-      ["Pagamento", "paymentMethod"], ["Comissão (%)", "commissionPercent"], ["Taxa estabelecimento (%)", "houseSharePercent"]
+      ["Pagamento", "paymentMethod"], ["Recebido em", "paidOn"], ["Concluído em", "completedOn"], ["Comissão (%)", "commissionPercent"], ["Taxa estabelecimento (%)", "houseSharePercent"]
     ].filter(([, key]) => after[key] !== undefined && before[key] !== after[key])
       .map(([label, key]) => `${label}: ${before[key] === undefined ? "—" : before[key]} → ${after[key]}`);
     return changes.join(" · ") || "Ação registrada";
@@ -2141,57 +2181,74 @@ function CommissionPoliciesPage() {
     </section>
   </>;
 }
+
 function SettlementsPage() {
-  const [month,setMonth]=useState(localDate().slice(0,7));
-  const [data,setData]=useState({professionals:[],batches:[]});
-  const [error,setError]=useState(""),[message,setMessage]=useState(""),[busy,setBusy]=useState("");
-  const refresh=useCallback(()=>api(`/settlements?month=${encodeURIComponent(month)}`)
-    .then(setData).catch(e=>setError(e.message)),[month]);
-  useEffect(()=>{refresh();},[refresh]);
-  const close=async pro=>{
-    if(!window.confirm(`Registrar como pago o saldo de ${money(pro.dueCents)} de ${pro.professionalName}? Isso não transfere dinheiro.`))return;
-    setBusy(pro.professionalId);setError("");setMessage("");
-    try{
-      const result=await api("/settlements",{method:"POST",body:{month,professionalId:pro.professionalId}});
-      setMessage(`Fechamento registrado: ${money(result.batch.totalCents)} em ${result.batch.count} serviços. Confirme a transferência fora do sistema.`);
+  const today = localDate().slice(0, 10);
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [half, setHalf] = useState(Number(today.slice(8, 10)) <= 15 ? "1" : "2");
+  const period = `${month}-${half}`;
+  const [data, setData] = useState({ professionals: [], batches: [] });
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState("");
+  const refresh = useCallback(() => api(`/settlements?period=${encodeURIComponent(period)}`)
+    .then(result => { setData(result); setError(""); }).catch(err => setError(err.message)), [period]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const close = async professional => {
+    if (!window.confirm(`Confirma que o valor de ${money(professional.dueCents)} JÁ FOI REALMENTE TRANSFERIDO para ${professional.professionalName}? Esta ação registra pagamento efetivo e não realiza PIX.`)) return;
+    setBusy(professional.professionalId); setError(""); setMessage("");
+    try {
+      const result = await api("/settlements", {method:"POST", body:{period,professionalId:professional.professionalId}});
+      setMessage(`Repasse confirmado: ${money(result.batch.totalCents)} para ${professional.professionalName}.`);
       await refresh();
-    }catch(e){setError(e.message);}finally{setBusy("");}
+    } catch (err) { setError(err.message); }
+    finally { setBusy(""); }
   };
-  const due=data.professionals.reduce((sum,p)=>sum+p.dueCents,0);
+  const due = data.professionals.reduce((sum, item) => sum + item.dueCents, 0);
+  const earned = data.professionals.reduce((sum, item) => sum + item.earnedCents, 0);
+  const legacy = data.professionals.reduce((sum, item) => sum + item.legacyUnverified, 0);
+  const ended = Boolean(data.end && data.end < today);
   return <>
-    <PageTitle eyebrow="GESTÃO FINANCEIRA" title="Fechamentos e repasses"
-      description="Confira os serviços concluídos e registre os valores efetivamente pagos aos profissionais."/>
+    <PageTitle eyebrow="GESTÃO FINANCEIRA" title="Saldos e repasses quinzenais"
+      description="A empresa recebe os pagamentos dos clientes; a conclusão do serviço gera saldo para o profissional, mas não efetua repasse."/>
     <div className="booking-queue-tools">
-      <div className="month-filter"><label>Mês</label><input type="month" className="input month-input" value={month}
-        onChange={e=>setMonth(e.target.value)}/></div>
-      <a className="button button-secondary" href={`/api/settlements/export.csv?month=${encodeURIComponent(month)}`}>
-        <Download size={16}/> Exportar relatório CSV
+      <div className="month-filter"><label>Mês</label><input type="month" className="input month-input" value={month} onChange={event => setMonth(event.target.value)}/></div>
+      <div className="month-filter"><label>Quinzena</label><select className="input" value={half} onChange={event => setHalf(event.target.value)}>
+        <option value="1">1ª quinzena (01–15)</option><option value="2">2ª quinzena (16–último dia)</option>
+      </select></div>
+      <a className="button button-secondary" href={`/api/settlements/export.csv?period=${encodeURIComponent(period)}`}>
+        <Download size={16}/> Exportar saldos CSV
       </a>
     </div>
     <section className="stats-grid finance-stats">
-      <StatCard title="Saldo pendente" value={money(due)} icon={Wallet} tone="orange" note="Ainda não registrado como pago"/>
-      <StatCard title="Total de repasses" value={money(data.professionals.reduce((sum,p)=>sum+p.earnedCents,0))}
-        icon={CircleDollarSign} note="Comissões dos serviços concluídos"/>
+      <StatCard title="Saldo a pagar" value={money(due)} icon={Wallet} tone="orange" note="Crédito dos profissionais ainda não repassado"/>
+      <StatCard title="Comissões geradas" value={money(earned)} icon={CircleDollarSign} note="Serviços concluídos na quinzena"/>
     </section>
-    <ErrorMessage>{error}</ErrorMessage>{message&&<p className="success-message">{message}</p>}
-    <section className="panel management-panel"><div className="panel-heading"><div><h2>Fechamento por profissional</h2>
-      <p className="panel-subtitle">O sistema apenas registra o pagamento; ele não envia PIX nem dinheiro.</p></div></div>
-      {data.professionals.length?<div className="management-list">{data.professionals.map(pro=>
+    <ErrorMessage>{error}</ErrorMessage>
+    {message && <p className="success-message">{message}</p>}
+    {legacy > 0 && <p className="panel-subtitle">Existem {legacy} lançamento(s) antigos marcados como pagos, mas sem confirmação de transferência. Eles permanecem como saldo pendente para conferência.</p>}
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><h2>Saldo por profissional</h2>
+        <p className="panel-subtitle">Período: {data.start || "—"} até {data.end || "—"}. Confirme o repasse apenas quando o pagamento tiver acontecido fora do sistema.</p></div></div>
+      {data.professionals.length ? <div className="management-list">{data.professionals.map(pro =>
         <article className="service-row request-item" key={pro.professionalId}>
           <span className="service-row-icon"><Wallet size={18}/></span>
           <div className="min-w-0 flex-1"><b>{pro.professionalName}</b>
-            <small>{pro.completed} serviços · bruto {money(pro.grossCents)} · já registrado pago {money(pro.paidCents)}</small></div>
-          <strong>{money(pro.dueCents)} pendente</strong>
-          {pro.pendingServices>0&&<Button disabled={busy===pro.professionalId}
-            onClick={()=>close(pro)}>Registrar fechamento</Button>}
-        </article>)}</div>:<EmptyState icon={Wallet} title="Sem serviços concluídos" description="Os fechamentos do período aparecerão aqui."/>}
+            <small>{pro.completed} serviço(s) · recebido pela empresa {money(pro.grossCents)} · comissão gerada {money(pro.earnedCents)} · repassado confirmado {money(pro.paidCents)}</small>
+          </div>
+          <strong>{money(pro.dueCents)} a receber</strong>
+          {pro.pendingServices > 0 && <Button disabled={busy === pro.professionalId || !ended}
+            onClick={() => close(pro)}>{busy === pro.professionalId ? "Registrando..." : "Confirmar repasse"}</Button>}
+        </article>)}</div> : <EmptyState icon={Wallet} title="Nenhum serviço concluído" description="Os saldos dos serviços concluídos na quinzena aparecerão aqui."/>}
+      {!ended && <p className="panel-subtitle">A quinzena ainda não terminou. O saldo pode ser consultado, mas o pagamento só poderá ser confirmado após o encerramento do período.</p>}
     </section>
-    <section className="panel management-panel"><div className="panel-heading"><div><h2>Histórico de fechamentos</h2></div></div>
-      {data.batches.length?<div className="management-list">{data.batches.map(b=>
-        <article className="service-row" key={b.id}><CheckCheck size={18}/>
-          <span className="min-w-0 flex-1"><b>{b.professionalName}</b><small>{b.paidAt} · protocolo {b.id.slice(0,8)}</small></span>
-          <strong>{money(b.totalCents)}</strong></article>)}</div>:
-        <p className="panel-subtitle">Nenhum fechamento registrado neste mês.</p>}
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><h2>Histórico de repasses confirmados</h2></div></div>
+      {data.batches.length ? <div className="management-list">{data.batches.map(batch =>
+        <article className="service-row" key={batch.id}><CheckCheck size={18}/>
+          <span className="min-w-0 flex-1"><b>{batch.professionalName}</b><small>{batch.paidAt} · protocolo {batch.id.slice(0, 8)}</small></span>
+          <strong>{money(batch.totalCents)}</strong></article>)}</div> :
+        <p className="panel-subtitle">Nenhum repasse confirmado nesta quinzena.</p>}
     </section>
   </>;
 }
