@@ -602,11 +602,13 @@ app.patch("/api/services/:id", requireAuth, allowRoles("dono"), (req, res) => {
   const name = requiredText(req.body?.name, "Nome do serviço");
   const duration = Number(req.body?.durationMinutes);
   const price = Number(req.body?.priceCents);
+  const houseShare = Number(req.body?.houseSharePercent ?? 0);
+  if (!Number.isFinite(houseShare) || houseShare < 0 || houseShare > 100) return fail(res, 400, "Retenção do estabelecimento inválida.");
   if (!Number.isInteger(duration) || duration < 5 || duration > 720 || !Number.isInteger(price) || price < 0) {
     return fail(res, 400, "Informe uma duração e um preço válidos.");
   }
-  db.prepare("UPDATE services SET name = ?, duration_minutes = ?, price_cents = ?, active = ? WHERE id = ? AND tenant_id = ?")
-    .run(name, duration, price, req.body.active === false ? 0 : 1, req.params.id, tenant(req));
+  db.prepare("UPDATE services SET name = ?, duration_minutes = ?, price_cents = ?, active = ?, house_share_percent = ? WHERE id = ? AND tenant_id = ?")
+    .run(name, duration, price, req.body.active === false ? 0 : 1, houseShare, req.params.id, tenant(req));
   const ids = Array.isArray(req.body.professionalIds) ? req.body.professionalIds : null;
   if (ids) {
     const update = db.transaction(() => {
@@ -859,7 +861,9 @@ app.get("/api/schedule", requireAuth, (req, res) => {
 });
 
 // Commission is earned when a service is completed; payment requires an explicit owner action.
-const commissionCents = row => Math.round(row.priceCents * row.commissionPercent / 100);
+// The retained percentage is expressed in points of the service price.
+const commissionCents = row => Math.round(row.priceCents * Math.max(0,
+  row.commissionPercent - (row.houseSharePercent ?? 0)) / 100);
 function professionalEarnings(tenantId, professionalId, month = null) {
   const whereMonth = month ? " AND substr(a.starts_at, 1, 7) = ?" : "";
   const params = month ? [tenantId, professionalId, month] : [tenantId, professionalId];
@@ -892,7 +896,7 @@ app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const rows = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
     a.starts_at AS startsAt, a.price_cents AS priceCents,
-    a.commission_percent AS commissionPercent, s.name AS serviceName,
+    a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent, s.name AS serviceName,
     cp.amount_cents AS paidCents, cp.paid_at AS paidAt
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
     JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
@@ -902,9 +906,38 @@ app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
   res.json({ month, commissions: rows.map(row => ({...row,
     earnedCents: commissionCents(row), paid: row.paidCents !== null })) });
 });
+app.patch("/api/commissions/:id", requireAuth, allowRoles("dono"), (req, res) => {
+  const appointment = db.prepare(`SELECT id, commission_percent AS commissionPercent,
+    house_share_percent AS houseSharePercent FROM appointments
+    WHERE id = ? AND tenant_id = ? AND status = 'concluido'`).get(req.params.id, tenant(req));
+  if (!appointment) return fail(res, 404, "Serviço concluído não encontrado.");
+  if (db.prepare("SELECT 1 FROM commission_payments WHERE appointment_id = ? AND tenant_id = ?")
+    .get(appointment.id, tenant(req))) return fail(res, 409, "Comissão já paga. Não é permitido ajustar sem estorno auditado.");
+  const percentage = Number(req.body?.commissionPercent);
+  const house = Number(req.body?.houseSharePercent);
+  const reason = String(req.body?.reason ?? "").trim();
+  if (![percentage, house].every(v => Number.isFinite(v) && v >= 0 && v <= 100))
+    return fail(res, 400, "Percentuais devem estar entre 0% e 100%.");
+  if (reason.length < 5 || reason.length > 250) return fail(res, 400, "Informe o motivo do ajuste (5 a 250 caracteres).");
+  db.transaction(() => {
+    db.prepare("UPDATE appointments SET commission_percent = ?, house_share_percent = ? WHERE id = ? AND tenant_id = ?")
+      .run(percentage, house, appointment.id, tenant(req));
+    db.prepare(`INSERT INTO commission_adjustments (id, tenant_id, appointment_id, changed_by,
+      old_percent, new_percent, old_house_percent, new_house_percent, reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(createId(), tenant(req), appointment.id, req.user.id,
+        appointment.commissionPercent, percentage, appointment.houseSharePercent, house, reason);
+  })();
+  res.json({ ok: true, earnedCents: commissionCents({
+    priceCents: db.prepare("SELECT price_cents FROM appointments WHERE id = ?").get(appointment.id).price_cents,
+    commissionPercent: percentage, houseSharePercent: house,
+  }) });
+});
+
 app.post("/api/commissions/:id/pay", requireAuth, allowRoles("dono"), (req, res) => {
   const row = db.prepare(`SELECT id, professional_id AS professionalId,
-    price_cents AS priceCents, commission_percent AS commissionPercent
+    price_cents AS priceCents, commission_percent AS commissionPercent,
+    house_share_percent AS houseSharePercent
     FROM appointments WHERE id = ? AND tenant_id = ? AND status = 'concluido'`)
     .get(req.params.id, tenant(req));
   if (!row) return fail(res, 404, "Serviço concluído não encontrado.");
@@ -968,7 +1001,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
   }
   const chosen = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      u.commission_percent AS commission
+      u.commission_percent AS commission, s.house_share_percent AS houseShare
     FROM services s
     JOIN professional_services ps ON ps.service_id = s.id AND ps.tenant_id = s.tenant_id
     JOIN users u ON u.id = ps.professional_id AND u.tenant_id = s.tenant_id
@@ -996,7 +1029,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
          price_cents, commission_percent, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, tenant(req), resolvedClientId, professionalId, serviceId, normalizedStart, endsAt,
-      chosen.price, chosen.commission, String(req.body?.notes ?? "").trim());
+      chosen.price, chosen.commission, chosen.houseShare, String(req.body?.notes ?? "").trim());
     return true;
   });
   if (!create()) return;
@@ -1176,7 +1209,7 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
   const byProfessional = db.prepare(`
     SELECT u.id, u.name, count(a.id) AS count,
       coalesce(sum(a.price_cents), 0) AS revenueCents,
-      coalesce(sum(round(a.price_cents * a.commission_percent / 100)), 0) AS commissionCents
+      coalesce(sum(round(a.price_cents * max(0, a.commission_percent - a.house_share_percent) / 100)), 0) AS commissionCents
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
     WHERE a.tenant_id = ? AND substr(a.starts_at, 1, 7) = ? AND a.status = 'concluido'
     GROUP BY u.id ORDER BY revenueCents DESC
