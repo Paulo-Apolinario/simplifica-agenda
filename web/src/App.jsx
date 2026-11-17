@@ -156,7 +156,7 @@ function Login({ onLogin, demoEnabled = false }) {
         <form className="space-y-4" onSubmit={submit}>
           {mode === "email" && <Field label="E-mail" type="email" autoComplete="username" required value={values.email}
             onChange={(e) => setValues({ ...values, email: e.target.value })} />}
-          {mode === "staff" && <Field label="Código do profissional (ex.: 001)" inputMode="numeric" pattern="[0-9]{3}" maxLength={3} required value={values.staffCode} onChange={(e) => setValues({ ...values, staffCode: e.target.value.replace(/\\D/g, "").slice(0, 3) })}/>}
+          {mode === "staff" && <Field label="Código do profissional (ex.: 001)" inputMode="numeric" pattern="[0-9]{3}" maxLength={3} required value={values.staffCode} onChange={(e) => setValues({ ...values, staffCode: e.target.value.replace(/\D/g, "").slice(0, 3) })}/>}
           <Field label={activation ? "Escolha sua senha (6 a 8 letras e números)" : "Senha"} type="password" autoComplete="current-password" required value={values.password}
             onChange={(e) => setValues({ ...values, password: e.target.value })} minLength={mode === "staff" ? 6 : undefined} maxLength={mode === "staff" ? 8 : undefined} />
           {mode === "staff" && activation && <>
