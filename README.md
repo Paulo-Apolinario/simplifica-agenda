@@ -194,3 +194,17 @@ A ação **Sair** ficou visível no perfil lateral e no topo da aplicação. A d
 3. **Financeiro:** recebimentos parciais, estornos auditáveis, fechamento diário e relatórios por funcionário, sem atribuir falsamente pagamentos.
 4. **Operação comercial:** backup/restauração ensaiados, instalação por comércio, HTTPS, privacidade de dados e testes em dispositivos reais.
 
+
+## Acesso por código para profissionais (migração aditiva)
+
+- A tela de login possui **Administração** (e-mail + senha) e **Profissional** (identificador do comércio + código de três dígitos + senha).
+- Cada comércio começa no código **001**, seguindo **002, 003, ... 999**, sem reutilizar códigos antigos.
+- O código é único **por empresa**, não global. O profissional sempre informa o identificador do comércio para evitar ambiguidades.
+- Para novos profissionais, em **Equipe e acessos**, o proprietário cadastra nome, serviços, horários e comissão, sem exigir e-mail nem escolher a senha do funcionário. O sistema informa o código de matrícula e um **token de ativação de uso único válido por 24 horas**; compartilhe-o privadamente.
+- No primeiro acesso, o profissional escolhe uma senha de **6 a 8 caracteres contendo letras e números**. A senha fica armazenada em hash bcrypt, nunca em texto simples.
+- Profissionais antigos recebem código automaticamente ao iniciar a versão nova; nenhum registro, vínculo ou agendamento é eliminado. Para redefinir a senha deles, o proprietário utiliza **Configurar acesso** na listagem da equipe, gera um token temporário e o profissional usa **Primeiro acesso? Definir minha senha**. Sessões antigas são encerradas quando o administrador solicita essa nova ativação.
+- Administração e recepção continuam usando e-mail e senha forte (12 ou mais caracteres). Os antigos logins por e-mail dos profissionais não são mais aceitos.
+- As tentativas de login profissional possuem limite por código/comércio e por IP, em memória do processo. São necessários HTTPS e proteção adicional no proxy antes de implantar em rede pública. Senhas curtas têm risco de adivinhação; não as reutilize em outros sistemas.
+- Com `DEMO_MODE=true`, o login demonstrativo de administrador permanece ativo. Cada instalação comercial deve usar seu próprio banco/volume e segredos.
+- Faça backup do banco SQLite **antes** de atualizar o sistema em um computador com dados existentes. A migração adiciona colunas e atribui códigos, sem recriar as tabelas.
+

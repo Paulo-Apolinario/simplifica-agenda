@@ -112,7 +112,12 @@ function ErrorMessage({ children }) {
 }
 
 function Login({ onLogin, demoEnabled = false }) {
-  const [values, setValues] = useState({ email: demoEnabled ? "admin@simplifica.local" : "", password: demoEnabled ? "Agenda123!" : "", slug: "" });
+  const [values, setValues] = useState({ email: demoEnabled ? "admin@simplifica.local" : "", staffCode: "", password: demoEnabled ? "Agenda123!" : "", slug: "" });
+  const [mode, setMode] = useState("email");
+  const [activation, setActivation] = useState(false);
+  const [activationToken, setActivationToken] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [success, setSuccess] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const submit = async (event) => {
@@ -120,8 +125,20 @@ function Login({ onLogin, demoEnabled = false }) {
     setError("");
     setLoading(true);
     try {
-      const { user } = await api("/auth/login", { method: "POST", body: values });
-      onLogin(user);
+      if (mode === "staff" && activation) {
+        if (values.password !== confirmPassword) throw new Error("As senhas não coincidem.");
+        await api("/auth/activate-professional", { method: "POST", body: {
+          slug: values.slug, staffCode: values.staffCode, activationToken, password: values.password,
+        } });
+        setSuccess("Senha ativada. Agora faça seu login com o código.");
+        setActivation(false);
+        setValues({ ...values, password: "" }); setConfirmPassword(""); setActivationToken("");
+      } else {
+        const { user } = await api(mode === "staff" ? "/auth/staff-login" : "/auth/login", {
+          method: "POST", body: values,
+        });
+        onLogin(user);
+      }
     } catch (reason) {
       setError(reason.message);
     } finally {
@@ -137,18 +154,31 @@ function Login({ onLogin, demoEnabled = false }) {
           <h1 className="mt-2 text-2xl font-semibold tracking-tight">Entre na sua conta</h1>
           <p className="mt-2 text-sm text-slate-500">Organize seus horários com mais leveza.</p>
         </div>
+        <div className="auth-mode-switch" role="group" aria-label="Tipo de acesso">
+          <button type="button" className={mode === "email" ? "selected" : ""} onClick={() => { setMode("email"); setActivation(false); setError(""); }}>Administração</button>
+          <button type="button" className={mode === "staff" ? "selected" : ""} onClick={() => { setMode("staff"); setError(""); setValues({ ...values, password: "", slug: "" }); }}>Profissional</button>
+        </div>
         <form className="space-y-4" onSubmit={submit}>
-          <Field label="E-mail" type="email" autoComplete="username" required value={values.email}
-            onChange={(e) => setValues({ ...values, email: e.target.value })} />
-          <Field label="Senha" type="password" autoComplete="current-password" required value={values.password}
-            onChange={(e) => setValues({ ...values, password: e.target.value })} />
-          <Field label="Identificador do negócio (opcional)" placeholder="Ex.: studio-bela-vista"
-            value={values.slug} onChange={(e) => setValues({ ...values, slug: e.target.value })} />
+          {mode === "email" && <Field label="E-mail" type="email" autoComplete="username" required value={values.email}
+            onChange={(e) => setValues({ ...values, email: e.target.value })} />}
+          {mode === "staff" && <Field label="Código do profissional (ex.: 001)" inputMode="numeric" pattern="[0-9]{3}" maxLength={3} required value={values.staffCode} onChange={(e) => setValues({ ...values, staffCode: e.target.value.replace(/\D/g, "").slice(0, 3) })}/>}
+          <Field label={activation ? "Escolha sua senha (6 a 8 letras e números)" : "Senha"} type="password" autoComplete="current-password" required value={values.password}
+            onChange={(e) => setValues({ ...values, password: e.target.value })} minLength={mode === "staff" && activation ? 6 : undefined} maxLength={mode === "staff" && activation ? 8 : undefined} />
+          {mode === "staff" && activation && <>
+            <Field label="Repita a senha" type="password" required minLength={6} maxLength={8} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}/>
+            <Field label="Código de ativação fornecido pelo administrador" required value={activationToken} onChange={e => setActivationToken(e.target.value)}/>
+          </>}
+          <Field label={mode === "staff" ? "Identificador do comércio (obrigatório)" : "Identificador do negócio (opcional)"} placeholder="Ex.: studio-bela-vista"
+            required={mode === "staff"} value={values.slug} onChange={(e) => setValues({ ...values, slug: e.target.value })} />
           <ErrorMessage>{error}</ErrorMessage>
+          {success && <p className="success-message" role="status">{success}</p>}
           <Button className="w-full justify-center" type="submit" disabled={loading}>
-            {loading ? "Entrando..." : "Entrar na minha agenda"}
+            {loading ? "Processando..." : activation ? "Ativar minha senha" : "Entrar na minha agenda"}
           </Button>
         </form>
+        {mode === "staff" && <button className="staff-activate-switch" type="button" onClick={() => { setActivation(!activation); setError(""); setSuccess(""); }}>
+          {activation ? "Já tenho senha — entrar" : "Primeiro acesso? Definir minha senha"}
+        </button>}
         {demoEnabled && <>
           <div className="demo-hint">
             <Sparkles size={16} />
@@ -261,12 +291,12 @@ function AccountPage({ user, onUserUpdated }) {
       <form className="form-stack" onSubmit={submit} style={{ padding: 24 }}>
         <Field label="Nome" required maxLength={120} value={values.name}
           onChange={(e) => setValues({ ...values, name: e.target.value })}/>
-        <Field label="E-mail de acesso" type="email" disabled value={user.email}/>
+        {user.role === "profissional" ? <Field label="Código de acesso" disabled value={user.staffCode || ""}/> : <Field label="E-mail de acesso" type="email" disabled value={user.email}/>}
         <Field label="Telefone" type="tel" maxLength={40} value={values.phone}
           onChange={(e) => setValues({ ...values, phone: e.target.value })}/>
         <Field label="Senha atual (necessária para salvar)" type="password" required autoComplete="current-password"
           value={values.currentPassword} onChange={(e) => setValues({ ...values, currentPassword: e.target.value })}/>
-        <Field label="Nova senha (opcional, mínimo 12 caracteres)" type="password" minLength={12} autoComplete="new-password"
+        <Field label={user.role === "profissional" ? "Nova senha (6 a 8 letras e números)" : "Nova senha (opcional, mínimo 12 caracteres)"} type="password" minLength={user.role === "profissional" ? 6 : 12} maxLength={user.role === "profissional" ? 8 : undefined} autoComplete="new-password"
           value={values.newPassword} onChange={(e) => setValues({ ...values, newPassword: e.target.value })}/>
         <Field label="Confirmar nova senha" type="password" autoComplete="new-password"
           value={values.confirmPassword} onChange={(e) => setValues({ ...values, confirmPassword: e.target.value })}/>
@@ -737,19 +767,32 @@ function ServiceForm({ service, professionals, onClose, onSaved }) {
   </Modal>;
 }
 
-function TeamMemberForm({ services, onClose, onSaved }) {
+function TeamMemberForm({ services, businessSlug, onClose, onSaved }) {
   const [values, setValues] = useState({ name: "", email: "", password: "", phone: "", role: "profissional", commissionPercent: 40, serviceIds: [] });
   const [error, setError] = useState("");
+  const [issued, setIssued] = useState(null);
   const submit = async (event) => {
     event.preventDefault(); setError("");
-    try { await api("/team-members", { method: "POST", body: { ...values, commissionPercent: Number(values.commissionPercent) } }); onSaved(); }
+    try {
+      const result = await api("/team-members", { method: "POST", body: { ...values, commissionPercent: Number(values.commissionPercent) } });
+      if (result.staffCode && result.activationToken) setIssued(result);
+      else onSaved();
+    }
     catch (reason) { setError(reason.message); }
   };
   return <Modal title="Adicionar à equipe" onClose={onClose}>
-    <form className="form-stack" onSubmit={submit}>
+    {issued ? <div className="form-stack">
+      <p className="success-message">Profissional cadastrado. Copie os dados de ativação agora; o código temporário não poderá ser consultado depois.</p>
+      <Field label="Código profissional" readOnly value={issued.staffCode}/>
+      <Field label="Identificador do comércio" readOnly value={businessSlug}/><Field label="Código de ativação (válido por 24h)" readOnly value={issued.activationToken}/>
+      <Button type="button" onClick={() => navigator.clipboard.writeText(`Comércio: ${businessSlug} | Código: ${issued.staffCode} | Ativação: ${issued.activationToken}`)}>Copiar informações</Button>
+      <Button type="button" variant="secondary" onClick={onSaved}>Concluir</Button>
+    </div> : <form className="form-stack" onSubmit={submit}>
       <Field label="Nome" required value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
-      <Field label="E-mail de acesso" type="email" required value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} />
-      <Field label="Senha inicial" type="password" minLength="12" required value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} />
+      {values.role === "recepcao" ? <>
+        <Field label="E-mail de acesso" type="email" required value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} />
+        <Field label="Senha inicial" type="password" minLength="12" required value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} />
+      </> : <p className="booking-share-notice"><Info size={16}/> O sistema atribuirá o próximo código (001, 002...) e permitirá que o profissional escolha sua senha com um código de ativação de uso único.</p>}
       <SelectField label="Perfil de acesso" value={values.role} onChange={(e) => setValues({ ...values, role: e.target.value })}>
         <option value="profissional">Profissional</option><option value="recepcao">Recepção</option>
       </SelectField>
@@ -759,7 +802,7 @@ function TeamMemberForm({ services, onClose, onSaved }) {
         <label key={service.id} className="choice-option"><input type="checkbox" checked={values.serviceIds.includes(service.id)}
           onChange={(event) => setValues({ ...values, serviceIds: event.target.checked ? [...values.serviceIds, service.id] : values.serviceIds.filter((id) => id !== service.id) })} />{service.name}</label>)}</div></div>}
       <ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button>Cadastrar {values.role === "recepcao" ? "pessoa da recepção" : "profissional"}</Button></div>
-    </form>
+    </form>}
   </Modal>;
 }
 
@@ -853,6 +896,7 @@ function ServicesPage({ user, section = "services" }) {
   const [hoursFor, setHoursFor] = useState(null);
   const [passwordFor, setPasswordFor] = useState(null);
   const [resetPassword, setResetPassword] = useState("");
+  const [activationIssued, setActivationIssued] = useState(null);
   const [error, setError] = useState("");
   const refresh = useCallback(() => Promise.all([
     api("/services"),
@@ -879,19 +923,34 @@ function ServicesPage({ user, section = "services" }) {
       {section === "team" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe</h2></div><span className="count-chip">{team.filter((person) => person.active).length} ativos</span></div>
         {team.length ? <div className="management-list">{team.map((person) => <article className="professional-row" key={person.id}>
           <span className="table-avatar">{person.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
-          <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.email} · {person.role === "profissional" ? `Comissão ${person.commissionPercent}%` : "Recepção"}</small></div>
+          <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.role === "profissional" ? `Código ${person.staffCode || "—"} · Comissão ${person.commissionPercent}%` : `${person.email} · Recepção`}</small></div>
           {person.active ? <span className="status-badge bg-emerald-50 text-emerald-700">Ativa</span> : <span className="status-badge bg-slate-100 text-slate-500">Inativa</span>}
           {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && person.role === "profissional" && <button className="button button-quiet" onClick={() => setHoursFor(person)}>Horários</button>}
-          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="button button-quiet" onClick={() => { setPasswordFor(person); setResetPassword(""); }}>Redefinir senha</button>}
+          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && person.role === "profissional" && <button className="button button-quiet" onClick={async () => {
+            try {
+              const result = await api(`/team-members/${person.id}/activation`, { method: "POST" });
+              setActivationIssued({ ...result, name: person.name });
+            } catch (reason) { setError(reason.message); }
+          }}>Configurar acesso</button>}
+          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && person.role === "recepcao" && <button className="button button-quiet" onClick={() => { setPasswordFor(person); setResetPassword(""); }}>Redefinir senha</button>}
           {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="icon-button compact" onClick={async () => {
             try { await api(`/team-members/${person.id}`, { method: "PATCH", body: { name: person.name, phone: person.phone, commissionPercent: person.commissionPercent, active: !person.active } }); refresh(); }
             catch (reason) { setError(reason.message); }
           }} aria-label={person.active ? "Desativar pessoa da equipe" : "Ativar pessoa da equipe"}><ShieldCheck size={16} /></button>}
         </article>)}</div> : <EmptyState icon={UserRound} title="Só você por enquanto" description="Adicione profissionais para compartilhar a agenda." />}</section>}
     </div>
-    {modal === "team" && <TeamMemberForm services={services} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
+    {modal === "team" && <TeamMemberForm services={services} businessSlug={user.slug} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {(modal === "service" || modal?.id) && <ServiceForm service={modal?.id ? modal : null} professionals={professionals} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {hoursFor && <TeamHours professional={hoursFor} onClose={() => { setHoursFor(null); refresh(); }} />}
+    {activationIssued && <Modal title={`Ativação de ${activationIssued.name}`} onClose={() => setActivationIssued(null)}>
+      <div className="form-stack">
+        <p className="booking-share-notice"><Info size={16}/> Entregue o código de ativação diretamente ao profissional. Validade de 24 horas. A senha anterior deixa de funcionar após a nova ativação; as sessões já foram encerradas.</p>
+        <Field label="Código profissional" value={activationIssued.staffCode} readOnly/>
+        <Field label="Código temporário de ativação" value={activationIssued.activationToken} readOnly/>
+        <Button type="button" onClick={() => navigator.clipboard.writeText(`Comércio: ${user.slug} | Código: ${activationIssued.staffCode} | Ativação: ${activationIssued.activationToken}`)}>Copiar código de ativação</Button>
+        <Button type="button" variant="secondary" onClick={() => setActivationIssued(null)}>Fechar</Button>
+      </div>
+    </Modal>}
     {passwordFor && <Modal title={`Redefinir senha de ${passwordFor.name}`} onClose={() => setPasswordFor(null)}>
       <form className="form-stack" onSubmit={async (event) => {
         event.preventDefault();
