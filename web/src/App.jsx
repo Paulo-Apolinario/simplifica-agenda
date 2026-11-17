@@ -2009,7 +2009,7 @@ function SettlementsPage() {
           <div className="min-w-0 flex-1"><b>{pro.professionalName}</b>
             <small>{pro.completed} serviços · bruto {money(pro.grossCents)} · já registrado pago {money(pro.paidCents)}</small></div>
           <strong>{money(pro.dueCents)} pendente</strong>
-          {pro.dueCents>0&&<Button disabled={busy===pro.professionalId}
+          {pro.pendingServices>0&&<Button disabled={busy===pro.professionalId}
             onClick={()=>close(pro)}>Registrar fechamento</Button>}
         </article>)}</div>:<EmptyState icon={Wallet} title="Sem serviços concluídos" description="Os fechamentos do período aparecerão aqui."/>}
     </section>
