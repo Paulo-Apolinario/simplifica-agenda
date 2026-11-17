@@ -472,3 +472,18 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
   .public-form .form-grid { grid-template-columns: 1fr; }
   .hours-row { grid-template-columns: 75px 54px 1fr 8px 1fr; }
 }
+
+/* Página de divulgação do link público, sem duplicar a agenda interna */
+.booking-sharing-grid { align-items: start; }
+.booking-share-panel, .booking-qr-panel { min-width: 0; }
+.booking-url-box { display: flex; gap: 9px; margin-top: 12px; }
+.booking-url-box .input { min-width: 0; flex: 1; }
+.booking-share-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
+.booking-share-notice { display: flex; align-items: flex-start; gap: 9px; margin-top: 13px; border-radius: 9px; background: #eff6ff; padding: 12px; color: #1d4ed8; font-size: 11px; line-height: 1.55; }
+.booking-share-notice svg { flex: 0 0 auto; }
+.booking-qr-image { display: block; width: min(240px, 100%); height: auto; margin: 15px auto; border: 1px solid #e8edf4; border-radius: 12px; background: #fff; }
+.booking-qr-caption { max-width: 290px; margin: 0 auto; color: #64748b; font-size: 10px; line-height: 1.6; text-align: center; }
+@media (max-width: 760px) {
+  .booking-url-box { flex-direction: column; }
+  .booking-share-actions .button { flex: 1; }
+}
