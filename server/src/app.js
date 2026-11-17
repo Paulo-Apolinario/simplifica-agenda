@@ -151,6 +151,66 @@ function appointmentRows(tenantId, where = "", params = []) {
   `).all(tenantId, ...params);
 }
 
+// Installation is only possible while the database has no businesses.
+const demoEnabled = process.env.DEMO_MODE === "true"
+  || (process.env.NODE_ENV !== "production" && process.env.DEMO_MODE !== "false");
+app.get("/api/installation/status", (_req, res) => {
+  const configured = Boolean(db.prepare("SELECT 1 FROM tenants LIMIT 1").get());
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ needsSetup: !configured, demoEnabled });
+});
+
+app.post("/api/installation/setup", async (req, res) => {
+  if (db.prepare("SELECT 1 FROM tenants LIMIT 1").get()) {
+    return fail(res, 409, "A instalação já foi configurada.");
+  }
+  const expectedToken = process.env.INSTALL_TOKEN;
+  if (!expectedToken || expectedToken.length < 32) {
+    return fail(res, 503, "Configure INSTALL_TOKEN com pelo menos 32 caracteres no servidor.");
+  }
+  const token = String(req.body?.installToken ?? "");
+  const expected = Buffer.from(expectedToken);
+  const submitted = Buffer.from(token);
+  if (expected.length !== submitted.length || !crypto.timingSafeEqual(expected, submitted)) {
+    return fail(res, 403, "Código de instalação inválido.");
+  }
+  const businessName = requiredText(req.body?.businessName, "Nome do comércio", 120);
+  const ownerName = requiredText(req.body?.ownerName, "Nome do responsável", 120);
+  const ownerEmail = requiredText(req.body?.ownerEmail, "E-mail", 200).toLowerCase();
+  const password = String(req.body?.password ?? "");
+  const slug = String(req.body?.slug ?? "").trim().toLowerCase();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 80) {
+    return fail(res, 400, "Identificador inválido. Use letras minúsculas, números e hífens.");
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) return fail(res, 400, "E-mail inválido.");
+  if (password.length < 12 || password.length > 200) {
+    return fail(res, 400, "Use uma senha de 12 a 200 caracteres.");
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  const businessId = createId();
+  const ownerId = createId();
+  const days = [
+    [0, null, null], [1, "09:00", "18:00"], [2, "09:00", "18:00"],
+    [3, "09:00", "18:00"], [4, "09:00", "18:00"], [5, "09:00", "18:00"],
+    [6, "09:00", "13:00"],
+  ];
+  try {
+    db.transaction(() => {
+      if (db.prepare("SELECT 1 FROM tenants LIMIT 1").get()) throw new Error("already-configured");
+      db.prepare("INSERT INTO tenants (id, name, slug) VALUES (?, ?, ?)").run(businessId, businessName, slug);
+      db.prepare("INSERT INTO business_settings (tenant_id, business_name) VALUES (?, ?)").run(businessId, businessName);
+      db.prepare("INSERT INTO users (id, tenant_id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?, 'dono')")
+        .run(ownerId, businessId, ownerName, ownerEmail, passwordHash);
+      const insertHour = db.prepare("INSERT INTO business_hours (tenant_id, weekday, opens_at, closes_at) VALUES (?, ?, ?, ?)");
+      days.forEach(([day, opens, closes]) => insertHour.run(businessId, day, opens, closes));
+    })();
+  } catch (error) {
+    if (error.message === "already-configured") return fail(res, 409, "Instalação já configurada.");
+    throw error;
+  }
+  res.status(201).json({ ok: true, slug });
+});
+
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
 app.post("/api/auth/login", async (req, res) => {
