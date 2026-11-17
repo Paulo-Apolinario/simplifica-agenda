@@ -28,6 +28,70 @@ const dateLabel = (date, options = { day: "2-digit", month: "long", year: "numer
 const dateTimeLabel = (value) => new Intl.DateTimeFormat("pt-BR", {
   day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
 }).format(new Date(value));
+
+function confirmAction(message, title = "Confirmar ação") {
+  return new Promise(resolve => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const panel = document.createElement("section");
+    panel.className = "modal-panel max-w-lg";
+    panel.setAttribute("role", "alertdialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", title);
+    const header = document.createElement("header");
+    header.className = "modal-header";
+    const heading = document.createElement("h2");
+    heading.textContent = title;
+    header.appendChild(heading);
+    const description = document.createElement("p");
+    description.className = "panel-subtitle";
+    description.style.margin = "20px 0";
+    description.style.whiteSpace = "pre-wrap";
+    description.textContent = message;
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "button button-secondary";
+    cancel.textContent = "Cancelar";
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "button button-primary";
+    confirm.textContent = "Confirmar";
+    actions.append(cancel, confirm);
+    panel.append(header, description, actions);
+    backdrop.appendChild(panel);
+    document.body.appendChild(backdrop);
+    const previousFocus = document.activeElement;
+    const finish = accepted => {
+      document.removeEventListener("keydown", onKey);
+      backdrop.remove();
+      if (previousFocus instanceof HTMLElement) previousFocus.focus();
+      resolve(accepted);
+    };
+    const onKey = event => {
+      if (event.key === "Escape") finish(false);
+      if (event.key === "Tab") {
+        event.preventDefault();
+        (document.activeElement === cancel ? confirm : cancel).focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    cancel.addEventListener("click", () => finish(false));
+    confirm.addEventListener("click", () => finish(true));
+    backdrop.addEventListener("mousedown", event => { if (event.target === backdrop) finish(false); });
+    cancel.focus();
+  });
+}
+function showNotice(message, type = "warning") {
+  const notice = document.createElement("div");
+  notice.setAttribute("role", "alert");
+  notice.style.cssText = "position:fixed;top:24px;right:24px;z-index:10000;max-width:min(420px,calc(100vw - 32px));padding:16px 20px;border-radius:14px;box-shadow:0 16px 40px rgba(15,23,42,.20);font-weight:600;line-height:1.5;background:var(--surface,#fff);color:var(--text,#17253c);border:1px solid #d8e1ed;border-left:5px solid " + (type === "warning" ? "#d97706" : "#2563eb");
+  notice.textContent = message;
+  document.body.appendChild(notice);
+  window.setTimeout(() => notice.remove(), 6500);
+}
+
 const api = async (url, options = {}) => {
   const response = await fetch(`/api${url}`, {
     credentials: "same-origin",
@@ -41,7 +105,12 @@ const api = async (url, options = {}) => {
   if (response.status === 204) return null;
   const data = response.headers.get("content-type")?.includes("application/json")
     ? await response.json() : await response.blob();
-  if (!response.ok) throw new Error(data?.error ?? "Não foi possível concluir a solicitação.");
+  if (!response.ok) {
+    const message = data?.error ?? "Não foi possível concluir a solicitação.";
+    if (response.status === 409 && /caixa|abertura|abr[a-z]* o caixa/i.test(message))
+      showNotice(message, "warning");
+    throw new Error(message);
+  }
   return data;
 };
 const statusNames = {
@@ -730,7 +799,7 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
     const confirmation = earlyCompletion
       ? "Este horário ainda não começou. Confirma que o serviço foi realmente realizado antecipadamente? O pagamento ficará pendente."
       : "Confirmar que o serviço foi realizado? O pagamento ficará pendente para a administração.";
-    if (!window.confirm(confirmation)) return;
+    if (!await confirmAction(confirmation)) return;
     setSaving(true);
     setError("");
     try {
@@ -1177,7 +1246,7 @@ function ProfessionalWorkPage() {
       timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit",
       minute: "2-digit", hourCycle: "h23",
     }).format(new Date()).replace(" ", "T");
-    if (!window.confirm(aheadOfSchedule
+    if (!await confirmAction(aheadOfSchedule
       ? "O horário previsto ainda não começou. O serviço foi realmente realizado antecipadamente?"
       : "Confirmar que este serviço foi realizado?")) return;
     setSaving(id);
@@ -1394,7 +1463,7 @@ function UnreconciledCash({ user, onChange }) {
     .then(result => setReceipts(result.receipts)).catch(err => setError(err.message)), []);
   useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
   const reconcile = async receipt => {
-    if (!window.confirm(`Confirma que o pagamento de ${money(receipt.priceCents)} foi recebido em ${date}? A conciliação ficará registrada no histórico.`)) return;
+    if (!await confirmAction(`Confirma que o pagamento de ${money(receipt.priceCents)} foi recebido em ${date}? A conciliação ficará registrada no histórico.`)) return;
     setBusy(receipt.id); setError("");
     try {
       await api(`/cash/reconcile/${encodeURIComponent(receipt.id)}`, {method:"POST", body:{date}});
@@ -1464,7 +1533,7 @@ function DailyCashClosing({ revision, user }) {
     if (openingCashCents === null) {
       setError("Informe um valor inicial válido em espécie."); return;
     }
-    if (!window.confirm(`Registrar abertura de caixa em ${date} com ${money(openingCashCents)} em espécie?`)) return;
+    if (!await confirmAction(`Registrar abertura de caixa em ${date} com ${money(openingCashCents)} em espécie?`)) return;
     setBusy(true); setError("");
     try {
       await api("/cash/openings", {method:"POST",body:{date,openingCashCents,notes:openingNotes}});
@@ -1495,7 +1564,7 @@ function DailyCashClosing({ revision, user }) {
     const cents = parseCash(movementAmount);
     if (cents === null || cents <= 0) return setError("Informe um valor positivo.");
     if (movementReason.trim().length < 5) return setError("Informe o motivo (mínimo de 5 caracteres).");
-    if (!window.confirm(`Registrar ${movementType} de ${money(cents)}?`)) return;
+    if (!await confirmAction(`Registrar ${movementType} de ${money(cents)}?`)) return;
     setBusy(true);setError("");
     try {
       await api("/cash/movements", {method:"POST",body:{
@@ -1509,7 +1578,7 @@ function DailyCashClosing({ revision, user }) {
     if (countedCashCents === null) {
       setError("Informe o valor em dinheiro contado, com até duas casas decimais."); return;
     }
-    if (!window.confirm(`Confirmar fechamento de ${date}? O registro ficará bloqueado para edição.`)) return;
+    if (!await confirmAction(`Confirmar fechamento de ${date}? O registro ficará bloqueado para edição.`)) return;
     setBusy(true); setError("");
     try {
       await api("/cash/closings", {method:"POST", body:{date, countedCashCents, notes}});
@@ -1872,7 +1941,7 @@ function SettingsPage({ user, onUserUpdated }) {
     finally { setLogoBusy(false); }
   };
   const removeLogo = async () => {
-    if (!window.confirm("Remover a logo personalizada e voltar à imagem padrão?")) return;
+    if (!await confirmAction("Remover a logo personalizada e voltar à imagem padrão?")) return;
     setLogoError(""); setLogoBusy(true);
     try {
       await api("/settings/logo", { method: "DELETE" });
@@ -2107,7 +2176,7 @@ function OnlineRequestsPage() {
   useEffect(()=>{refresh();},[refresh]);
   const act=async(item,action)=>{
     const description=action==="confirm"?"confirmar":"recusar";
-    if(!window.confirm(`Deseja ${description} a solicitação de ${item.clientName}?`))return;
+    if(!await confirmAction(`Deseja ${description} a solicitação de ${item.clientName}?`))return;
     setBusy(item.id);setError("");
     try{
       const result=await api(`/requests/${item.id}`,{method:"PATCH",body:{action}});
@@ -2200,7 +2269,7 @@ function PublicRequestPage({ token }) {
     return()=>{active=false;};
   },[info?.slug,info?.serviceId,info?.professionalId,info?.canManage,date]);
   const perform=async(action)=>{
-    if(action==="cancel"&&!window.confirm("Confirma que deseja cancelar este horário?"))return;
+    if(action==="cancel"&&!await confirmAction("Confirma que deseja cancelar este horário?"))return;
     if(action==="reschedule"&&!slot)return;
     setBusy(true);setError("");
     try {
@@ -2267,7 +2336,7 @@ function CommissionPoliciesPage() {
     catch(e){setError(e.message);}
   };
   const remove=async rule=>{
-    if(!window.confirm("Remover esta regra? Novos agendamentos usarão a comissão padrão do serviço ou profissional."))return;
+    if(!await confirmAction("Remover esta regra? Novos agendamentos usarão a comissão padrão do serviço ou profissional."))return;
     try{await api("/commission-rules",{method:"DELETE",body:{professionalId:rule.professionalId,serviceId:rule.serviceId}});await refresh();}
     catch(e){setError(e.message);}
   };
@@ -2323,7 +2392,7 @@ function SettlementsPage() {
     .then(result => { setData(result); setError(""); }).catch(err => setError(err.message)), [period]);
   useEffect(() => { refresh(); }, [refresh]);
   const close = async professional => {
-    if (!window.confirm(`Confirma que o valor de ${money(professional.dueCents)} JÁ FOI REALMENTE TRANSFERIDO para ${professional.professionalName}? Esta ação registra pagamento efetivo e não realiza PIX.`)) return;
+    if (!await confirmAction(`Confirma que o valor de ${money(professional.dueCents)} JÁ FOI REALMENTE TRANSFERIDO para ${professional.professionalName}? Esta ação registra pagamento efetivo e não realiza PIX.`)) return;
     setBusy(professional.professionalId); setError(""); setMessage("");
     try {
       const result = await api("/settlements", {method:"POST", body:{period,professionalId:professional.professionalId}});
@@ -2414,7 +2483,7 @@ function SaasAdminPage() {
     }catch(e){setError(e.message);}finally{setBusy(false);}
   };
   const change=async(item,status)=>{
-    if(!window.confirm(`Deseja ${status==="suspended"?"suspender":"reativar"} ${item.name}?`))return;
+    if(!await confirmAction(`Deseja ${status==="suspended"?"suspender":"reativar"} ${item.name}?`))return;
     setBusy(true);setError("");
     try{await call(`/businesses/${item.id}`,"PATCH",{
       plan:item.plan,status,notes:item.notes||"",dueDate:item.dueDate||null,
