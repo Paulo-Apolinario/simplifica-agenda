@@ -10,6 +10,7 @@ import { db, createId, allocateStaffCode, allocateLoginCode } from "./database.j
 import { allowRoles, publicUser, requireAuth } from "./auth.js";
 import { SQLiteSessionStore } from "./session-store.js";
 import { findScheduleConflict } from "./schedule.js";
+import { cashClosingPdf } from "./cash-closing-pdf.js";
 
 const app = express();
 const sessionSecret = process.env.SESSION_SECRET ?? "desenvolvimento-local-chave-segura-32";
@@ -1506,6 +1507,12 @@ function validCashDate(value) {
   const date = new Date(value + "T12:00:00Z");
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
+
+function cashOpening(tenantId, date) {
+  return db.prepare(`SELECT id, cash_date AS cashDate, opening_cash_cents AS openingCashCents,
+    opened_by_name AS openedByName, opened_at AS openedAt, notes
+    FROM daily_cash_openings WHERE tenant_id = ? AND cash_date = ?`).get(tenantId, date) ?? null;
+}
 function cashClosing(tenantId, date) {
   return db.prepare("SELECT id FROM daily_cash_closings WHERE tenant_id = ? AND cash_date = ?").get(tenantId, date);
 }
@@ -1583,6 +1590,52 @@ app.post("/api/cash/reconcile/:id", requireAuth, allowRoles("dono"), (req, res) 
   res.json({ ok: true, paidOn: date });
 });
 
+
+app.post("/api/cash/openings", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const date = String(req.body?.date ?? "");
+  const cash = req.body?.openingCashCents;
+  const notes = String(req.body?.notes ?? "").trim();
+  if (!validCashDate(date) || date !== cashDay(tenant(req)))
+    return fail(res, 400, "A abertura deve ser registrada na data atual do estabelecimento.");
+  if (!Number.isSafeInteger(cash) || cash < 0 || cash > 100000000000)
+    return fail(res, 400, "Informe um valor inicial em centavos válido.");
+  if (notes.length > 500) return fail(res, 400, "Observação deve ter até 500 caracteres.");
+  const outcome = db.transaction(() => {
+    if (cashClosing(tenant(req), date) || cashOpening(tenant(req), date)) return null;
+    const id = createId();
+    db.prepare(`INSERT INTO daily_cash_openings
+      (id, tenant_id, cash_date, opening_cash_cents, opened_by, opened_by_name, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      id, tenant(req), date, cash, req.user.id, req.user.name || "Usuário", notes);
+    return cashOpening(tenant(req), date);
+  })();
+  if (!outcome) return fail(res, 409, "O caixa desta data já foi aberto ou fechado.");
+  res.status(201).json({ opening: outcome });
+});
+
+app.get("/api/cash/closings/:id/pdf", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const closing = db.prepare(`SELECT id, cash_date AS cashDate, closed_by_name AS closedByName,
+    closed_at AS closedAt, opening_cash_cents AS openingCashCents,
+    expected_total_cents AS expectedTotalCents, expected_cash_cents AS expectedCashCents,
+    counted_cash_cents AS countedCashCents, difference_cents AS differenceCents,
+    receipt_count AS receiptCount, notes, method_totals_json AS methodsJson,
+    receipts_snapshot_json AS receiptsSnapshotJson
+    FROM daily_cash_closings WHERE tenant_id = ? AND id = ?`).get(tenant(req), req.params.id);
+  if (!closing) return fail(res, 404, "Fechamento não encontrado.");
+  const opening = cashOpening(tenant(req), closing.cashDate);
+  const receipts = closing.receiptsSnapshotJson
+    ? JSON.parse(closing.receiptsSnapshotJson)
+    : cashDaySummary(tenant(req), closing.cashDate).receipts;
+  closing.methods = JSON.parse(closing.methodsJson);
+  const business = db.prepare("SELECT business_name AS name FROM business_settings WHERE tenant_id = ?").get(tenant(req));
+  const pdf = cashClosingPdf({ businessName: business?.name || "Estabelecimento",
+    closing, opening, receipts });
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="fechamento-caixa-${closing.cashDate}.pdf"`);
+  res.send(pdf);
+});
+
 app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const date = String(req.query.date ?? cashDay(tenant(req)));
   if (!validCashDate(date)) return fail(res, 400, "Data inválida.");
@@ -1591,10 +1644,13 @@ app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, re
     closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
     expected_cash_cents AS expectedCashCents, counted_cash_cents AS countedCashCents,
     difference_cents AS differenceCents, receipt_count AS receiptCount, notes,
-    method_totals_json AS methodsJson
+    method_totals_json AS methodsJson, opening_cash_cents AS openingCashCents
     FROM daily_cash_closings WHERE tenant_id = ? AND cash_date = ?`).get(tenant(req), date);
   res.setHeader("Cache-Control", "no-store");
-  res.json({ ...summary, today: cashDay(tenant(req)), closing: closing ?
+  const opening = cashOpening(tenant(req), date);
+  res.json({ ...summary, opening, openingCashCents: opening?.openingCashCents ?? 0,
+    expectedDrawerCashCents: (opening?.openingCashCents ?? 0) + summary.expectedCashCents,
+    today: cashDay(tenant(req)), closing: closing ?
     { ...closing, methods: JSON.parse(closing.methodsJson), methodsJson: undefined } : null });
 });
 
@@ -1602,7 +1658,8 @@ app.get("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req,
   const rows = db.prepare(`SELECT id, cash_date AS cashDate, closed_by_name AS closedByName,
     closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
     expected_cash_cents AS expectedCashCents, counted_cash_cents AS countedCashCents,
-    difference_cents AS differenceCents, receipt_count AS receiptCount, notes
+    difference_cents AS differenceCents, receipt_count AS receiptCount, notes,
+    opening_cash_cents AS openingCashCents
     FROM daily_cash_closings WHERE tenant_id = ? ORDER BY cash_date DESC LIMIT 60`).all(tenant(req));
   res.setHeader("Cache-Control", "no-store");
   res.json({ closings: rows });
@@ -1620,15 +1677,24 @@ app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req
   const result = db.transaction(() => {
     if (cashClosing(tenant(req), date)) return null;
     const summary = cashDaySummary(tenant(req), date);
-    const difference = counted - summary.expectedCashCents;
+    const openingCashCents = cashOpening(tenant(req), date)?.openingCashCents ?? 0;
+    const difference = counted - openingCashCents - summary.expectedCashCents;
     const id = createId();
     db.prepare(`INSERT INTO daily_cash_closings
       (id, tenant_id, cash_date, closed_by, closed_by_name, expected_total_cents, expected_cash_cents,
-       counted_cash_cents, difference_cents, method_totals_json, receipt_count, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+       counted_cash_cents, difference_cents, method_totals_json, receipt_count, notes,
+       opening_cash_cents, receipts_snapshot_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, tenant(req), date, req.user.id, req.user.name || "Usuário",
       summary.expectedTotalCents, summary.expectedCashCents, counted, difference,
-      JSON.stringify(summary.methods), summary.receiptCount, notes);
+      JSON.stringify(summary.methods), summary.receiptCount, notes, openingCashCents,
+      JSON.stringify(db.prepare(`SELECT a.id, a.paid_at AS paidAt, a.starts_at AS startsAt,
+        a.price_cents AS priceCents, a.payment_method AS paymentMethod,
+        c.name AS clientName, s.name AS serviceName
+        FROM appointments a JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
+        JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
+        WHERE a.tenant_id = ? AND a.paid_on = ? AND a.status = 'concluido' AND a.payment_method != ''
+        ORDER BY a.paid_at, a.id`).all(tenant(req), date)));
     return { id, date, differenceCents: difference };
   })();
   if (!result) return fail(res, 409, "Esse dia já possui um fechamento de caixa.");
