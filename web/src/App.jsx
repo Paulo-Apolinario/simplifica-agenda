@@ -1440,6 +1440,8 @@ function DailyCashClosing({ revision }) {
   const [summary, setSummary] = useState(null);
   const [closings, setClosings] = useState([]);
   const [counted, setCounted] = useState("");
+  const [openingAmount, setOpeningAmount] = useState("0.00");
+  const [openingNotes, setOpeningNotes] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1453,19 +1455,35 @@ function DailyCashClosing({ revision }) {
       if (!active) return;
       setSummary(day);
       setClosings(history.closings);
-      setCounted((day.expectedCashCents / 100).toFixed(2));
+      setCounted(((day.closing?.countedCashCents ?? day.expectedDrawerCashCents) / 100).toFixed(2));
       setError("");
     }).catch(reason => { if (active) setError(reason.message); });
     return () => { active = false; };
   }, [date, updated, revision]);
-  const closeDay = async () => {
-    const input = String(counted).trim().replace(",", ".");
-    if (!/^\d+(?:\.\d{1,2})?$/.test(input)) {
-      setError("Informe o valor em dinheiro contado, com até duas casas decimais."); return;
+  const parseCash = (value) => {
+    const text = String(value).trim().replace(",", ".");
+    if (!/^\\d+(?:\\.\\d{1,2})?$/.test(text)) return null;
+    const cents = Math.round(Number(text) * 100);
+    return Number.isSafeInteger(cents) ? cents : null;
+  };
+  const openDay = async () => {
+    const openingCashCents = parseCash(openingAmount);
+    if (openingCashCents === null) {
+      setError("Informe um valor inicial válido em espécie."); return;
     }
-    const countedCashCents = Math.round(Number(input) * 100);
-    if (!Number.isSafeInteger(countedCashCents)) {
-      setError("Valor informado inválido."); return;
+    if (!window.confirm(`Registrar abertura de caixa em ${date} com ${money(openingCashCents)} em espécie?`)) return;
+    setBusy(true); setError("");
+    try {
+      await api("/cash/openings", {method:"POST",body:{date,openingCashCents,notes:openingNotes}});
+      setUpdated(n => n + 1);
+      setOpeningNotes("");
+    } catch (reason) { setError(reason.message); }
+    finally { setBusy(false); }
+  };
+  const closeDay = async () => {
+    const countedCashCents = parseCash(counted);
+    if (countedCashCents === null) {
+      setError("Informe o valor em dinheiro contado, com até duas casas decimais."); return;
     }
     if (!window.confirm(`Confirmar fechamento de ${date}? O registro ficará bloqueado para edição.`)) return;
     setBusy(true); setError("");
@@ -1480,7 +1498,7 @@ function DailyCashClosing({ revision }) {
   return <section className="panel management-panel">
     <div className="panel-heading">
       <div><p className="eyebrow">CONFERÊNCIA DIÁRIA</p><h2>Fechamento diário de caixa</h2>
-        <p className="panel-subtitle">Confira os pagamentos recebidos na data. O valor contado refere-se apenas ao dinheiro físico.</p></div>
+        <p className="panel-subtitle">Registre a abertura em espécie, confira os recebimentos e encerre o dia. O saldo inicial não é faturamento.</p></div>
       <input className="input" type="date" aria-label="Data do caixa" value={date}
         max={summary?.today || localDate().slice(0,10)} onChange={e => setDate(e.target.value)}/>
     </div>
@@ -1488,9 +1506,24 @@ function DailyCashClosing({ revision }) {
     {!summary ? <p className="report-empty">Carregando o caixa...</p> : <>
       <div className="stats-grid finance-stats">
         <StatCard title="Total recebido" value={money(summary.closing?.expectedTotalCents ?? summary.expectedTotalCents)} note={`${summary.closing?.receiptCount ?? summary.receiptCount} recebimento(s)`} icon={Wallet} tone="green"/>
-        <StatCard title="Dinheiro esperado" value={money(summary.closing?.expectedCashCents ?? summary.expectedCashCents)} note="Somente pagamentos em espécie" icon={CircleDollarSign} tone="blue"/>
-        <StatCard title="Situação" value={summary.closing ? "Fechado" : "Aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : "Aguardando conferência"} icon={CheckCheck} tone={summary.closing ? "green" : "orange"}/>
+        <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents : summary.expectedDrawerCashCents)} note="Saldo inicial + recebimentos em espécie" icon={CircleDollarSign} tone="blue"/>
+        <StatCard title="Situação" value={summary.closing ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.closing ? "green" : "orange"}/>
       </div>
+      {summary.opening ? <div className="panel" style={{marginTop:16}}>
+        <b>Abertura registrada por {summary.opening.openedByName}</b>
+        <p className="panel-subtitle">Saldo inicial em espécie: {money(summary.opening.openingCashCents)} · {summary.opening.openedAt}</p>
+        {summary.opening.notes && <p className="panel-subtitle">{summary.opening.notes}</p>}
+      </div> : !summary.closing && date === summary.today ? <div className="panel" style={{marginTop:16}}>
+        <h3>Abertura do caixa</h3>
+        <p className="panel-subtitle">Registre o dinheiro disponível na gaveta no início do expediente. Informe 0,00 se não houver troco.</p>
+        <div className="month-filter"><label htmlFor="opening-amount">Dinheiro inicial (R$)</label>
+          <input className="input month-input" id="opening-amount" inputMode="decimal" value={openingAmount}
+            onChange={event=>setOpeningAmount(event.target.value)}/></div>
+        <div className="month-filter"><label htmlFor="opening-notes">Observação de abertura</label>
+          <textarea className="input" id="opening-notes" maxLength={500} value={openingNotes}
+            onChange={event=>setOpeningNotes(event.target.value)} placeholder="Ex.: troco deixado pelo caixa anterior"/></div>
+        <Button disabled={busy} onClick={openDay}>{busy ? "Registrando..." : "Abrir caixa do dia"}</Button>
+      </div> : null}
       <div className="management-list">
         {Object.entries(paymentNames).map(([key,label]) => <div className="service-row" key={key}>
           <span className="service-row-icon"><Wallet size={18}/></span>
@@ -1500,9 +1533,11 @@ function DailyCashClosing({ revision }) {
       </div>
       {summary.closing ? <div className="panel" style={{marginTop:16}}>
         <b>Fechado por {summary.closing.closedByName}</b>
+        <p className="panel-subtitle">Saldo inicial: {money(summary.closing.openingCashCents)} · Dinheiro recebido: {money(summary.closing.expectedCashCents)}</p>
+        <a className="button button-secondary" href={`/api/cash/closings/${encodeURIComponent(summary.closing.id)}/pdf`}><Download size={16}/> Baixar PDF deste fechamento</a>
         <p className="panel-subtitle">Dinheiro contado: {money(summary.closing.countedCashCents)} · Diferença: {money(summary.closing.differenceCents)}</p>
         {summary.closing.notes && <p className="panel-subtitle">Observação: {summary.closing.notes}</p>}
-      </div> : <>
+      </div> : summary.opening ? <>
         <div className="month-filter" style={{marginTop:16}}>
           <label htmlFor="counted-cash">Dinheiro contado (R$)</label>
           <input id="counted-cash" className="input month-input" inputMode="decimal"
@@ -1516,7 +1551,7 @@ function DailyCashClosing({ revision }) {
         <Button disabled={busy || date > (summary.today || date)} onClick={closeDay}>
           {busy ? "Fechando..." : "Confirmar fechamento do dia"}
         </Button>
-      </>}
+      </> : <p className="panel-subtitle">Abra o caixa do dia para habilitar o fechamento.</p>}
     </>}
     <div className="panel-heading" style={{marginTop:24}}><div><p className="eyebrow">REGISTROS</p><h3>Últimos fechamentos</h3></div></div>
     {closings.length ? <div className="management-list">{closings.map(item =>
@@ -1525,6 +1560,7 @@ function DailyCashClosing({ revision }) {
         <div className="min-w-0 flex-1"><b>{item.cashDate} · {item.closedByName}</b>
           <small>{item.receiptCount} recebimento(s) · Diferença: {money(item.differenceCents)}</small></div>
         <strong>{money(item.expectedTotalCents)}</strong>
+        <a className="button button-secondary" href={`/api/cash/closings/${encodeURIComponent(item.id)}/pdf`}><Download size={15}/> PDF</a>
       </article>)}</div> : <p className="report-empty">Ainda não existem fechamentos registrados.</p>}
     <p className="panel-subtitle">Recebimentos antigos sem data registrada não entram automaticamente na conferência diária.</p>
   </section>;
