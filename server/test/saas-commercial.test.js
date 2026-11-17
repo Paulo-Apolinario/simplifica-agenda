@@ -34,7 +34,7 @@ test("SaaS operator, individual commissions, settlement and WhatsApp notice stat
     return {status:response.status,body:await response.json()};
   }
   try {
-    assert.equal((await request("/saas/businesses")).status,503 === 1 ? 503 : 403);
+    assert.equal((await request("/saas/businesses")).status,403);
     const created=await request("/saas/businesses","POST",{
       businessName:"Estúdio Real",slug:"estudio-real",ownerName:"Maria",
       ownerEmail:"maria@exemplo.com",plan:"comercial",
