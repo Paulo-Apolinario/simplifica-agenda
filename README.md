@@ -290,3 +290,36 @@ Em **Serviços → Editar**, o proprietário pode escolher entre **usar a comiss
 
 ### Segurança e homologação
 As migrações do SQLite são **aditivas** e preservam o ambiente de demonstração somente leitura. Antes de atualizar, desligue o servidor e faça backup da base. Os endpoints administrativos exigem autenticação e perfil dono/recepção; os links de clientes são tokens longos, aleatórios e guardados apenas como hash no banco. Os limites por IP existentes também se aplicam às ações públicas. Consulte o fluxo primeiro em `localhost`; antes de expor pela internet (etapa 5), providencie domínio HTTPS, sessões/cookies seguros, proteção persistente contra abuso, política de privacidade/LGPD e testes reais em iOS e Android. O sistema ainda não envia mensagens de WhatsApp automaticamente nem realiza pagamentos/estornos online.
+
+## Central SaaS, WhatsApp e repasses (novembro de 2026)
+
+### Central SaaS — cadastrar compradores
+A central de cadastro está em `/central-saas`, separada do painel dos estabelecimentos. O operador define, **no servidor**, a variável `SAAS_ADMIN_KEY` com pelo menos 32 caracteres aleatórios. Gere uma chave com `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"` e configure-a apenas no arquivo `.env` local/privado. **Não coloque a chave no GitHub, frontend ou URL**, nem compartilhe com funcionários. Reinicie o servidor após alterar o `.env`.
+
+Na Central SaaS, informe nome do estabelecimento, identificador exclusivo (slug), nome e e-mail do proprietário e plano. O sistema cria o tenant, configuração e expediente iniciais, usuário proprietário e senha aleatória temporária exibida **uma só vez**. O operador precisa entregar a senha ao cliente por canal seguro e pedir alteração na aba **Minha conta** após o primeiro acesso; **não existe envio automático de e-mail**. Se já houver cliente com aquele e-mail, o cadastro é recusado para evitar exigir identificador extra na entrada.
+
+O operador pode suspender e reativar um estabelecimento. A suspensão encerra as sessões do cliente, impede login e novos agendamentos públicos. A demonstração `studio-bela-vista` permanece separada e não pode ser suspensa pela central. Para entrar com um comércio, use o e-mail e a senha do proprietário no login normal (não use a chave SaaS nesse login).
+
+**Atenção:** nesta fase a Central SaaS é uma interface de administração privada para uso local ou infraestrutura protegida. Antes de expô-la à internet, faltam controle de acesso com autenticação multifator, auditoria mais ampla, revisão de isolamento entre tenants, backup, política de privacidade e HTTPS (etapa 5). Não substitua acesso empresarial por um link de cadastro público.
+
+### Comissões individuais e fechamento mensal
+Em **Regras de comissão** o proprietário define, por profissional + serviço, percentual de repasse e retenção adicional de materiais. Uma regra específica prevalece sobre o percentual personalizado do catálogo, que prevalece sobre o padrão do profissional. Os valores são copiados para cada **novo** agendamento; históricos concluídos/pagos não são recalculados. A regra pode ser removida sem alterar registros passados.
+
+Em **Fechamentos**, o proprietário seleciona o mês, revisa serviços concluídos, bruto, comissões, pago e pendente por profissional. O botão **Registrar fechamento** insere um lote e marca todos os itens ainda pendentes daquele profissional e mês como pagos de forma transacional, impedindo duplicidade. O recurso **não movimenta dinheiro** nem emite nota fiscal. Para fechar, faça a transferência por fora e só então confirme no sistema. Comissões já marcadas pagas individualmente não são pagas novamente.
+
+### Avisos exclusivamente por WhatsApp
+O atalho antigo enviava para a conversa um texto genérico, não a confirmação do agendamento. A nova Central de Solicitações Online monta **mensagens diferentes** para confirmado, cancelado e aguardando confirmação, incluindo nome do comércio, serviço, profissional e horário. O funcionário precisa pressionar **Abrir WhatsApp** e tocar em **Enviar** no aplicativo. Apenas abrir a conversa não é prova de envio; o sistema registra esse fato com a situação *envio manual não verificado*.
+
+Para envio automático oficial, a integração Meta WhatsApp Cloud API está pronta para ser ativada, mas **não envia nada sem configuração e consentimento expresso**. Cada cliente pode marcar na página pública se aceita receber avisos por WhatsApp (desmarcado por padrão). No servidor, opcionalmente configure `WHATSAPP_CLOUD_CONFIG_JSON`, um JSON de mapa por slug. Exemplo **sem credenciais reais**:
+```json
+{"estudio-real":{"phoneNumberId":"ID_DO_NUMERO","accessToken":"TOKEN_GERENCIADO_FORA_DO_GIT","confirmedTemplate":"confirmacao_agendamento","language":"pt_BR","graphVersion":"v23.0"}}
+```
+O template de **utilidade**, aprovado na Meta, precisa ter **quatro variáveis de texto no corpo** exatamente na ordem: nome do cliente, nome do serviço, data/hora e nome do comércio. O backend usa a API oficial quando o cliente consentiu e as credenciais existem. Registra *submitted* quando a Meta aceitou a solicitação de envio; isso **não comprova entrega ou leitura**. Falhas e ausência de configuração permanecem visíveis na Central de Solicitações, permitindo envio manual. Esta versão **ainda não implementa webhook de entrega/leitura**, modelos de cancelamento automático nem lembretes periódicos; essas operações requerem implantação adicional. Tokens e IDs são dados sensíveis — mantenha-os apenas no ambiente do servidor. Use HTTPS na etapa 5.
+
+### Homologação antes de instalar em comércios
+1. Faça backup do SQLite com o servidor parado, atualize `main`, execute `npm run build` e inicie o sistema.
+2. Acesse `/central-saas` com chave forte, crie um comércio comercial, entre com credenciais temporárias e altere a senha.
+3. Cadastre serviços e profissionais; atribua uma taxa específica de comissão em **Regras de comissão**, faça um agendamento novo e confira o repasse.
+4. Conclua serviços e confira o fechamento; teste o bloqueio de pagamentos duplicados.
+5. Faça uma solicitação pública pelo link do comércio. Confirme na recepção, abra o WhatsApp e **envie** a mensagem; teste também a recusa e a exibição de estado no comprovante.
+6. Suspenda e reative o comércio na Central SaaS; confirme que a demonstração segue disponível. Não publique em HTTPS até finalizar a etapa 5.
