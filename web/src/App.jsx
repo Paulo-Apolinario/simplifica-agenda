@@ -1529,10 +1529,14 @@ function CashOpeningPanel({ revision, onOpened }) {
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
-    api("/cash/daily")
+    const refresh = () => api("/cash/daily")
       .then(day => { if (active) { setState(day); setError(""); } })
       .catch(reason => { if (active) setError(reason.message); });
-    return () => { active = false; };
+    refresh();
+    const interval = window.setInterval(refresh, 60000);
+    const onFocus = () => refresh();
+    window.addEventListener("focus", onFocus);
+    return () => { active = false; window.clearInterval(interval); window.removeEventListener("focus", onFocus); };
   }, [revision]);
   const openDay = async () => {
     const input = openingAmount.trim().replace(",", ".");
@@ -1552,24 +1556,36 @@ function CashOpeningPanel({ revision, onOpened }) {
     } catch (reason) {setError(reason.message);}
     finally {setBusy(false);}
   };
-  if (!state || state.cashState !== "unopened") return error ? <ErrorMessage>{error}</ErrorMessage> : null;
+  const status = state?.cashState;
+  const isUnopened = status === "unopened";
+  const isOpen = status === "open";
+  const isClosed = status === "closed";
   return <section className="panel management-panel" style={{marginBottom:20}}>
     <div className="panel-heading"><div>
       <p className="eyebrow">INÍCIO DO EXPEDIENTE</p>
       <h2>Abertura do caixa</h2>
-      <p className="panel-subtitle">Abra o caixa antes de registrar os serviços e recebimentos do dia. Informe R$ 0,00 se não houver troco.</p>
-    </div><span className="count-chip">Caixa não aberto</span></div>
-    <div className="form-grid">
+      <p className="panel-subtitle">Acompanhe a situação do caixa e registre o dinheiro inicial antes de iniciar as operações financeiras.</p>
+    </div><span className="count-chip">{isOpen ? "Caixa aberto" : isClosed ? "Caixa encerrado" : isUnopened ? "Aguardando abertura" : "Consultando..."}</span></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    {isOpen && <div className="panel-subtitle" role="status">
+      Caixa do dia aberto por {state.opening?.openedByName || "usuário autorizado"}, com saldo inicial de {money(state.opening?.openingCashCents || 0)}. As movimentações do dia estão liberadas.
+    </div>}
+    {isClosed && <div className="panel-subtitle" role="status">
+      O caixa de {state.today?.split("-").reverse().join("/")} já foi encerrado. Não é possível reabri-lo neste dia. No próximo dia, a abertura será liberada automaticamente.
+    </div>}
+    {isUnopened && <>
+      <p className="panel-subtitle">Informe R$ 0,00 caso não haja troco em espécie.</p>
+      <div className="form-grid">
       <Field label="Dinheiro inicial (R$)" value={openingAmount}
         onChange={event=>setOpeningAmount(event.target.value)} inputMode="decimal"/>
       <Field label="Observação (opcional)" value={openingNotes} maxLength={500}
         placeholder="Ex.: troco deixado pelo caixa anterior"
         onChange={event=>setOpeningNotes(event.target.value)}/>
     </div>
-    <ErrorMessage>{error}</ErrorMessage>
-    <div style={{marginTop:16}}>
-      <Button disabled={busy} onClick={openDay}><Wallet size={16}/>{busy ? "Abrindo caixa..." : "Abrir caixa do dia"}</Button>
-    </div>
+      <div style={{marginTop:16}}>
+        <Button disabled={busy} onClick={openDay}><Wallet size={16}/>{busy ? "Abrindo caixa..." : "Abrir caixa do dia"}</Button>
+      </div>
+    </>}
   </section>;
 }
 
