@@ -487,6 +487,39 @@ app.get("/api/clients", requireAuth, (req, res) => {
   res.json({ clients });
 });
 
+// Shared booking directory: minimal data available to the staff of this business.
+// Full notes, e-mail and unrelated appointment history remain protected.
+app.get("/api/booking/clients", requireAuth, (req, res) => {
+  const search = String(req.query.search ?? "").trim().slice(0, 100);
+  const pattern = `%${search}%`;
+  const clients = db.prepare(`
+    SELECT id, name, phone FROM clients
+    WHERE tenant_id = ? AND notes != '__internal_anonymous__'
+      AND (name LIKE ? OR phone LIKE ?)
+    ORDER BY name COLLATE NOCASE LIMIT 200
+  `).all(tenant(req), pattern, pattern);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ clients });
+});
+
+// A professional may register a client contacted directly, but cannot edit
+// existing client records or see private notes and unrelated appointment history.
+app.post("/api/booking/clients", requireAuth, allowRoles("profissional"), (req, res) => {
+  const name = String(req.body?.name ?? "").trim();
+  const phone = String(req.body?.phone ?? "").trim();
+  if (!name || name.length > 120) return fail(res, 400, "Informe o nome do cliente (até 120 caracteres).");
+  if (phone.length > 40) return fail(res, 400, "Telefone inválido.");
+  const id = createId();
+  try {
+    db.prepare("INSERT INTO clients (id, tenant_id, name, phone) VALUES (?, ?, ?, ?)")
+      .run(id, tenant(req), name, phone);
+    res.status(201).json({ client: { id, name, phone } });
+  } catch (error) {
+    if (error.code?.startsWith("SQLITE_CONSTRAINT")) return fail(res, 409, "Telefone já cadastrado. Selecione o cliente existente.");
+    throw error;
+  }
+});
+
 app.post("/api/clients", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const name = requiredText(req.body?.name, "Nome");
   const phone = String(req.body?.phone ?? "").trim();
