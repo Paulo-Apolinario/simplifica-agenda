@@ -4,6 +4,7 @@ import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import bcrypt from "bcryptjs";
 
 test("commercial setup, authenticated account and staff password rotation", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "simplifica-security-"));
@@ -70,6 +71,55 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     });
     assert.equal(changed.status, 200);
     assert.equal((await request("/account")).body.account.name, "Novo Nome");
+
+    // A completed service is not a received payment until payment is explicitly registered.
+    const staffId = "p-test";
+    const serviceId = "s-test";
+    const clientId = "c-test";
+    const apptId = "a-test";
+    db.prepare(`INSERT INTO users (id, tenant_id, name, email, password_hash, role)
+      VALUES (?, ?, ?, ?, ?, 'profissional')`)
+      .run(staffId, login.body.user.tenantId, "Profissional", "pro@teste.local", "hash-irrelevante");
+    db.prepare("INSERT INTO services (id, tenant_id, name, duration_minutes, price_cents) VALUES (?, ?, ?, ?, ?)")
+      .run(serviceId, login.body.user.tenantId, "Serviço", 30, 7500);
+    db.prepare("INSERT INTO clients (id, tenant_id, name) VALUES (?, ?, ?)")
+      .run(clientId, login.body.user.tenantId, "Cliente");
+    db.prepare(`INSERT INTO appointments (id, tenant_id, client_id, professional_id, service_id,
+      starts_at, ends_at, status, price_cents) VALUES (?, ?, ?, ?, ?, ?, ?, 'concluido', ?)`)
+      .run(apptId, login.body.user.tenantId, clientId, staffId, serviceId,
+        "2026-11-10T10:00:00", "2026-11-10T10:30:00", 7500);
+    const pendingReport = await request("/reports?month=2026-11");
+    assert.equal(pendingReport.body.revenueCents, 0);
+    assert.equal(pendingReport.body.pendingCents, 7500);
+    const receivables = await request("/receivables?month=2026-11");
+    assert.equal(receivables.body.receivables[0].paid, false);
+    assert.equal((await request(`/receivables/${apptId}/pay`, "POST", { paymentMethod: "pix" })).status, 200);
+    assert.equal((await request(`/receivables/${apptId}/pay`, "POST", { paymentMethod: "pix" })).status, 409);
+    const paidReport = await request("/reports?month=2026-11");
+    assert.equal(paidReport.body.revenueCents, 7500);
+    assert.equal(paidReport.body.pendingCents, 0);
+
+    // Demo can browse but cannot change appointments, settings, or export real data.
+    const demoHash = await bcrypt.hash("Demo-Senha-Forte-1234", 12);
+    db.prepare("INSERT INTO tenants (id, name, slug) VALUES (?, ?, ?)")
+      .run("tenant-salao-demo", "Salão Demo", "studio-bela-vista");
+    db.prepare("INSERT INTO business_settings (tenant_id, business_name) VALUES (?, ?)")
+      .run("tenant-salao-demo", "Salão Demo");
+    db.prepare(`INSERT INTO users (id, tenant_id, name, email, password_hash, role)
+      VALUES (?, ?, ?, ?, ?, 'dono')`)
+      .run("owner-demo", "tenant-salao-demo", "Demo", "demo@teste.local", demoHash);
+    const demoLogin = await request("/auth/login", "POST", {
+      email: "demo@teste.local", password: "Demo-Senha-Forte-1234",
+    });
+    assert.equal(demoLogin.status, 200);
+    assert.equal((await request("/account")).status, 200);
+    assert.equal((await request("/clients", "POST", { name: "Não salvar" })).status, 403);
+    assert.equal((await request("/export/backup")).status, 403);
+    assert.equal((await request("/public/studio-bela-vista/appointments", "POST", {})).status, 403);
+    assert.equal((await request("/auth/login", "POST", {
+      email: "dono@teste.local", password: "Nova-Senha-Forte-1234",
+    })).status, 200);
+    assert.equal((await request("/export/backup")).status, 403);
 
     const member = await request("/team-members", "POST", {
       name: "Recepcionista", email: "recepcao@teste.local", password: "Senha-Inicial-1234",
