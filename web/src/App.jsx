@@ -1525,14 +1525,14 @@ function DailyCashClosing({ revision, user }) {
       <div><p className="eyebrow">CONFERÊNCIA DIÁRIA</p><h2>Fechamento diário de caixa</h2>
         <p className="panel-subtitle">Registre a abertura em espécie, confira os recebimentos e encerre o dia. O saldo inicial não é faturamento.</p></div>
       <input className="input" type="date" aria-label="Data do caixa" value={date}
-        max={summary?.today || localDate().slice(0,10)} onChange={e => setDate(e.target.value)}/>
+        max={summary?.today || localDate().slice(0,10)} min={!isOwner ? (summary?.today || localDate().slice(0,10)) : undefined} onChange={e => setDate(e.target.value)}/>
     </div>
     <ErrorMessage>{error}</ErrorMessage>
     {!summary ? <p className="report-empty">Carregando o caixa...</p> : <>
       <div className="stats-grid finance-stats">
         <StatCard title="Total recebido" value={money(summary.closing?.expectedTotalCents ?? summary.expectedTotalCents)} note={`${summary.closing?.receiptCount ?? summary.receiptCount} recebimento(s)`} icon={Wallet} tone="green"/>
         <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents + (summary.closing.supplyCents || 0) - (summary.closing.withdrawalCents || 0) : summary.expectedDrawerCashCents)} note="Saldo inicial + recebimentos em espécie" icon={CircleDollarSign} tone="blue"/>
-        <StatCard title="Situação" value={summary.cashState === "closed" ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.closing ? "green" : "orange"}/>
+        <StatCard title="Situação" value={summary.cashState === "closed" ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.cashState === "closed" ? "green" : "orange"}/>
       </div>
       {summary.opening ? <div className="panel" style={{marginTop:16}}>
         <b>Abertura registrada por {summary.opening.openedByName}</b>
