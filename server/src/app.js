@@ -1389,15 +1389,17 @@ app.get("/api/public/:slug/slots", (req, res) => {
   res.json({ slots });
 });
 
-app.post("/api/public/:slug/appointments", (req, res) => {
+app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 12, 15 * 60 * 1000), (req, res) => {
   if (req.params.slug === "studio-bela-vista") {
     const demo = db.prepare("SELECT id FROM tenants WHERE slug = ? AND id = ?").get(req.params.slug, DEMO_TENANT_ID);
     if (demo) return fail(res, 403, "Página demonstrativa: reservas reais estão desativadas.");
   }
   const business = db.prepare("SELECT id, timezone FROM tenants JOIN business_settings ON business_settings.tenant_id = tenants.id WHERE slug = ?").get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
-  const name = requiredText(req.body?.name, "Nome");
-  const phone = requiredText(req.body?.phone, "Telefone");
+  const name = requiredText(req.body?.name, "Nome", 120);
+  const phone = requiredText(req.body?.phone, "Telefone", 20);
+  const digits = phone.replace(/\D/g, "");
+  if (!/^(?:55)?\d{10,11}$/.test(digits)) return fail(res, 400, "Informe WhatsApp com DDD válido.");
   const { serviceId, professionalId } = req.body ?? {};
   const startsAt = String(req.body?.startsAt ?? "");
   if (!validDateTime(startsAt) || !serviceId || !professionalId) return fail(res, 400, "Escolha serviço, profissional e horário.");
