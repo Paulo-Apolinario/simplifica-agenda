@@ -248,3 +248,13 @@ Em **Próximos atendimentos** da visão geral, o administrador pode clicar em um
 No perfil profissional, **Meus atendimentos** e **Detalhes do atendimento** disponibilizam **Concluir serviço realizado** para atendimentos agendados ou confirmados atribuídos ao usuário. Caso o horário programado ainda não tenha começado, o sistema exige uma confirmação explícita de que o serviço foi realmente realizado antecipadamente. A conclusão registra o status como `concluido` e **não marca pagamento automaticamente**; o valor fica pendente no Caixa e recebimentos, onde o proprietário pode registrar o recebimento. Profissionais continuam sem acesso a preço, forma de pagamento, financeiro de outros funcionários ou alterações de serviços de terceiros.
 
 Antes de atualizar instalações com dados, **pare o servidor e faça backup do arquivo SQLite**. A migração do campo WhatsApp é aditiva.
+
+## Configurações com seções e upload de logo
+
+A tela `/configuracoes` do proprietário agora apresenta três seções em abas: **Estabelecimento**, **Horários** e **Minha conta**. Isso elimina a página muito longa, sem duplicar o gerenciamento de conta. O perfil profissional e a recepção continuam tendo sua própria página `/minha-conta`.
+
+Na aba Estabelecimento o proprietário configura nome, endereço, telefone, WhatsApp, aparência e logo. **Não há mais campo de URL da logo**. Utilize **Selecionar imagem / Trocar imagem / Remover**. A imagem é atualizada **automaticamente no upload**, independentemente do botão Salvar alterações usado nos demais dados.
+
+O upload aceita exclusivamente PNG, JPG e WebP, com máximo de 500 KB por imagem, valida assinatura binária no servidor, exige proprietário autenticado e preserva o bloqueio de escrita do demonstrativo. As imagens são gravadas na tabela `business_logos` do **SQLite**, isoladas por empresa, e são servidas em `/api/public/:slug/logo` para a página pública e para a identificação do comércio no painel. SVG não é permitido no upload. Se a logo personalizada for removida, retorna a imagem padrão do Simplifica Agenda.
+
+**Backup:** a nova tabela entra automaticamente via migração aditiva, sem descartar registros. Pare o servidor e faça um backup do banco antes de atualizar. O backup SQLite do sistema, quando autorizado, passa a incluir as logos armazenadas no banco. Evite usar imagens com dados pessoais.

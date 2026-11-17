@@ -1134,6 +1134,51 @@ app.delete("/api/blocked-slots/:id", requireAuth, allowRoles("dono", "recepcao",
   res.status(204).end();
 });
 
+// Validated raster logos are backed up with the SQLite database.
+const logoTypes = new Set(["image/png", "image/jpeg", "image/webp"]);
+function validLogo(bytes, type) {
+  if (type === "image/png") return bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10]));
+  if (type === "image/jpeg") return bytes.length >= 4 && bytes[0] === 255 && bytes[1] === 216 && bytes[bytes.length - 2] === 255 && bytes[bytes.length - 1] === 217;
+  if (type === "image/webp") return bytes.length >= 12 && bytes.toString("ascii",0,4) === "RIFF" && bytes.toString("ascii",8,12) === "WEBP";
+  return false;
+}
+app.post("/api/settings/logo", requireAuth, allowRoles("dono"), (req, res) => {
+  const raw = String(req.body?.image ?? "");
+  const match = raw.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/);
+  if (!match || !logoTypes.has(match[1]) || match[2].length > 700000) {
+    return fail(res, 400, "Escolha uma imagem PNG, JPG ou WebP de até 500 KB.");
+  }
+  const bytes = Buffer.from(match[2], "base64");
+  if (!bytes.length || bytes.length > 500 * 1024 || !validLogo(bytes, match[1]))
+    return fail(res, 400, "Imagem inválida ou maior que 500 KB.");
+  const company = db.prepare("SELECT slug FROM tenants WHERE id = ?").get(tenant(req));
+  if (!company) return fail(res, 404, "Estabelecimento não encontrado.");
+  const updated = Date.now();
+  const url = "/api/public/" + encodeURIComponent(company.slug) + "/logo?v=" + updated;
+  db.transaction(() => {
+    db.prepare("INSERT INTO business_logos (tenant_id, image_type, image_blob, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(tenant_id) DO UPDATE SET image_type=excluded.image_type, image_blob=excluded.image_blob, updated_at=excluded.updated_at")
+      .run(tenant(req), match[1], bytes, updated);
+    db.prepare("UPDATE business_settings SET logo_url = ? WHERE tenant_id = ?").run(url, tenant(req));
+  })();
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ logoUrl: url });
+});
+app.delete("/api/settings/logo", requireAuth, allowRoles("dono"), (req, res) => {
+  db.transaction(() => {
+    db.prepare("DELETE FROM business_logos WHERE tenant_id = ?").run(tenant(req));
+    db.prepare("UPDATE business_settings SET logo_url = '' WHERE tenant_id = ?").run(tenant(req));
+  })();
+  res.json({ logoUrl: "" });
+});
+app.get("/api/public/:slug/logo", (req, res) => {
+  const logo = db.prepare("SELECT l.image_type AS imageType, l.image_blob AS imageBlob FROM tenants t JOIN business_logos l ON l.tenant_id = t.id WHERE t.slug = ?").get(req.params.slug);
+  if (!logo) return res.sendStatus(404);
+  res.setHeader("Content-Type", logo.imageType);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.send(logo.imageBlob);
+});
+
 app.get("/api/settings", requireAuth, (req, res) => {
   const settings = db.prepare("SELECT business_name AS businessName, logo_url AS logoUrl, address, phone, whatsapp, timezone, theme FROM business_settings WHERE tenant_id = ?")
     .get(tenant(req));
@@ -1156,10 +1201,9 @@ app.put("/api/settings", requireAuth, allowRoles("dono"), (req, res) => {
 
   const update = db.transaction(() => {
     db.prepare(`
-      UPDATE business_settings SET business_name = ?, logo_url = ?, address = ?,
+      UPDATE business_settings SET business_name = ?, address = ?,
         phone = ?, whatsapp = ?, theme = ? WHERE tenant_id = ?
-    `).run(businessName, String(req.body?.logoUrl ?? "").trim(), address,
-      phone, whatsapp, theme, tenant(req));
+    `).run(businessName, address, phone, whatsapp, theme, tenant(req));
     if (Array.isArray(req.body?.hours)) {
       const save = db.prepare(`
         INSERT INTO business_hours (tenant_id, weekday, opens_at, closes_at) VALUES (?, ?, ?, ?)

@@ -66,8 +66,31 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal((await request("/settings", "PUT", {
       businessName: "Comércio Teste", whatsapp: "invalido",
     })).status, 400);
+    // Store a real (small) PNG for this establishment, then expose it publicly.
+    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2pV1cAAAAASUVORK5CYII=";
+    const uploadedLogo = await request("/settings/logo", "POST", {
+      image: "data:image/png;base64," + png,
+    });
+    assert.equal(uploadedLogo.status, 200);
+    assert.match(uploadedLogo.body.logoUrl, /^\/api\/public\/comercio-teste\/logo\?v=\d+$/);
+    const logoResult = await fetch(base + uploadedLogo.body.logoUrl, { headers: { Cookie: cookie } });
+    assert.equal(logoResult.status, 200);
+    assert.match(logoResult.headers.get("content-type"), /^image\/png/);
+    assert.equal((await logoResult.arrayBuffer()).byteLength > 0, true);
+    assert.equal((await request("/settings/logo", "POST", {
+      image: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+    })).status, 400);
+    assert.equal((await request("/settings")).body.settings.logoUrl, uploadedLogo.body.logoUrl);
+    // Saving ordinary settings must never allow a second arbitrary logo URL.
+    assert.equal((await request("/settings", "PUT", {
+      businessName: "Comércio Teste", logoUrl: "https://example.invalid/logo.svg", whatsapp: "85999999999",
+    })).status, 200);
+    assert.equal((await request("/settings")).body.settings.logoUrl, uploadedLogo.body.logoUrl);
     const publicBusiness = await request("/public/comercio-teste");
     assert.equal(publicBusiness.body.business.whatsapp, "85999999999");
+    assert.equal(publicBusiness.body.business.logoUrl, uploadedLogo.body.logoUrl);
+    assert.equal((await request("/settings/logo", "DELETE")).status, 200);
+    assert.equal((await request("/settings")).body.settings.logoUrl, "");
 
 
     const blockedOrigin = await request("/account", "PATCH", {
