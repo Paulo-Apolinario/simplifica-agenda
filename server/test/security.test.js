@@ -144,6 +144,8 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     const anonymous = db.prepare("SELECT c.name FROM appointments a JOIN clients c ON c.id = a.client_id WHERE a.id = ?")
       .get(anonymousAppointment.body.id);
     assert.equal(anonymous.name, "Cliente não informado");
+    const visibleClients = await request("/clients");
+    assert.equal(visibleClients.body.clients.some(c => c.name === "Cliente não informado"), false);
     const staffEarnings = await request("/professional/earnings?month=2026-11");
     assert.equal(staffEarnings.status, 200);
     assert.equal(staffEarnings.body.dueCents, 3000);
