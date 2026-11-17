@@ -99,6 +99,34 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(paidReport.body.revenueCents, 7500);
     assert.equal(paidReport.body.pendingCents, 0);
 
+    // Professional must be scoped to assigned work, without financial edit rights.
+    const profPassword = "Senha-Profissional-1234";
+    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?")
+      .run(await bcrypt.hash(profPassword, 12), staffId);
+    db.prepare(`INSERT INTO appointments (id, tenant_id, client_id, professional_id, service_id,
+      starts_at, ends_at, status, price_cents) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmado', ?)`)
+      .run("a-prof-test", login.body.user.tenantId, clientId, staffId, serviceId,
+        "2026-11-10T11:00:00", "2026-11-10T11:30:00", 7500);
+    const professionalLogin = await request("/auth/login", "POST", {
+      email: "pro@teste.local", password: profPassword,
+    });
+    assert.equal(professionalLogin.status, 200);
+    assert.equal(professionalLogin.body.user.role, "profissional");
+    assert.equal((await request("/professional/my-services?month=2026-11")).status, 200);
+    assert.equal((await request("/appointments/a-prof-test", "PATCH", {
+      status: "concluido", paymentMethod: "pix", priceCents: 1,
+    })).status, 403);
+    assert.equal((await request("/professional/my-services/a-prof-test/complete", "POST")).status, 200);
+    assert.equal((await request("/professional/my-services/a-prof-test/complete", "POST")).status, 409);
+    const staffWork = await request("/professional/my-services?month=2026-11");
+    assert.equal(staffWork.body.totals.completed, 2);
+    assert.equal((await request("/team-members")).status, 403);
+    assert.equal((await request("/receivables?month=2026-11")).status, 403);
+    const commercialReturn = await request("/auth/login", "POST", {
+      email: "dono@teste.local", password: "Nova-Senha-Forte-1234",
+    });
+    assert.equal(commercialReturn.status, 200);
+
     // Demo can browse but cannot change appointments, settings, or export real data.
     const demoHash = await bcrypt.hash("Demo-Senha-Forte-1234", 12);
     db.prepare("INSERT INTO tenants (id, name, slug) VALUES (?, ?, ?)")
