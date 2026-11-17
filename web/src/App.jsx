@@ -1795,7 +1795,7 @@ function OnlineRequestsPage() {
   const visible=items.filter(item=>filter==="all" || item.status===filter);
   return <>
     <PageTitle eyebrow="CENTRAL DE AGENDAMENTOS" title="Solicitações online"
-      description="Confirme ou recuse os pedidos feitos pelo link e QR Code do seu estabelecimento." />
+      description="Confirme ou recuse pedidos e abra um aviso pronto para envio manual pelo WhatsApp. A confirmação não envia mensagens sozinha." />
     <div className="booking-queue-tools">
       <SelectField label="Situação" value={filter} onChange={e=>setFilter(e.target.value)}>
         <option value="agendado">Aguardando confirmação</option><option value="confirmado">Confirmados</option>
@@ -1819,9 +1819,14 @@ function OnlineRequestsPage() {
             <Button disabled={busy===item.id} onClick={()=>act(item,"confirm")}>Confirmar</Button>
             <Button variant="secondary" disabled={busy===item.id} onClick={()=>act(item,"reject")}>Recusar</Button>
           </>}
-          {item.clientPhone && <a className="button button-secondary" href={whatsappUrl(item.clientPhone,
-            `Olá, ${item.clientName}! Sobre seu agendamento de ${item.serviceName} em ${dateTimeLabel(item.startsAt)}.`)}
-            rel="noreferrer" target="_blank"><Phone size={16}/> WhatsApp</a>}
+          {item.clientPhone && <button type="button" className="button button-secondary" onClick={()=>{
+            const state=item.status==="confirmado"?"CONFIRMADO ✅":item.status==="cancelado"?"CANCELADO ❌":"AGUARDANDO CONFIRMAÇÃO ⏳";
+            const message=`Olá, ${item.clientName}! Aqui é ${item.businessName}. Seu agendamento de ${item.serviceName}, com ${item.professionalName}, em ${dateTimeLabel(item.startsAt)}, está: ${state}. Em caso de dúvidas, responda por aqui.`;
+            window.open(whatsappUrl(item.clientPhone,message),"_blank","noopener,noreferrer");
+            api(`/requests/${item.id}/whatsapp-opened`,{method:"POST",body:{status:item.status}})
+              .then(refresh).catch(e=>setError(e.message));
+          }}><Phone size={16}/> Abrir WhatsApp ({item.status==="confirmado"?"confirmação":item.status==="cancelado"?"cancelamento":"solicitação"})</button>}
+          {item.whatsappOpenedAt && <small>Conversa aberta anteriormente — envio não verificado</small>}
         </article>)}</div>:
         <EmptyState icon={ClipboardCheck} title="Nenhuma solicitação nesta situação"
           description="Pedidos de clientes pelo link público aparecerão aqui." />}
