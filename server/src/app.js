@@ -1553,6 +1553,7 @@ app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedul
   const startsAt = String(req.body?.startsAt ?? "");
   if (!validDateTime(startsAt)) return fail(res, 400, "Informe data e horário válidos.");
   const normalized = startsAt.length === 16 ? startsAt + ":00" : startsAt;
+  if (normalized === row.startsAt) return fail(res, 409, "Escolha um horário diferente do atual.");
   if (!publicStartAllowed(row.tenantId, normalized)) return fail(res, 400, "Data fora das regras de agendamento.");
   const selected = db.prepare(`SELECT s.duration_minutes AS duration, s.public_enabled AS publicEnabled,
     s.active, u.active AS professionalActive
