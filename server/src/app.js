@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import session from "express-session";
 import bcrypt from "bcryptjs";
-import { db, createId, allocateStaffCode } from "./database.js";
+import { db, createId, allocateStaffCode, allocateLoginCode } from "./database.js";
 import { allowRoles, publicUser, requireAuth } from "./auth.js";
 import { SQLiteSessionStore } from "./session-store.js";
 import { findScheduleConflict } from "./schedule.js";
@@ -278,7 +278,7 @@ const codeFailures = new Map();
 function staffLoginLimit(req, res, next) {
   const slug = String(req.body?.slug ?? "").trim().toLowerCase();
   const code = String(req.body?.staffCode ?? "").trim();
-  const key = `${slug}:${code}`;
+  const key = code;
   const now = Date.now();
   if (codeFailures.size > 4000) {
     for (const [k, v] of codeFailures) if (v.until <= now) codeFailures.delete(k);
@@ -301,9 +301,9 @@ app.post("/api/auth/staff-login", limitAttempts("staff-ip", 20, 15 * 60 * 1000),
   const slug = String(req.body?.slug ?? "").trim().toLowerCase();
   const code = String(req.body?.staffCode ?? "").trim();
   const password = String(req.body?.password ?? "");
-  if (!slug || !/^\d{3}$/.test(code) || !password) return fail(res, 400, "Informe comércio, código de três dígitos e senha.");
+  if (!/^\d{3}$/.test(code) || !password) return fail(res, 400, "Informe código de três dígitos e senha.");
   const user = db.prepare(`SELECT u.*, t.slug FROM users u JOIN tenants t ON t.id = u.tenant_id
-    WHERE t.slug = ? AND u.staff_code = ? AND u.role = 'profissional' AND u.active = 1`).get(slug, code);
+    WHERE u.login_code = ? AND u.role = 'profissional' AND u.active = 1`).get(code);
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
     recordStaffFailure(req);
     return fail(res, 401, "Código ou senha incorretos.");
@@ -320,10 +320,10 @@ app.post("/api/auth/activate-professional", limitAttempts("staff-activate", 8, 1
   const staffCode = String(req.body?.staffCode ?? "").trim();
   const token = String(req.body?.activationToken ?? "");
   const password = String(req.body?.password ?? "");
-  if (!/^\d{3}$/.test(staffCode) || !slug || !token) return fail(res, 400, "Informe comércio, código e código de ativação.");
+  if (!/^\d{3}$/.test(staffCode) || !token) return fail(res, 400, "Informe código e código de ativação.");
   if (!staffPasswordValid(password)) return fail(res, 400, "A senha deve ter 6 a 8 caracteres, com letras e números.");
   const member = db.prepare(`SELECT u.* FROM users u JOIN tenants t ON t.id = u.tenant_id
-    WHERE t.slug = ? AND u.staff_code = ? AND u.role = 'profissional' AND u.active = 1`).get(slug, staffCode);
+    WHERE u.login_code = ? AND u.role = 'profissional' AND u.active = 1`).get(staffCode);
   if (!member || !member.activation_hash || !member.activation_expires_at || member.activation_expires_at < Date.now()) {
     return fail(res, 403, "Ativação inválida ou expirada. Solicite um novo código ao administrador.");
   }
@@ -456,10 +456,16 @@ app.get("/api/overview", requireAuth, (req, res) => {
       ${req.user.role === "profissional" ? "AND a.professional_id = ?" : ""}`,
     req.user.role === "profissional" ? [localNow(tenant(req)), req.user.id] : [localNow(tenant(req))],
   ).slice(0, 6);
+  const blockedToday = req.user.role === "profissional"
+    ? db.prepare(`SELECT count(*) AS total FROM blocked_slots
+      WHERE tenant_id = ? AND professional_id = ? AND starts_at < ? AND ends_at > ?`)
+      .get(tenant(req), req.user.id, `${localNow(tenant(req)).slice(0, 10)}T23:59:59`, `${localNow(tenant(req)).slice(0, 10)}T00:00:00`).total
+    : null;
   const earnings = req.user.role === "profissional" ? professionalEarnings(tenant(req), req.user.id) : null;
   const completedToday = req.user.role === "profissional" ? db.prepare(`SELECT count(*) AS total FROM appointments WHERE tenant_id = ? AND professional_id = ? AND status = 'concluido' AND substr(starts_at, 1, 10) = ?`).get(tenant(req), req.user.id, localNow(tenant(req)).slice(0, 10)).total : null;
   res.json({
     completedToday,
+    blockedToday,
     earningsDueCents: earnings?.dueCents ?? null,
     todayCount: summary.today_count,
     activeClients: summary.active_clients,
@@ -576,13 +582,16 @@ app.post("/api/services", requireAuth, allowRoles("dono"), (req, res) => {
   const name = requiredText(req.body?.name, "Nome do serviço");
   const durationMinutes = Number(req.body?.durationMinutes);
   const priceCents = Number(req.body?.priceCents);
+  const houseSharePercent = Number(req.body?.houseSharePercent ?? 0);
+  if (!Number.isFinite(houseSharePercent) || houseSharePercent < 0 || houseSharePercent > 100)
+    return fail(res, 400, "Retenção para materiais deve estar entre 0% e 100%.");
   if (!Number.isInteger(durationMinutes) || durationMinutes < 5 || durationMinutes > 720
     || !Number.isInteger(priceCents) || priceCents < 0) {
     return fail(res, 400, "Informe uma duração e um preço válidos.");
   }
   const id = createId();
-  db.prepare("INSERT INTO services (id, tenant_id, name, duration_minutes, price_cents) VALUES (?, ?, ?, ?, ?)")
-    .run(id, tenant(req), name, durationMinutes, priceCents);
+  db.prepare("INSERT INTO services (id, tenant_id, name, duration_minutes, price_cents, house_share_percent) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(id, tenant(req), name, durationMinutes, priceCents, houseSharePercent);
   const professionalIds = Array.isArray(req.body.professionalIds) ? req.body.professionalIds : [];
   const assign = db.prepare(`
     INSERT INTO professional_services (tenant_id, professional_id, service_id)
@@ -599,11 +608,13 @@ app.patch("/api/services/:id", requireAuth, allowRoles("dono"), (req, res) => {
   const name = requiredText(req.body?.name, "Nome do serviço");
   const duration = Number(req.body?.durationMinutes);
   const price = Number(req.body?.priceCents);
+  const houseShare = Number(req.body?.houseSharePercent ?? 0);
+  if (!Number.isFinite(houseShare) || houseShare < 0 || houseShare > 100) return fail(res, 400, "Retenção do estabelecimento inválida.");
   if (!Number.isInteger(duration) || duration < 5 || duration > 720 || !Number.isInteger(price) || price < 0) {
     return fail(res, 400, "Informe uma duração e um preço válidos.");
   }
-  db.prepare("UPDATE services SET name = ?, duration_minutes = ?, price_cents = ?, active = ? WHERE id = ? AND tenant_id = ?")
-    .run(name, duration, price, req.body.active === false ? 0 : 1, req.params.id, tenant(req));
+  db.prepare("UPDATE services SET name = ?, duration_minutes = ?, price_cents = ?, active = ?, house_share_percent = ? WHERE id = ? AND tenant_id = ?")
+    .run(name, duration, price, req.body.active === false ? 0 : 1, houseShare, req.params.id, tenant(req));
   const ids = Array.isArray(req.body.professionalIds) ? req.body.professionalIds : null;
   if (ids) {
     const update = db.transaction(() => {
@@ -678,17 +689,30 @@ app.get("/api/professionals", requireAuth, (_req, res) => {
 
 app.get("/api/team-members", requireAuth, allowRoles("dono"), (_req, res) => {
   const team = db.prepare(`
-    SELECT id, name, email, phone, role, staff_code AS staffCode, commission_percent AS commissionPercent, active
+    SELECT id, name, email, phone, role, staff_code AS staffCode, login_code AS loginCode,
+      job_title AS jobTitle, commission_percent AS commissionPercent, active
     FROM users WHERE tenant_id = ? AND role IN ('profissional', 'recepcao')
     ORDER BY role, name
   `).all(tenant(_req));
-  res.json({ team });
+  const support = db.prepare(`
+    SELECT id, name, phone, job_title AS jobTitle, active FROM support_employees
+    WHERE tenant_id = ? ORDER BY name
+  `).all(tenant(_req)).map(row => ({ ...row, role: "sem_acesso", commissionPercent: 0, loginCode: null }));
+  res.json({ team: [...team, ...support] });
 });
 
 app.post("/api/team-members", requireAuth, allowRoles("dono"), async (req, res) => {
   const name = requiredText(req.body?.name, "Nome");
   const role = req.body?.role;
-  if (!["profissional", "recepcao"].includes(role)) return fail(res, 400, "Perfil inválido.");
+  if (!["profissional", "recepcao", "sem_acesso"].includes(role)) return fail(res, 400, "Perfil inválido.");
+  const jobTitle = String(req.body?.jobTitle ?? (role === "recepcao" ? "Recepção" : role === "profissional" ? "Profissional" : "")).trim();
+  if (!jobTitle || jobTitle.length > 80) return fail(res, 400, "Informe o cargo ou função (até 80 caracteres).");
+  if (role === "sem_acesso") {
+    const id = createId();
+    db.prepare("INSERT INTO support_employees (id, tenant_id, name, job_title, phone) VALUES (?, ?, ?, ?, ?)")
+      .run(id, tenant(req), name, jobTitle, String(req.body?.phone ?? "").trim());
+    return res.status(201).json({ id, role, jobTitle });
+  }
   const email = role === "recepcao" ? requiredText(req.body?.email, "E-mail").toLowerCase() : "";
   const password = role === "recepcao" ? requiredText(req.body?.password, "Senha", 200) : "";
   if (role === "recepcao" && password.length < 12) return fail(res, 400, "A senha deve ter pelo menos 12 caracteres.");
@@ -698,16 +722,18 @@ app.post("/api/team-members", requireAuth, allowRoles("dono"), async (req, res) 
   const activation = role === "profissional" ? generateActivation() : null;
   const passwordHash = await bcrypt.hash(role === "profissional" ? crypto.randomBytes(32).toString("hex") : password, 12);
   let staffCode = null;
+  let loginCode = null;
   try {
     const create = db.transaction(() => {
       staffCode = role === "profissional" ? allocateStaffCode(tenant(req)) : null;
+      loginCode = role === "profissional" ? allocateLoginCode() : null;
       db.prepare(`
         INSERT INTO users (id, tenant_id, name, email, password_hash, role, phone, commission_percent,
-          staff_code, activation_hash, activation_expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          staff_code, login_code, job_title, activation_hash, activation_expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(id, tenant(req), name, role === "profissional" ? `${id}@staff.invalid` : email,
         passwordHash, role, String(req.body?.phone ?? "").trim(), commission,
-        staffCode, activation?.hash ?? null, activation?.expires ?? null);
+        staffCode, loginCode, jobTitle, activation?.hash ?? null, activation?.expires ?? null);
       if (role === "profissional") {
         const assign = db.prepare(`
           INSERT INTO professional_services (tenant_id, professional_id, service_id)
@@ -726,11 +752,11 @@ app.post("/api/team-members", requireAuth, allowRoles("dono"), async (req, res) 
     if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return fail(res, 409, "Já existe uma conta com este e-mail.");
     throw error;
   }
-  res.status(201).json({ id, staffCode, activationToken: activation?.token ?? null });
+  res.status(201).json({ id, staffCode, loginCode, activationToken: activation?.token ?? null });
 });
 
 app.post("/api/team-members/:id/activation", requireAuth, allowRoles("dono"), (req, res) => {
-  const member = db.prepare("SELECT id, staff_code AS staffCode FROM users WHERE id = ? AND tenant_id = ? AND role = 'profissional' AND active = 1")
+  const member = db.prepare("SELECT id, staff_code AS staffCode, login_code AS loginCode FROM users WHERE id = ? AND tenant_id = ? AND role = 'profissional' AND active = 1")
     .get(req.params.id, tenant(req));
   if (!member) return fail(res, 404, "Profissional não encontrado.");
   const activation = generateActivation();
@@ -739,10 +765,20 @@ app.post("/api/team-members/:id/activation", requireAuth, allowRoles("dono"), (r
       .run(activation.hash, activation.expires, member.id, tenant(req));
     db.prepare("DELETE FROM sessions WHERE user_id = ? AND tenant_id = ?").run(member.id, tenant(req));
   })();
-  res.json({ staffCode: member.staffCode, activationToken: activation.token, expiresInHours: 24 });
+  res.json({ staffCode: member.staffCode, loginCode: member.loginCode, activationToken: activation.token, expiresInHours: 24 });
 });
 
 app.patch("/api/team-members/:id", requireAuth, allowRoles("dono"), (req, res) => {
+  const support = db.prepare("SELECT id, name, job_title AS jobTitle, phone, active FROM support_employees WHERE id = ? AND tenant_id = ?")
+    .get(req.params.id, tenant(req));
+  if (support) {
+    const name = requiredText(req.body?.name ?? support.name, "Nome");
+    const jobTitle = String(req.body?.jobTitle ?? support.jobTitle).trim();
+    if (!jobTitle || jobTitle.length > 80) return fail(res, 400, "Cargo inválido.");
+    db.prepare("UPDATE support_employees SET name = ?, job_title = ?, phone = ?, active = ? WHERE id = ? AND tenant_id = ?")
+      .run(name, jobTitle, String(req.body?.phone ?? support.phone), req.body?.active === false ? 0 : 1, support.id, tenant(req));
+    return res.json({ ok: true });
+  }
   const member = db.prepare(`
     SELECT id, role FROM users WHERE id = ? AND tenant_id = ? AND role IN ('profissional', 'recepcao')
   `).get(req.params.id, tenant(req));
@@ -750,10 +786,13 @@ app.patch("/api/team-members/:id", requireAuth, allowRoles("dono"), (req, res) =
   const commission = member.role === "profissional" ? Number(req.body?.commissionPercent ?? 0) : 0;
   if (!Number.isFinite(commission) || commission < 0 || commission > 100) return fail(res, 400, "Comissão inválida.");
   db.prepare(`
-    UPDATE users SET name = ?, phone = ?, commission_percent = ?, active = ?
+    UPDATE users SET name = ?, phone = ?, commission_percent = ?, active = ?,
+      job_title = COALESCE(?, job_title)
     WHERE id = ? AND tenant_id = ?
   `).run(requiredText(req.body?.name, "Nome"), String(req.body?.phone ?? "").trim(), commission,
-    req.body?.active === false ? 0 : 1, req.params.id, tenant(req));
+    req.body?.active === false ? 0 : 1,
+    req.body?.jobTitle === undefined ? null : String(req.body.jobTitle).trim().slice(0, 80),
+    req.params.id, tenant(req));
   res.json({ ok: true });
 });
 
@@ -813,17 +852,24 @@ app.get("/api/schedule", requireAuth, (req, res) => {
     `AND a.starts_at < ? AND a.ends_at > ? ${appointmentFilter}`,
     req.user.role === "profissional" ? [to, from, req.user.id] : [to, from]);
   const blockedSlots = db.prepare(`
-    SELECT id, professional_id AS professionalId, starts_at AS startsAt,
-      ends_at AS endsAt, reason
-    FROM blocked_slots WHERE tenant_id = ? AND starts_at < ? AND ends_at > ?
-      AND (? != 'profissional' OR professional_id IS NULL OR professional_id = ?)
-    ORDER BY starts_at
+    SELECT b.id, b.professional_id AS professionalId, b.starts_at AS startsAt,
+      b.ends_at AS endsAt, b.reason, b.created_by_user_id AS createdByUserId,
+      COALESCE(creator.name, 'Não identificado') AS createdByName,
+      COALESCE(pro.name, 'Equipe completa') AS professionalName
+    FROM blocked_slots b
+    LEFT JOIN users creator ON creator.id = b.created_by_user_id AND creator.tenant_id = b.tenant_id
+    LEFT JOIN users pro ON pro.id = b.professional_id AND pro.tenant_id = b.tenant_id
+    WHERE b.tenant_id = ? AND b.starts_at < ? AND b.ends_at > ?
+      AND (? != 'profissional' OR b.professional_id IS NULL OR b.professional_id = ?)
+    ORDER BY b.starts_at
   `).all(tenant(req), to, from, req.user.role, req.user.id);
   res.json({ appointments, blockedSlots });
 });
 
 // Commission is earned when a service is completed; payment requires an explicit owner action.
-const commissionCents = row => Math.round(row.priceCents * row.commissionPercent / 100);
+// The retained percentage is expressed in points of the service price.
+const commissionCents = row => Math.round(row.priceCents * Math.max(0,
+  row.commissionPercent - (row.houseSharePercent ?? 0)) / 100);
 function professionalEarnings(tenantId, professionalId, month = null) {
   const whereMonth = month ? " AND substr(a.starts_at, 1, 7) = ?" : "";
   const params = month ? [tenantId, professionalId, month] : [tenantId, professionalId];
@@ -856,7 +902,7 @@ app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const rows = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
     a.starts_at AS startsAt, a.price_cents AS priceCents,
-    a.commission_percent AS commissionPercent, s.name AS serviceName,
+    a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent, s.name AS serviceName,
     cp.amount_cents AS paidCents, cp.paid_at AS paidAt
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
     JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
@@ -866,9 +912,38 @@ app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
   res.json({ month, commissions: rows.map(row => ({...row,
     earnedCents: commissionCents(row), paid: row.paidCents !== null })) });
 });
+app.patch("/api/commissions/:id", requireAuth, allowRoles("dono"), (req, res) => {
+  const appointment = db.prepare(`SELECT id, commission_percent AS commissionPercent,
+    house_share_percent AS houseSharePercent FROM appointments
+    WHERE id = ? AND tenant_id = ? AND status = 'concluido'`).get(req.params.id, tenant(req));
+  if (!appointment) return fail(res, 404, "Serviço concluído não encontrado.");
+  if (db.prepare("SELECT 1 FROM commission_payments WHERE appointment_id = ? AND tenant_id = ?")
+    .get(appointment.id, tenant(req))) return fail(res, 409, "Comissão já paga. Não é permitido ajustar sem estorno auditado.");
+  const percentage = Number(req.body?.commissionPercent);
+  const house = Number(req.body?.houseSharePercent);
+  const reason = String(req.body?.reason ?? "").trim();
+  if (![percentage, house].every(v => Number.isFinite(v) && v >= 0 && v <= 100))
+    return fail(res, 400, "Percentuais devem estar entre 0% e 100%.");
+  if (reason.length < 5 || reason.length > 250) return fail(res, 400, "Informe o motivo do ajuste (5 a 250 caracteres).");
+  db.transaction(() => {
+    db.prepare("UPDATE appointments SET commission_percent = ?, house_share_percent = ? WHERE id = ? AND tenant_id = ?")
+      .run(percentage, house, appointment.id, tenant(req));
+    db.prepare(`INSERT INTO commission_adjustments (id, tenant_id, appointment_id, changed_by,
+      old_percent, new_percent, old_house_percent, new_house_percent, reason)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(createId(), tenant(req), appointment.id, req.user.id,
+        appointment.commissionPercent, percentage, appointment.houseSharePercent, house, reason);
+  })();
+  res.json({ ok: true, earnedCents: commissionCents({
+    priceCents: db.prepare("SELECT price_cents FROM appointments WHERE id = ?").get(appointment.id).price_cents,
+    commissionPercent: percentage, houseSharePercent: house,
+  }) });
+});
+
 app.post("/api/commissions/:id/pay", requireAuth, allowRoles("dono"), (req, res) => {
   const row = db.prepare(`SELECT id, professional_id AS professionalId,
-    price_cents AS priceCents, commission_percent AS commissionPercent
+    price_cents AS priceCents, commission_percent AS commissionPercent,
+    house_share_percent AS houseSharePercent
     FROM appointments WHERE id = ? AND tenant_id = ? AND status = 'concluido'`)
     .get(req.params.id, tenant(req));
   if (!row) return fail(res, 404, "Serviço concluído não encontrado.");
@@ -932,7 +1007,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
   }
   const chosen = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      u.commission_percent AS commission
+      u.commission_percent AS commission, s.house_share_percent AS houseShare
     FROM services s
     JOIN professional_services ps ON ps.service_id = s.id AND ps.tenant_id = s.tenant_id
     JOIN users u ON u.id = ps.professional_id AND u.tenant_id = s.tenant_id
@@ -957,10 +1032,10 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
     db.prepare(`
       INSERT INTO appointments
         (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at,
-         price_cents, commission_percent, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         price_cents, commission_percent, house_share_percent, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, tenant(req), resolvedClientId, professionalId, serviceId, normalizedStart, endsAt,
-      chosen.price, chosen.commission, String(req.body?.notes ?? "").trim());
+      chosen.price, chosen.commission, chosen.houseShare, String(req.body?.notes ?? "").trim());
     return true;
   });
   if (!create()) return;
@@ -1045,9 +1120,9 @@ app.post("/api/blocked-slots", requireAuth, allowRoles("dono", "recepcao", "prof
   if (conflict) return fail(res, 409, "Não é possível bloquear um horário com atendimento agendado.");
   const id = createId();
   db.prepare(`
-    INSERT INTO blocked_slots (id, tenant_id, professional_id, starts_at, ends_at, reason)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(id, tenant(req), professionalId, startsAt, endsAt, String(req.body?.reason ?? "").trim());
+    INSERT INTO blocked_slots (id, tenant_id, professional_id, starts_at, ends_at, reason, created_by_user_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, tenant(req), professionalId, startsAt, endsAt, String(req.body?.reason ?? "").trim(), req.user.id);
   res.status(201).json({ id });
 });
 
@@ -1140,7 +1215,7 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
   const byProfessional = db.prepare(`
     SELECT u.id, u.name, count(a.id) AS count,
       coalesce(sum(a.price_cents), 0) AS revenueCents,
-      coalesce(sum(round(a.price_cents * a.commission_percent / 100)), 0) AS commissionCents
+      coalesce(sum(round(a.price_cents * max(0, a.commission_percent - a.house_share_percent) / 100)), 0) AS commissionCents
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
     WHERE a.tenant_id = ? AND substr(a.starts_at, 1, 7) = ? AND a.status = 'concluido'
     GROUP BY u.id ORDER BY revenueCents DESC
@@ -1274,7 +1349,8 @@ app.post("/api/public/:slug/appointments", (req, res) => {
   const startsAt = String(req.body?.startsAt ?? "");
   if (!validDateTime(startsAt) || !serviceId || !professionalId) return fail(res, 400, "Escolha serviço, profissional e horário.");
   const selected = db.prepare(`
-    SELECT s.duration_minutes AS duration, s.price_cents AS price, u.commission_percent AS commission
+    SELECT s.duration_minutes AS duration, s.price_cents AS price,
+      u.commission_percent AS commission, s.house_share_percent AS houseShare
     FROM services s JOIN professional_services ps ON ps.service_id = s.id AND ps.tenant_id = s.tenant_id
     JOIN users u ON u.id = ps.professional_id AND u.tenant_id = s.tenant_id
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
@@ -1301,10 +1377,10 @@ app.post("/api/public/:slug/appointments", (req, res) => {
     }
     db.prepare(`
       INSERT INTO appointments
-        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent, house_share_percent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, business.id, client.id, professionalId, serviceId, normalizedStart, endsAt,
-      selected.price, selected.commission);
+      selected.price, selected.commission, selected.houseShare);
     return true;
   });
   if (!create()) return;

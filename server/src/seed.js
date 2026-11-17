@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
-const { db, allocateStaffCode } = await import("./database.js");
+const { db, allocateStaffCode, allocateLoginCode } = await import("./database.js");
 
 const tenantId = "tenant-salao-demo";
 const password = process.env.DEMO_PASSWORD ?? "Agenda123!";
@@ -43,9 +43,9 @@ const seed = db.transaction(() => {
   `);
   users.forEach((user) => addUser.run(user.id, tenantId, user.name, user.email, hash,
     user.role, user.phone, user.commission));
-  const assignCode = db.prepare("UPDATE users SET staff_code = ? WHERE id = ? AND tenant_id = ? AND staff_code IS NULL");
+  const assignCode = db.prepare("UPDATE users SET staff_code = ?, login_code = ? WHERE id = ? AND tenant_id = ? AND staff_code IS NULL");
   for (const user of users.filter(user => user.role === "profissional")) {
-    assignCode.run(allocateStaffCode(tenantId), user.id, tenantId);
+    assignCode.run(allocateStaffCode(tenantId), allocateLoginCode(), user.id, tenantId);
   }
 
   const services = [
