@@ -287,6 +287,7 @@ const navItems = [
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços e equipe", icon: Scissors },
   { to: "/financeiro", label: "Financeiro e relatórios", icon: Wallet },
+  { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/configuracoes", label: "Configurações", icon: Settings },
   { to: "/minha-conta", label: "Minha conta", icon: ShieldCheck },
 ];
@@ -296,7 +297,7 @@ function Shell({ user, onLogout, children }) {
   const location = useLocation();
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
   const visibleNavItems = navItems.filter((item) =>
-    user.role === "dono" || !["/financeiro", "/configuracoes"].includes(item.to));
+    user.role === "dono" || !["/financeiro", "/recebimentos", "/configuracoes"].includes(item.to));
   useEffect(() => {
     api("/settings").then(({ settings }) => settings?.businessName && setBusinessName(settings.businessName)).catch(() => {});
   }, [location.pathname]);
@@ -336,6 +337,10 @@ function Shell({ user, onLogout, children }) {
         </div>
       </aside>
       <div className="main-column">
+        {user.tenantId === "tenant-salao-demo" && <div role="status" style={{
+          padding: "12px 20px", background: "#FEF3C7", color: "#92400E", fontWeight: 600,
+          fontSize: 13, borderBottom: "1px solid #F59E0B",
+        }}>Ambiente demonstrativo · somente visualização. Para cadastrar, alterar e receber pagamentos, utilize uma conta comercial.</div>}
         <header className="topbar">
           <button className="icon-button mobile-menu-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menu"><Menu size={21} /></button>
           <div className="topbar-breadcrumb"><span>Studio</span><ChevronRight size={14} /><b>{pageName}</b></div>
@@ -832,6 +837,71 @@ function ServicesPage({ user }) {
   </>;
 }
 
+function ReceivablesPage({ user }) {
+  const [month, setMonth] = useState(localDate().slice(0, 7));
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [method, setMethod] = useState("pix");
+  const refresh = useCallback(() =>
+    api(`/receivables?month=${encodeURIComponent(month)}`)
+      .then(data => setItems(data.receivables))
+      .catch(reason => setError(reason.message)), [month]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const pending = items.filter(item => !item.paid);
+  const paid = items.filter(item => item.paid);
+  const total = (rows) => rows.reduce((sum, item) => sum + item.priceCents, 0);
+  const receive = async (item) => {
+    setBusy(item.id); setError("");
+    try {
+      await api(`/receivables/${item.id}/pay`, { method: "POST", body: { paymentMethod: method } });
+      await refresh();
+    } catch (reason) { setError(reason.message); } finally { setBusy(""); }
+  };
+  return <>
+    <PageTitle eyebrow="CONTROLE DE CAIXA" title="Caixa e recebimentos"
+      description="Separe os serviços realizados dos pagamentos efetivamente registrados." />
+    <div className="month-filter"><label htmlFor="cash-month">Mês de referência</label>
+      <input id="cash-month" className="input month-input" type="month" value={month}
+        onChange={e => setMonth(e.target.value)} /></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <section className="stats-grid finance-stats">
+      <StatCard title="Recebido" value={money(total(paid))} note="Serviços com pagamento registrado" icon={Wallet} tone="green" />
+      <StatCard title="A receber" value={money(total(pending))} note={`${pending.length} atendimento(s) pendente(s)`} icon={Clock3} tone="orange" />
+      <StatCard title="Concluídos" value={items.length} note="No período selecionado" icon={CheckCheck} tone="blue" />
+    </section>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><p className="eyebrow">RECEBIMENTOS PENDENTES</p><h2>Registrar recebimento</h2>
+        <p className="panel-subtitle">O sistema não registra pagamentos automaticamente ao concluir um atendimento.</p></div>
+        <select className="input" style={{ maxWidth: 200 }} aria-label="Forma de recebimento" value={method}
+          onChange={event => setMethod(event.target.value)}>
+          {Object.entries(paymentNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+        </select>
+      </div>
+      {pending.length ? <div className="management-list">{pending.map(item =>
+        <article className="service-row" key={item.id}>
+          <span className="service-row-icon"><CircleDollarSign size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
+            <small>{dateTimeLabel(item.startsAt)} · {item.professionalName}</small></div>
+          <strong>{money(item.priceCents)}</strong>
+          <Button disabled={busy === item.id || user.tenantId === "tenant-salao-demo"}
+            onClick={() => receive(item)}>{busy === item.id ? "Registrando..." : "Receber"}</Button>
+        </article>)}</div> :
+        <p className="report-empty">Nenhum recebimento pendente neste período.</p>}
+    </section>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><p className="eyebrow">HISTÓRICO</p><h2>Pagamentos registrados</h2></div></div>
+      {paid.length ? <div className="management-list">{paid.map(item =>
+        <article className="service-row" key={item.id}>
+          <span className="service-row-icon"><Check size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
+            <small>{dateTimeLabel(item.startsAt)} · {paymentNames[item.paymentMethod] || item.paymentMethod}</small></div>
+          <strong>{money(item.priceCents)}</strong>
+        </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
+    </section>
+  </>;
+}
+
 function FinancePage() {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [report, setReport] = useState(null);
@@ -853,7 +923,8 @@ function FinancePage() {
     <div className="month-filter"><label htmlFor="report-month">Mês de referência</label><input id="report-month" className="input month-input" type="month" value={month} onChange={(e) => setMonth(e.target.value)} /></div>
     <ErrorMessage>{error}</ErrorMessage>
     <section className="stats-grid finance-stats">
-      <StatCard title="Faturamento recebido" value={money(report?.revenueCents)} note="Atendimentos concluídos" icon={CircleDollarSign} tone="green" />
+      <StatCard title="Faturamento recebido" value={money(report?.revenueCents)} note="Atendimentos concluídos e pagos" icon={CircleDollarSign} tone="green" />
+      <StatCard title="A receber" value={money(report?.pendingCents)} note="Serviços concluídos sem pagamento" icon={Clock3} tone="orange" />
       <StatCard title="Atendimentos concluídos" value={report?.completedCount ?? "—"} note="Neste mês" icon={CheckCheck} tone="blue" />
       <StatCard title="Serviços realizados" value={report?.byService?.length ?? "—"} note="Com pelo menos um atendimento" icon={Scissors} tone="purple" />
       <StatCard title="Clientes para reativar" value={report?.inactiveClients?.length ?? "—"} note="Sem voltar há 30 dias ou mais" icon={Users} tone="orange" />
@@ -915,7 +986,7 @@ function SettingsPage() {
           {hour.opensAt && <><input className="input hours-input" type="time" value={hour.opensAt} onChange={(e) => updateHour(hour.weekday, "opensAt", e.target.value)} />
             <span>às</span><input className="input hours-input" type="time" value={hour.closesAt} onChange={(e) => updateHour(hour.weekday, "closesAt", e.target.value)} /></>}
         </div>)}</div>
-        <div className="public-url-card"><span className="shortcut-icon blue"><ExternalLink size={17} /></span><span><b>Sua página de agendamento</b><small>simplifica.local/agendar/studio-bela-vista</small></span><Link to="/agendar/studio-bela-vista" target="_blank" className="text-link"><ArrowRight size={16} /></Link></div>
+        <div className="public-url-card"><span className="shortcut-icon blue"><ExternalLink size={17} /></span><span><b>Sua página de agendamento</b><small>Abra a página pública do seu estabelecimento pelo menu lateral.</small></span></div>
       </section>
       <div className="settings-save"><ErrorMessage>{error}</ErrorMessage><span className="success-message">{message}</span><Button><Check size={16} /> Salvar configurações</Button></div>
     </form>
@@ -1024,6 +1095,7 @@ export default function App() {
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={<ServicesPage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
+      <Route path="/recebimentos" element={user.role === "dono" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
       <Route path="/configuracoes" element={user.role === "dono" ? <SettingsPage /> : <AccessDenied />} />
       <Route path="/minha-conta" element={<AccountPage user={user} onUserUpdated={setUser} />} />
       <Route path="*" element={<OverviewPage user={user} />} />
