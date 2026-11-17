@@ -1552,6 +1552,37 @@ app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao")
 
 
 
+
+app.get("/api/cash/unreconciled", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, a.price_cents AS priceCents,
+    a.payment_method AS paymentMethod, c.name AS clientName, u.name AS professionalName
+    FROM appointments a
+    JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
+    JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
+    WHERE a.tenant_id = ? AND a.status = 'concluido' AND a.payment_method != '' AND a.paid_on IS NULL
+    ORDER BY a.starts_at DESC LIMIT 300`).all(tenant(req));
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ receipts: rows });
+});
+app.post("/api/cash/reconcile/:id", requireAuth, allowRoles("dono"), (req, res) => {
+  const date = String(req.body?.date ?? "");
+  if (!validCashDate(date) || date > cashDay(tenant(req)))
+    return fail(res, 400, "Selecione a data verdadeira do recebimento.");
+  const before = auditSnapshot(tenant(req), req.params.id);
+  const changed = db.transaction(() => {
+    if (cashClosing(tenant(req), date)) return "closed";
+    const result = db.prepare(`UPDATE appointments SET paid_on = ?, payment_reconciled_by = ?
+      WHERE id = ? AND tenant_id = ? AND status = 'concluido'
+        AND payment_method != '' AND paid_on IS NULL`).run(date, req.user.id, req.params.id, tenant(req));
+    if (!result.changes) return "missing";
+    recordAppointmentAudit(tenant(req), req.params.id, "conciliacao", req.user, before);
+    return "ok";
+  })();
+  if (changed === "closed") return fail(res, 409, "A data selecionada possui caixa fechado.");
+  if (changed !== "ok") return fail(res, 409, "Recebimento já conciliado ou não encontrado.");
+  res.json({ ok: true, paidOn: date });
+});
+
 app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const date = String(req.query.date ?? cashDay(tenant(req)));
   if (!validCashDate(date)) return fail(res, 400, "Data inválida.");
@@ -1608,7 +1639,7 @@ app.get("/api/reports/appointment-audit", requireAuth, allowRoles("dono"), (req,
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const action = String(req.query.action ?? "").trim();
-  const permitted = ["criacao", "confirmacao", "cancelamento", "remarcacao", "conclusao", "pagamento", "status", "edicao", "comissao"];
+  const permitted = ["criacao", "confirmacao", "cancelamento", "remarcacao", "conclusao", "pagamento", "conciliacao", "status", "edicao", "comissao"];
   if (action && !permitted.includes(action)) return fail(res, 400, "Ação inválida.");
   const rows = db.prepare(`
     SELECT audit.id, audit.appointment_id AS appointmentId, audit.actor_name AS actorName,
