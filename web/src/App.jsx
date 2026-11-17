@@ -110,8 +110,8 @@ function ErrorMessage({ children }) {
   return children ? <p className="form-error" role="alert">{children}</p> : null;
 }
 
-function Login({ onLogin }) {
-  const [values, setValues] = useState({ email: "admin@simplifica.local", password: "Agenda123!", slug: "" });
+function Login({ onLogin, demoEnabled = false }) {
+  const [values, setValues] = useState({ email: demoEnabled ? "admin@simplifica.local" : "", password: demoEnabled ? "Agenda123!" : "", slug: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const submit = async (event) => {
@@ -148,11 +148,13 @@ function Login({ onLogin }) {
             {loading ? "Entrando..." : "Entrar na minha agenda"}
           </Button>
         </form>
-        <div className="demo-hint">
-          <Sparkles size={16} />
-          <span>Demonstração: <strong>admin@simplifica.local</strong> · <strong>Agenda123!</strong></span>
-        </div>
-        <Link to="/agendar/studio-bela-vista" className="login-public-link">Ver página pública de agendamento <ArrowRight size={15} /></Link>
+        {demoEnabled && <>
+          <div className="demo-hint">
+            <Sparkles size={16} />
+            <span>Demonstração: <strong>admin@simplifica.local</strong> · <strong>Agenda123!</strong></span>
+          </div>
+          <Link to="/agendar/studio-bela-vista" className="login-public-link">Ver página pública de agendamento <ArrowRight size={15} /></Link>
+        </>}
       </section>
       <div className="login-decoration">
         <div className="login-decoration-inner">
@@ -166,6 +168,115 @@ function Login({ onLogin }) {
   );
 }
 
+function InstallationSetup({ onReady }) {
+  const [form, setForm] = useState({
+    businessName: "", slug: "", ownerName: "", ownerEmail: "", password: "", installToken: "",
+  });
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const submit = async (event) => {
+    event.preventDefault();
+    setError("");
+    setSaving(true);
+    try {
+      await api("/installation/setup", { method: "POST", body: form });
+      onReady();
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <main className="login-page">
+      <section className="login-card" style={{ maxWidth: 540 }}>
+        <img className="login-logo" src="/assets/simplifica-logo.svg" alt="Simplifica Agenda" />
+        <p className="eyebrow">PRIMEIRO ACESSO</p>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Configure seu comércio</h1>
+        <p className="mt-2 mb-6 text-sm text-slate-500">Cadastre o negócio e crie a conta administradora. Nenhum dado demonstrativo será adicionado.</p>
+        <form className="space-y-4" onSubmit={submit}>
+          <Field label="Nome do comércio" required maxLength={120} value={form.businessName}
+            onChange={(e) => setForm({ ...form, businessName: e.target.value })} />
+          <Field label="Identificador do negócio" required placeholder="ex.: minha-barbearia" pattern="[a-z0-9]+(-[a-z0-9]+)*"
+            maxLength={80} value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value.toLowerCase() })} />
+          <Field label="Nome do administrador" required maxLength={120} value={form.ownerName}
+            onChange={(e) => setForm({ ...form, ownerName: e.target.value })} />
+          <Field label="E-mail do administrador" type="email" required value={form.ownerEmail}
+            onChange={(e) => setForm({ ...form, ownerEmail: e.target.value })} />
+          <Field label="Senha do administrador (mínimo 12 caracteres)" type="password" required minLength={12} autoComplete="new-password"
+            value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <Field label="Código de instalação fornecido pelo técnico" type="password" required autoComplete="off"
+            value={form.installToken} onChange={(e) => setForm({ ...form, installToken: e.target.value })} />
+          <ErrorMessage>{error}</ErrorMessage>
+          <Button className="w-full justify-center" type="submit" disabled={saving}>
+            {saving ? "Configurando..." : "Criar meu comércio"}
+          </Button>
+        </form>
+      </section>
+      <div className="login-decoration">
+        <div className="login-decoration-inner">
+          <span className="decoration-kicker"><span /> SUA ROTINA, MAIS SIMPLES</span>
+          <h2>Comece com sua agenda organizada.</h2>
+          <p>Depois de configurar seu negócio, entre com o e-mail e a senha que você criou.</p>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function AccountPage({ user, onUserUpdated }) {
+  const [values, setValues] = useState({ name: user.name, phone: user.phone || "", currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const submit = async (event) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    if (values.newPassword !== values.confirmPassword) {
+      setError("As novas senhas não coincidem.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const { user: updated } = await api("/account", { method: "PATCH", body: {
+        name: values.name, phone: values.phone,
+        currentPassword: values.currentPassword, newPassword: values.newPassword,
+      } });
+      onUserUpdated(updated);
+      setValues({ ...values, currentPassword: "", newPassword: "", confirmPassword: "" });
+      setMessage("Sua conta foi atualizada. Outras sessões foram encerradas se a senha mudou.");
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return <>
+    <PageTitle eyebrow="SEGURANÇA E PERFIL" title="Minha conta"
+      description="Atualize seus dados de acesso e proteja sua conta." />
+    <section className="panel management-panel" style={{ maxWidth: 620 }}>
+      <div className="panel-heading"><div><h2>Dados e segurança</h2><p className="panel-subtitle">Perfil: {user.role === "dono" ? "Proprietário" : user.role === "recepcao" ? "Recepção" : "Profissional"}</p></div></div>
+      <form className="form-stack" onSubmit={submit} style={{ padding: 24 }}>
+        <Field label="Nome" required maxLength={120} value={values.name}
+          onChange={(e) => setValues({ ...values, name: e.target.value })}/>
+        <Field label="E-mail de acesso" type="email" disabled value={user.email}/>
+        <Field label="Telefone" type="tel" maxLength={40} value={values.phone}
+          onChange={(e) => setValues({ ...values, phone: e.target.value })}/>
+        <Field label="Senha atual (necessária para salvar)" type="password" required autoComplete="current-password"
+          value={values.currentPassword} onChange={(e) => setValues({ ...values, currentPassword: e.target.value })}/>
+        <Field label="Nova senha (opcional, mínimo 12 caracteres)" type="password" minLength={12} autoComplete="new-password"
+          value={values.newPassword} onChange={(e) => setValues({ ...values, newPassword: e.target.value })}/>
+        <Field label="Confirmar nova senha" type="password" autoComplete="new-password"
+          value={values.confirmPassword} onChange={(e) => setValues({ ...values, confirmPassword: e.target.value })}/>
+        <ErrorMessage>{error}</ErrorMessage>
+        {message && <p className="success-message" role="status">{message}</p>}
+        <Button disabled={saving}>{saving ? "Salvando..." : "Salvar minha conta"}</Button>
+      </form>
+    </section>
+  </>;
+}
+
 function CalendarCheckDecoration() {
   return <span className="deco-calendar"><CalendarDays size={23} /><Check size={12} /></span>;
 }
@@ -176,7 +287,9 @@ const navItems = [
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços e equipe", icon: Scissors },
   { to: "/financeiro", label: "Financeiro e relatórios", icon: Wallet },
+  { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/configuracoes", label: "Configurações", icon: Settings },
+  { to: "/minha-conta", label: "Minha conta", icon: ShieldCheck },
 ];
 
 function Shell({ user, onLogout, children }) {
@@ -184,7 +297,7 @@ function Shell({ user, onLogout, children }) {
   const location = useLocation();
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
   const visibleNavItems = navItems.filter((item) =>
-    user.role === "dono" || !["/financeiro", "/configuracoes"].includes(item.to));
+    user.role === "dono" || !["/financeiro", "/recebimentos", "/configuracoes"].includes(item.to));
   useEffect(() => {
     api("/settings").then(({ settings }) => settings?.businessName && setBusinessName(settings.businessName)).catch(() => {});
   }, [location.pathname]);
@@ -199,7 +312,7 @@ function Shell({ user, onLogout, children }) {
         </Link>
         <div className="business-switcher">
           <span className="business-avatar">{businessName.slice(0, 1)}</span>
-          <span className="min-w-0 flex-1"><b>{businessName}</b><small>Plano demonstração</small></span>
+          <span className="min-w-0 flex-1"><b>{businessName}</b><small>{user.slug === "studio-bela-vista" ? "Ambiente de demonstração" : "Meu negócio"}</small></span>
           <ChevronDown size={15} className="text-slate-400" />
         </div>
         <nav className="sidebar-nav" aria-label="Navegação principal">
@@ -212,7 +325,7 @@ function Shell({ user, onLogout, children }) {
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <Link className="public-link" to="/agendar/studio-bela-vista" target="_blank">
+          <Link className="public-link" to={`/agendar/${encodeURIComponent(user.slug || "studio-bela-vista")}`} target="_blank">
             <ExternalLink size={16} /><span><b>Agendamento online</b><small>Veja a página pública</small></span>
             <ArrowRight size={15} />
           </Link>
@@ -224,6 +337,10 @@ function Shell({ user, onLogout, children }) {
         </div>
       </aside>
       <div className="main-column">
+        {user.tenantId === "tenant-salao-demo" && <div role="status" style={{
+          padding: "12px 20px", background: "#FEF3C7", color: "#92400E", fontWeight: 600,
+          fontSize: 13, borderBottom: "1px solid #F59E0B",
+        }}>Ambiente demonstrativo · somente visualização. Para cadastrar, alterar e receber pagamentos, utilize uma conta comercial.</div>}
         <header className="topbar">
           <button className="icon-button mobile-menu-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menu"><Menu size={21} /></button>
           <div className="topbar-breadcrumb"><span>Studio</span><ChevronRight size={14} /><b>{pageName}</b></div>
@@ -620,7 +737,7 @@ function TeamMemberForm({ services, onClose, onSaved }) {
     <form className="form-stack" onSubmit={submit}>
       <Field label="Nome" required value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
       <Field label="E-mail de acesso" type="email" required value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} />
-      <Field label="Senha inicial" type="password" minLength="8" required value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} />
+      <Field label="Senha inicial" type="password" minLength="12" required value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} />
       <SelectField label="Perfil de acesso" value={values.role} onChange={(e) => setValues({ ...values, role: e.target.value })}>
         <option value="profissional">Profissional</option><option value="recepcao">Recepção</option>
       </SelectField>
@@ -666,6 +783,8 @@ function ServicesPage({ user }) {
   const [team, setTeam] = useState([]);
   const [modal, setModal] = useState("");
   const [hoursFor, setHoursFor] = useState(null);
+  const [passwordFor, setPasswordFor] = useState(null);
+  const [resetPassword, setResetPassword] = useState("");
   const [error, setError] = useState("");
   const refresh = useCallback(() => Promise.all([
     api("/services"),
@@ -691,6 +810,7 @@ function ServicesPage({ user }) {
           <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.email} · {person.role === "profissional" ? `Comissão ${person.commissionPercent}%` : "Recepção"}</small></div>
           {person.active ? <span className="status-badge bg-emerald-50 text-emerald-700">Ativa</span> : <span className="status-badge bg-slate-100 text-slate-500">Inativa</span>}
           {user.role === "dono" && person.role === "profissional" && <button className="button button-quiet" onClick={() => setHoursFor(person)}>Horários</button>}
+          {user.role === "dono" && <button className="button button-quiet" onClick={() => { setPasswordFor(person); setResetPassword(""); }}>Redefinir senha</button>}
           {user.role === "dono" && <button className="icon-button compact" onClick={async () => {
             try { await api(`/team-members/${person.id}`, { method: "PATCH", body: { name: person.name, phone: person.phone, commissionPercent: person.commissionPercent, active: !person.active } }); refresh(); }
             catch (reason) { setError(reason.message); }
@@ -700,6 +820,85 @@ function ServicesPage({ user }) {
     {modal === "team" && <TeamMemberForm services={services} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {(modal === "service" || modal?.id) && <ServiceForm service={modal?.id ? modal : null} professionals={professionals} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {hoursFor && <TeamHours professional={hoursFor} onClose={() => { setHoursFor(null); refresh(); }} />}
+    {passwordFor && <Modal title={`Redefinir senha de ${passwordFor.name}`} onClose={() => setPasswordFor(null)}>
+      <form className="form-stack" onSubmit={async (event) => {
+        event.preventDefault();
+        try {
+          await api(`/team-members/${passwordFor.id}/reset-password`, { method: "POST", body: { password: resetPassword } });
+          setPasswordFor(null); setResetPassword(""); setError("");
+        } catch (reason) { setError(reason.message); }
+      }}>
+        <p className="panel-subtitle">Ao salvar, as sessões atuais deste funcionário serão encerradas. Informe a nova senha em um canal seguro.</p>
+        <Field label="Nova senha (mínimo 12 caracteres)" type="password" minLength={12} required
+          value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
+        <Button>Redefinir senha</Button>
+      </form>
+    </Modal>}
+  </>;
+}
+
+function ReceivablesPage({ user }) {
+  const [month, setMonth] = useState(localDate().slice(0, 7));
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState("");
+  const [method, setMethod] = useState("pix");
+  const refresh = useCallback(() =>
+    api(`/receivables?month=${encodeURIComponent(month)}`)
+      .then(data => setItems(data.receivables))
+      .catch(reason => setError(reason.message)), [month]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const pending = items.filter(item => !item.paid);
+  const paid = items.filter(item => item.paid);
+  const total = (rows) => rows.reduce((sum, item) => sum + item.priceCents, 0);
+  const receive = async (item) => {
+    setBusy(item.id); setError("");
+    try {
+      await api(`/receivables/${item.id}/pay`, { method: "POST", body: { paymentMethod: method } });
+      await refresh();
+    } catch (reason) { setError(reason.message); } finally { setBusy(""); }
+  };
+  return <>
+    <PageTitle eyebrow="CONTROLE DE CAIXA" title="Caixa e recebimentos"
+      description="Separe os serviços realizados dos pagamentos efetivamente registrados." />
+    <div className="month-filter"><label htmlFor="cash-month">Mês de referência</label>
+      <input id="cash-month" className="input month-input" type="month" value={month}
+        onChange={e => setMonth(e.target.value)} /></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <section className="stats-grid finance-stats">
+      <StatCard title="Recebido" value={money(total(paid))} note="Serviços com pagamento registrado" icon={Wallet} tone="green" />
+      <StatCard title="A receber" value={money(total(pending))} note={`${pending.length} atendimento(s) pendente(s)`} icon={Clock3} tone="orange" />
+      <StatCard title="Concluídos" value={items.length} note="No período selecionado" icon={CheckCheck} tone="blue" />
+    </section>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><p className="eyebrow">RECEBIMENTOS PENDENTES</p><h2>Registrar recebimento</h2>
+        <p className="panel-subtitle">O sistema não registra pagamentos automaticamente ao concluir um atendimento.</p></div>
+        <select className="input" style={{ maxWidth: 200 }} aria-label="Forma de recebimento" value={method}
+          onChange={event => setMethod(event.target.value)}>
+          {Object.entries(paymentNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+        </select>
+      </div>
+      {pending.length ? <div className="management-list">{pending.map(item =>
+        <article className="service-row" key={item.id}>
+          <span className="service-row-icon"><CircleDollarSign size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
+            <small>{dateTimeLabel(item.startsAt)} · {item.professionalName}</small></div>
+          <strong>{money(item.priceCents)}</strong>
+          <Button disabled={busy === item.id || user.tenantId === "tenant-salao-demo"}
+            onClick={() => receive(item)}>{busy === item.id ? "Registrando..." : "Receber"}</Button>
+        </article>)}</div> :
+        <p className="report-empty">Nenhum recebimento pendente neste período.</p>}
+    </section>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><p className="eyebrow">HISTÓRICO</p><h2>Pagamentos registrados</h2></div></div>
+      {paid.length ? <div className="management-list">{paid.map(item =>
+        <article className="service-row" key={item.id}>
+          <span className="service-row-icon"><Check size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
+            <small>{dateTimeLabel(item.startsAt)} · {paymentNames[item.paymentMethod] || item.paymentMethod}</small></div>
+          <strong>{money(item.priceCents)}</strong>
+        </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
+    </section>
   </>;
 }
 
@@ -724,7 +923,8 @@ function FinancePage() {
     <div className="month-filter"><label htmlFor="report-month">Mês de referência</label><input id="report-month" className="input month-input" type="month" value={month} onChange={(e) => setMonth(e.target.value)} /></div>
     <ErrorMessage>{error}</ErrorMessage>
     <section className="stats-grid finance-stats">
-      <StatCard title="Faturamento recebido" value={money(report?.revenueCents)} note="Atendimentos concluídos" icon={CircleDollarSign} tone="green" />
+      <StatCard title="Faturamento recebido" value={money(report?.revenueCents)} note="Atendimentos concluídos e pagos" icon={CircleDollarSign} tone="green" />
+      <StatCard title="A receber" value={money(report?.pendingCents)} note="Serviços concluídos sem pagamento" icon={Clock3} tone="orange" />
       <StatCard title="Atendimentos concluídos" value={report?.completedCount ?? "—"} note="Neste mês" icon={CheckCheck} tone="blue" />
       <StatCard title="Serviços realizados" value={report?.byService?.length ?? "—"} note="Com pelo menos um atendimento" icon={Scissors} tone="purple" />
       <StatCard title="Clientes para reativar" value={report?.inactiveClients?.length ?? "—"} note="Sem voltar há 30 dias ou mais" icon={Users} tone="orange" />
@@ -786,7 +986,7 @@ function SettingsPage() {
           {hour.opensAt && <><input className="input hours-input" type="time" value={hour.opensAt} onChange={(e) => updateHour(hour.weekday, "opensAt", e.target.value)} />
             <span>às</span><input className="input hours-input" type="time" value={hour.closesAt} onChange={(e) => updateHour(hour.weekday, "closesAt", e.target.value)} /></>}
         </div>)}</div>
-        <div className="public-url-card"><span className="shortcut-icon blue"><ExternalLink size={17} /></span><span><b>Sua página de agendamento</b><small>simplifica.local/agendar/studio-bela-vista</small></span><Link to="/agendar/studio-bela-vista" target="_blank" className="text-link"><ArrowRight size={16} /></Link></div>
+        <div className="public-url-card"><span className="shortcut-icon blue"><ExternalLink size={17} /></span><span><b>Sua página de agendamento</b><small>Abra a página pública do seu estabelecimento pelo menu lateral.</small></span></div>
       </section>
       <div className="settings-save"><ErrorMessage>{error}</ErrorMessage><span className="success-message">{message}</span><Button><Check size={16} /> Salvar configurações</Button></div>
     </form>
@@ -867,10 +1067,15 @@ function AccessDenied() {
 export default function App() {
   const [user, setUser] = useState(undefined);
   const [loading, setLoading] = useState(true);
+  const [installation, setInstallation] = useState(null);
   const location = useLocation();
   useEffect(() => {
     if (location.pathname.startsWith("/agendar/")) { setLoading(false); return; }
-    api("/auth/me").then(({ user: current }) => setUser(current)).catch(() => setUser(null)).finally(() => setLoading(false));
+    Promise.all([
+      api("/installation/status"),
+      api("/auth/me").then(({ user: current }) => current).catch(() => null),
+    ]).then(([status, current]) => { setInstallation(status); setUser(current); })
+      .catch(() => setUser(null)).finally(() => setLoading(false));
   }, [location.pathname]);
   useEffect(() => {
     api("/settings").then(({ settings }) => document.documentElement.classList.toggle("dark", settings?.theme === "escuro")).catch(() => {});
@@ -880,7 +1085,8 @@ export default function App() {
     return <PublicBooking slug={slug} />;
   }
   if (loading) return <div className="app-loading"><img src="/assets/simplifica-perfil.svg" alt="" /><Loading /></div>;
-  if (!user) return <Login onLogin={setUser} />;
+  if (installation?.needsSetup) return <InstallationSetup onReady={() => { setInstallation({ needsSetup: false, demoEnabled: false }); setUser(null); }} />;
+  if (!user) return <Login key={String(installation?.demoEnabled)} onLogin={setUser} demoEnabled={installation?.demoEnabled} />;
   const logout = async () => { await api("/auth/logout", { method: "POST" }); setUser(null); };
   return <Shell user={user} onLogout={logout}>
     <Routes>
@@ -889,7 +1095,9 @@ export default function App() {
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={<ServicesPage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
+      <Route path="/recebimentos" element={user.role === "dono" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
       <Route path="/configuracoes" element={user.role === "dono" ? <SettingsPage /> : <AccessDenied />} />
+      <Route path="/minha-conta" element={<AccountPage user={user} onUserUpdated={setUser} />} />
       <Route path="*" element={<OverviewPage user={user} />} />
     </Routes>
   </Shell>;

@@ -151,9 +151,124 @@ function appointmentRows(tenantId, where = "", params = []) {
   `).all(tenantId, ...params);
 }
 
+// Lightweight per-process protection for login and the installation endpoint.
+// Production clusters should additionally rate-limit at the reverse proxy.
+const accessAttempts = new Map();
+function limitAttempts(name, max, windowMs) {
+  return (req, res, next) => {
+    const key = name + ":" + req.ip;
+    const now = Date.now();
+    if (accessAttempts.size > 5000) {
+      for (const [entryKey, entry] of accessAttempts) {
+        if (entry.resetAt <= now) accessAttempts.delete(entryKey);
+      }
+      if (accessAttempts.size > 5000) accessAttempts.clear();
+    }
+    const record = accessAttempts.get(key);
+    if (!record || record.resetAt <= now) {
+      accessAttempts.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    if (record.count >= max) {
+      res.setHeader("Retry-After", String(Math.ceil((record.resetAt - now) / 1000)));
+      return fail(res, 429, "Muitas tentativas. Tente novamente mais tarde.");
+    }
+    record.count += 1;
+    next();
+  };
+}
+
+// Reject cross-origin browser writes. No external service needs to call these endpoints.
+app.use("/api", (req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  const origin = req.get("Origin");
+  if (!origin) return next();
+  const forwardedHost = req.get("X-Forwarded-Host");
+  const expectedHost = req.get("Host");
+  const allowedHosts = [expectedHost, forwardedHost].filter(Boolean);
+  let url;
+  try { url = new URL(origin); } catch { return fail(res, 403, "Origem inválida."); }
+  if (!["http:", "https:"].includes(url.protocol) || !allowedHosts.includes(url.host)) {
+    return fail(res, 403, "Origem não autorizada.");
+  }
+  next();
+});
+
+// The demonstration tenant is strictly read-only; presentation data stays intact.
+const DEMO_TENANT_ID = "tenant-salao-demo";
+const isDemoTenant = (tenantId) => tenantId === DEMO_TENANT_ID;
+app.use("/api", (req, res, next) => {
+  if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  if (req.path.startsWith("/auth/") || req.path.startsWith("/installation/")) return next();
+  if (req.session?.user && isDemoTenant(req.session.user.tenantId)) {
+    return fail(res, 403, "A demonstração é somente leitura. Entre com uma conta comercial para salvar alterações.");
+  }
+  next();
+});
+
+// Installation is only possible while the database has no businesses.
+const demoEnabled = process.env.DEMO_MODE === "true"
+  || (process.env.NODE_ENV !== "production" && process.env.DEMO_MODE !== "false");
+app.get("/api/installation/status", (_req, res) => {
+  const configured = Boolean(db.prepare("SELECT 1 FROM tenants LIMIT 1").get());
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ needsSetup: !configured, demoEnabled });
+});
+
+app.post("/api/installation/setup", limitAttempts("setup", 8, 15 * 60 * 1000), async (req, res) => {
+  if (db.prepare("SELECT 1 FROM tenants LIMIT 1").get()) {
+    return fail(res, 409, "A instalação já foi configurada.");
+  }
+  const expectedToken = process.env.INSTALL_TOKEN;
+  if (!expectedToken || expectedToken.length < 32) {
+    return fail(res, 503, "Configure INSTALL_TOKEN com pelo menos 32 caracteres no servidor.");
+  }
+  const token = String(req.body?.installToken ?? "");
+  const expected = Buffer.from(expectedToken);
+  const submitted = Buffer.from(token);
+  if (expected.length !== submitted.length || !crypto.timingSafeEqual(expected, submitted)) {
+    return fail(res, 403, "Código de instalação inválido.");
+  }
+  const businessName = requiredText(req.body?.businessName, "Nome do comércio", 120);
+  const ownerName = requiredText(req.body?.ownerName, "Nome do responsável", 120);
+  const ownerEmail = requiredText(req.body?.ownerEmail, "E-mail", 200).toLowerCase();
+  const password = String(req.body?.password ?? "");
+  const slug = String(req.body?.slug ?? "").trim().toLowerCase();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) || slug.length > 80) {
+    return fail(res, 400, "Identificador inválido. Use letras minúsculas, números e hífens.");
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) return fail(res, 400, "E-mail inválido.");
+  if (password.length < 12 || password.length > 200) {
+    return fail(res, 400, "Use uma senha de 12 a 200 caracteres.");
+  }
+  const passwordHash = await bcrypt.hash(password, 12);
+  const businessId = createId();
+  const ownerId = createId();
+  const days = [
+    [0, null, null], [1, "09:00", "18:00"], [2, "09:00", "18:00"],
+    [3, "09:00", "18:00"], [4, "09:00", "18:00"], [5, "09:00", "18:00"],
+    [6, "09:00", "13:00"],
+  ];
+  try {
+    db.transaction(() => {
+      if (db.prepare("SELECT 1 FROM tenants LIMIT 1").get()) throw new Error("already-configured");
+      db.prepare("INSERT INTO tenants (id, name, slug) VALUES (?, ?, ?)").run(businessId, businessName, slug);
+      db.prepare("INSERT INTO business_settings (tenant_id, business_name) VALUES (?, ?)").run(businessId, businessName);
+      db.prepare("INSERT INTO users (id, tenant_id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?, 'dono')")
+        .run(ownerId, businessId, ownerName, ownerEmail, passwordHash);
+      const insertHour = db.prepare("INSERT INTO business_hours (tenant_id, weekday, opens_at, closes_at) VALUES (?, ?, ?, ?)");
+      days.forEach(([day, opens, closes]) => insertHour.run(businessId, day, opens, closes));
+    })();
+  } catch (error) {
+    if (error.message === "already-configured") return fail(res, 409, "Instalação já configurada.");
+    throw error;
+  }
+  res.status(201).json({ ok: true, slug });
+});
+
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
-app.post("/api/auth/login", async (req, res) => {
+app.post("/api/auth/login", limitAttempts("login", 15, 15 * 60 * 1000), async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   const password = String(req.body?.password ?? "");
   const slug = String(req.body?.slug ?? "").trim().toLowerCase();
@@ -188,6 +303,63 @@ app.post("/api/auth/logout", requireAuth, (req, res, next) => {
     res.clearCookie("simplifica.sid", { httpOnly: true, sameSite: "lax" });
     res.status(204).end();
   });
+});
+
+app.get("/api/account", requireAuth, (req, res) => {
+  const account = db.prepare(`
+    SELECT name, email, phone, role FROM users WHERE id = ? AND tenant_id = ?
+  `).get(req.user.id, req.user.tenantId);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ account });
+});
+
+app.patch("/api/account", requireAuth, async (req, res) => {
+  const user = db.prepare(`SELECT * FROM users WHERE id = ? AND tenant_id = ? AND active = 1`)
+    .get(req.user.id, req.user.tenantId);
+  const currentPassword = String(req.body?.currentPassword ?? "");
+  if (!currentPassword || !(await bcrypt.compare(currentPassword, user.password_hash))) {
+    return fail(res, 403, "Senha atual incorreta.");
+  }
+  const name = requiredText(req.body?.name ?? user.name, "Nome", 120);
+  const phone = String(req.body?.phone ?? user.phone).trim();
+  if (phone.length > 40) return fail(res, 400, "Telefone inválido.");
+  const newPassword = String(req.body?.newPassword ?? "");
+  if (newPassword && (newPassword.length < 12 || newPassword.length > 200)) {
+    return fail(res, 400, "A nova senha deve ter entre 12 e 200 caracteres.");
+  }
+  if (newPassword && newPassword === currentPassword) {
+    return fail(res, 400, "A nova senha precisa ser diferente da atual.");
+  }
+  const hash = newPassword ? await bcrypt.hash(newPassword, 12) : null;
+  db.transaction(() => {
+    db.prepare(`UPDATE users SET name = ?, phone = ?, password_hash = COALESCE(?, password_hash)
+      WHERE id = ? AND tenant_id = ?`).run(name, phone, hash, user.id, user.tenant_id);
+    if (hash) db.prepare("DELETE FROM sessions WHERE user_id = ? AND tenant_id = ? AND sid != ?")
+      .run(user.id, user.tenant_id, req.sessionID);
+  })();
+  const nextUser = { ...req.user, name, phone };
+  req.session.user = nextUser;
+  req.session.save((error) => {
+    if (error) return res.status(500).json({ error: "Não foi possível salvar a sessão." });
+    res.json({ user: nextUser });
+  });
+});
+
+app.post("/api/team-members/:id/reset-password", requireAuth, allowRoles("dono"), async (req, res) => {
+  const member = db.prepare("SELECT id FROM users WHERE id = ? AND tenant_id = ? AND role IN ('profissional', 'recepcao')")
+    .get(req.params.id, tenant(req));
+  if (!member) return fail(res, 404, "Pessoa da equipe não encontrada.");
+  const password = String(req.body?.password ?? "");
+  if (password.length < 12 || password.length > 200) {
+    return fail(res, 400, "A senha deve ter entre 12 e 200 caracteres.");
+  }
+  const hash = await bcrypt.hash(password, 12);
+  db.transaction(() => {
+    db.prepare("UPDATE users SET password_hash = ? WHERE id = ? AND tenant_id = ?")
+      .run(hash, member.id, tenant(req));
+    db.prepare("DELETE FROM sessions WHERE user_id = ? AND tenant_id = ?").run(member.id, tenant(req));
+  })();
+  res.json({ ok: true });
 });
 
 app.get("/api/overview", requireAuth, (req, res) => {
@@ -405,7 +577,7 @@ app.post("/api/team-members", requireAuth, allowRoles("dono"), async (req, res) 
   const password = requiredText(req.body?.password, "Senha", 200);
   const role = req.body?.role;
   if (!["profissional", "recepcao"].includes(role)) return fail(res, 400, "Perfil inválido.");
-  if (password.length < 8) return fail(res, 400, "A senha deve ter pelo menos 8 caracteres.");
+  if (password.length < 12) return fail(res, 400, "A senha deve ter pelo menos 12 caracteres.");
   const commission = role === "profissional" ? Number(req.body?.commissionPercent ?? 0) : 0;
   if (!Number.isFinite(commission) || commission < 0 || commission > 100) return fail(res, 400, "Comissão inválida.");
   const passwordHash = await bcrypt.hash(password, 12);
@@ -600,7 +772,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
       UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?,
         payment_method = ?, price_cents = ?, notes = ?
       WHERE id = ? AND tenant_id = ?
-    `).run(startsAt, endsAt, status, method || (status === "concluido" ? "dinheiro" : ""),
+    `).run(startsAt, endsAt, status, method || "",
       priceCents, req.body?.notes === undefined ? appointment.notes : String(req.body.notes),
       appointment.id, tenant(req));
     return true;
@@ -678,12 +850,35 @@ app.put("/api/settings", requireAuth, allowRoles("dono"), (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
+  if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
+  const rows = appointmentRows(tenant(req), "AND substr(a.starts_at, 1, 7) = ? AND a.status = 'concluido'", [month]);
+  res.json({ month, receivables: rows.map(row => ({
+    id: row.id, clientName: row.clientName, serviceName: row.serviceName, professionalName: row.professionalName,
+    startsAt: row.startsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod,
+    paid: Boolean(row.paymentMethod),
+  })) });
+});
+
+app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const method = String(req.body?.paymentMethod ?? "");
+  if (!paymentMethods.includes(method)) return fail(res, 400, "Informe a forma de pagamento.");
+  const result = db.prepare(`UPDATE appointments SET payment_method = ?
+    WHERE id = ? AND tenant_id = ? AND status = 'concluido' AND payment_method = ''`)
+    .run(method, req.params.id, tenant(req));
+  if (!result.changes) return fail(res, 409, "Atendimento não encontrado, não concluído ou já pago.");
+  res.json({ ok: true });
+});
+
 app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const revenue = db.prepare(`
-    SELECT coalesce(sum(price_cents), 0) AS revenue_cents,
-      count(*) AS completed_count
+    SELECT coalesce(sum(CASE WHEN payment_method != '' THEN price_cents ELSE 0 END), 0) AS revenue_cents,
+      coalesce(sum(CASE WHEN payment_method = '' THEN price_cents ELSE 0 END), 0) AS pending_cents,
+      count(*) AS completed_count,
+      count(*) FILTER (WHERE payment_method = '') AS pending_count
     FROM appointments WHERE tenant_id = ? AND substr(starts_at, 1, 7) = ? AND status = 'concluido'
   `).get(tenant(req), month);
   const byService = db.prepare(`
@@ -708,11 +903,12 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
     HAVING date(max(a.starts_at)) <= date(?, '-30 days')
     ORDER BY lastVisit
   `).all(tenant(req), localNow(tenant(req)).slice(0, 10));
-  res.json({ month, revenueCents: revenue.revenue_cents, completedCount: revenue.completed_count,
+  res.json({ month, revenueCents: revenue.revenue_cents, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,
     byService, byProfessional, inactiveClients });
 });
 
 app.get("/api/export/clients.csv", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  if (isDemoTenant(req.user.tenantId)) return fail(res, 403, "Exportações são exclusivas do ambiente comercial.");
   const clients = db.prepare("SELECT name, phone, email, notes, created_at FROM clients WHERE tenant_id = ? ORDER BY name")
     .all(tenant(req));
   sendCsv(res, "clientes.csv", ["Nome", "Telefone", "E-mail", "Observações", "Cadastro"], clients.map((c) =>
@@ -720,6 +916,7 @@ app.get("/api/export/clients.csv", requireAuth, allowRoles("dono", "recepcao"), 
 });
 
 app.get("/api/export/appointments.csv", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  if (isDemoTenant(req.user.tenantId)) return fail(res, 403, "Exportações são exclusivas do ambiente comercial.");
   const rows = appointmentRows(tenant(req));
   sendCsv(res, "atendimentos.csv",
     ["Data e hora", "Cliente", "Telefone", "Serviço", "Profissional", "Status", "Valor (centavos)", "Pagamento"],
@@ -728,6 +925,10 @@ app.get("/api/export/appointments.csv", requireAuth, allowRoles("dono", "recepca
 });
 
 app.get("/api/export/backup", requireAuth, allowRoles("dono"), async (_req, res, next) => {
+  if (isDemoTenant(_req.user.tenantId)) return fail(res, 403, "Backup indisponível na demonstração.");
+  if (db.prepare("SELECT count(*) AS total FROM tenants").get().total > 1) {
+    return fail(res, 403, "Backup completo indisponível em instalação com vários comércios. Use o procedimento administrativo isolado.");
+  }
   const backupPath = path.join(os.tmpdir(), `simplifica-agenda-${crypto.randomUUID()}.sqlite`);
   try {
     await db.backup(backupPath);
@@ -811,6 +1012,10 @@ app.get("/api/public/:slug/slots", (req, res) => {
 });
 
 app.post("/api/public/:slug/appointments", (req, res) => {
+  if (req.params.slug === "studio-bela-vista") {
+    const demo = db.prepare("SELECT id FROM tenants WHERE slug = ? AND id = ?").get(req.params.slug, DEMO_TENANT_ID);
+    if (demo) return fail(res, 403, "Página demonstrativa: reservas reais estão desativadas.");
+  }
   const business = db.prepare("SELECT id, timezone FROM tenants JOIN business_settings ON business_settings.tenant_id = tenants.id WHERE slug = ?").get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
   const name = requiredText(req.body?.name, "Nome");

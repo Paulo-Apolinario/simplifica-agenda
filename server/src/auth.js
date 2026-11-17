@@ -4,6 +4,7 @@ export function publicUser(user) {
   return {
     id: user.id,
     tenantId: user.tenantId ?? user.tenant_id,
+    slug: user.slug ?? user.businessSlug,
     name: user.name,
     email: user.email,
     role: user.role,
@@ -18,7 +19,7 @@ export function requireAuth(req, res, next) {
     return;
   }
   const activeUser = db.prepare(`
-    SELECT id FROM users WHERE id = ? AND tenant_id = ? AND active = 1
+    SELECT u.*, t.slug FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE u.id = ? AND u.tenant_id = ? AND u.active = 1
   `).get(req.session.user.id, req.session.user.tenantId);
   if (!activeUser) {
     req.session.destroy((error) => {
@@ -27,7 +28,7 @@ export function requireAuth(req, res, next) {
     });
     return;
   }
-  req.user = req.session.user;
+  req.user = publicUser(activeUser);
   next();
 }
 
