@@ -85,7 +85,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .business-switcher span:nth-child(2), .profile-card > div { display: grid; gap: 3px; }
 .business-switcher b, .profile-card b { overflow: hidden; color: #1e293b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .business-switcher small, .profile-card small { color: #94a3b8; font-size: 10px; }
-.sidebar-nav { display: flex; flex-direction: column; gap: 5px; }
+.sidebar-nav {
+  display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; gap: 5px;
+  overflow-y: auto; overflow-x: hidden; scrollbar-width: thin;
+  overscroll-behavior: contain; padding-right: 3px; padding-bottom: 12px;
+}
 .nav-caption, .eyebrow { color: #94a3b8; font-size: 9px; font-weight: 700; letter-spacing: 1.2px; }
 .nav-caption { padding: 0 11px 9px; }
 .nav-link { position: relative; display: flex; min-height: 42px; align-items: center; gap: 11px; border-radius: 9px; padding: 0 11px; color: #64748b; font-size: 12px; font-weight: 500; transition: .15s ease; }
@@ -93,7 +97,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .nav-link-active { background: #eff6ff; color: #2563eb; font-weight: 600; }
 .nav-link-active::before { position: absolute; inset: 9px auto 9px 0; width: 3px; border-radius: 4px; background: #2563eb; content: ""; }
 .nav-notification { display: grid; width: 19px; height: 19px; margin-left: auto; place-items: center; border-radius: 6px; background: #dbeafe; color: #1d4ed8; font-size: 10px; font-weight: 700; }
-.sidebar-bottom { margin-top: auto; }
+.sidebar-bottom { flex: 0 0 auto; margin-top: 0; }
 .public-link { display: flex; align-items: center; gap: 10px; margin: 12px 0; border: 1px solid #dceafe; border-radius: 10px; padding: 10px; color: #2563eb; }
 .public-link > span:nth-child(2) { display: grid; flex: 1; gap: 3px; }
 .public-link b { font-size: 10px; }
