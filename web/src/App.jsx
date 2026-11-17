@@ -1867,13 +1867,16 @@ function PublicRequestPage({ token }) {
           <span><ClipboardCheck size={26}/></span><p className="eyebrow">COMPROVANTE DIGITAL DE SOLICITAÇÃO</p>
           <h2>{info.businessName}</h2><p>Protocolo: <strong>{info.protocol}</strong></p>
           <div className="public-booking-summary">
-            <b>{statusNames[info.status]||info.status}</b>
+            <b>{info.status==="agendado"?"Aguardando confirmação":statusNames[info.status]||info.status}</b>
             <span>Cliente: {info.clientName}</span>
             <span>{info.serviceName} · {info.professionalName}</span>
             <span>{dateTimeLabel(info.startsAt)} · {money(info.priceCents)}</span>
           </div>
           <p>{info.status==="agendado"?"Sua solicitação ainda aguarda confirmação do estabelecimento.":info.status==="confirmado"?"Seu horário foi confirmado pelo estabelecimento.":info.status==="cancelado"?"Esta solicitação foi cancelada.":"Consulte o estabelecimento em caso de dúvidas."}</p>
-          <Button variant="secondary" onClick={()=>window.print()}><Download size={15}/> Imprimir / salvar comprovante</Button>
+          <div className="booking-share-actions">
+            <Button variant="secondary" onClick={refresh}><ArrowRight size={15}/> Atualizar situação</Button>
+            <Button variant="secondary" onClick={()=>window.print()}><Download size={15}/> Imprimir / salvar comprovante</Button>
+          </div>
         </div>
         {info.canManage && <div className="public-reschedule">
           <h3>Remarcar atendimento</h3><p>Escolha uma nova data e um dos horários livres.</p>
