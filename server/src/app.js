@@ -1662,6 +1662,37 @@ app.get("/api/cash/closings/:id/pdf", requireAuth, allowRoles("dono"), (req, res
   res.send(pdf);
 });
 
+
+app.post("/api/cash/movements", requireAuth, allowRoles("dono", "recepcao"), (req,res) => {
+  const type=String(req.body?.type??"");
+  const amount=req.body?.amountCents;
+  const reason=String(req.body?.reason??"").trim();
+  if (!["sangria","suprimento"].includes(type)) return fail(res,400,"Movimentação inválida.");
+  if (!Number.isSafeInteger(amount)||amount<=0||amount>100000000000)
+    return fail(res,400,"Informe um valor positivo em centavos.");
+  if (reason.length<5||reason.length>250) return fail(res,400,"Informe motivo de 5 a 250 caracteres.");
+  const date=cashDay(tenant(req));
+  const outcome=db.transaction(()=>{
+    if(cashClosing(tenant(req),date))return "closed";
+    const opening=cashOpening(tenant(req),date);
+    if(!opening)return "unopened";
+    const summary=cashDaySummary(tenant(req),date);
+    const movements=cashMovements(tenant(req),date);
+    const available=opening.openingCashCents+summary.expectedCashCents
+      +movements.supplyCents-movements.withdrawalCents;
+    if(type==="sangria"&&amount>available)return "insufficient";
+    db.prepare(`INSERT INTO daily_cash_movements
+      (id,tenant_id,cash_date,movement_type,amount_cents,reason,created_by,created_by_name)
+      VALUES (?,?,?,?,?,?,?,?)`).run(createId(),tenant(req),date,type,amount,reason,
+      req.user.id,req.user.name||"Usuário");
+    return "ok";
+  })();
+  if(outcome==="closed")return fail(res,409,"O caixa está fechado.");
+  if(outcome==="unopened")return fail(res,409,"Abra o caixa antes de movimentar dinheiro.");
+  if(outcome==="insufficient")return fail(res,409,"A sangria excede o dinheiro disponível.");
+  res.status(201).json({ok:true});
+});
+
 app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const date = String(req.query.date ?? cashDay(tenant(req)));
   if (!validCashDate(date)) return fail(res, 400, "Data inválida.");
@@ -1670,13 +1701,17 @@ app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, re
     closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
     expected_cash_cents AS expectedCashCents, counted_cash_cents AS countedCashCents,
     difference_cents AS differenceCents, receipt_count AS receiptCount, notes,
-    method_totals_json AS methodsJson, opening_cash_cents AS openingCashCents
+    method_totals_json AS methodsJson, opening_cash_cents AS openingCashCents,
+    supply_cents AS supplyCents, withdrawal_cents AS withdrawalCents
     FROM daily_cash_closings WHERE tenant_id = ? AND cash_date = ?`).get(tenant(req), date);
   res.setHeader("Cache-Control", "no-store");
   const opening = cashOpening(tenant(req), date);
-  res.json({ ...summary, opening, openingCashCents: opening?.openingCashCents ?? 0,
-    expectedDrawerCashCents: (opening?.openingCashCents ?? 0) + summary.expectedCashCents,
-    today: cashDay(tenant(req)), closing: closing ?
+  const movements = cashMovements(tenant(req), date);
+  res.json({ ...summary, opening, movements: movements.rows,
+    supplyCents: movements.supplyCents, withdrawalCents: movements.withdrawalCents,
+    openingCashCents: opening?.openingCashCents ?? 0,
+    expectedDrawerCashCents: (opening?.openingCashCents ?? 0) + summary.expectedCashCents + movements.supplyCents - movements.withdrawalCents,
+    today: cashDay(tenant(req)), cashState: closing ? "closed" : opening ? "open" : "unopened", closing: closing && req.user.role === "dono" ?
     { ...closing, methods: JSON.parse(closing.methodsJson), methodsJson: undefined } : null });
 });
 
@@ -1685,7 +1720,7 @@ app.get("/api/cash/closings", requireAuth, allowRoles("dono"), (req, res) => {
     closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
     expected_cash_cents AS expectedCashCents, counted_cash_cents AS countedCashCents,
     difference_cents AS differenceCents, receipt_count AS receiptCount, notes,
-    opening_cash_cents AS openingCashCents
+    opening_cash_cents AS openingCashCents, supply_cents AS supplyCents, withdrawal_cents AS withdrawalCents
     FROM daily_cash_closings WHERE tenant_id = ? ORDER BY cash_date DESC LIMIT 60`).all(tenant(req));
   res.setHeader("Cache-Control", "no-store");
   res.json({ closings: rows });
