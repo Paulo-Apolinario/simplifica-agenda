@@ -181,6 +181,26 @@ test("commercial setup, authenticated account and staff password rotation", asyn
       serviceId, startsAt: "2030-01-08T15:00:00",
     });
     assert.equal(bookedQuick.status, 201);
+    // A service registered by the establishment may be booked by the professional
+    // without any explicit professional_services assignment.
+    db.prepare(`INSERT INTO services (id, tenant_id, name, duration_minutes, price_cents, house_share_percent)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .run("unassigned-service", login.body.user.tenantId, "Coloração sem vínculo", 30, 12000, 10);
+    assert.equal(db.prepare(`SELECT count(*) AS total FROM professional_services
+      WHERE tenant_id = ? AND professional_id = ? AND service_id = ?`)
+      .get(login.body.user.tenantId, staffId, "unassigned-service").total, 0);
+    const unassignedAppointment = await request("/appointments", "POST", {
+      clientId: "shared-client", professionalId: staffId,
+      serviceId: "unassigned-service", startsAt: "2030-01-08T16:00:00",
+    });
+    assert.equal(unassignedAppointment.status, 201);
+    const booked = db.prepare(`SELECT a.price_cents AS priceCents,
+      a.house_share_percent AS houseSharePercent, a.professional_id AS professionalId
+      FROM appointments a WHERE a.id = ? AND a.tenant_id = ?`)
+      .get(unassignedAppointment.body.id, login.body.user.tenantId);
+    assert.equal(booked.priceCents, 12000);
+    assert.equal(booked.houseSharePercent, 10);
+    assert.equal(booked.professionalId, staffId);
 
     const anonymous = db.prepare("SELECT c.name FROM appointments a JOIN clients c ON c.id = a.client_id WHERE a.id = ?")
       .get(anonymousAppointment.body.id);
