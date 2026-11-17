@@ -45,14 +45,15 @@ test("audit trail respects tenant isolation and records status changes", async (
       VALUES(?,?,?,?,?,?,?,?)`).run("audit-appt",tenantId,"audit-client","audit-pro","audit-service",
       "2030-01-08T10:00:00","2030-01-08T10:30:00",5000);
     assert.equal((await request("/appointments/audit-appt", "PATCH", {status:"confirmado"})).status, 200);
-    const audit = await request("/reports/appointment-audit?month=2026-11");
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const audit = await request(`/reports/appointment-audit?month=${currentMonth}`);
     assert.equal(audit.status, 200);
     assert.equal(audit.body.events.length, 1);
     assert.equal(audit.body.events[0].action, "status");
     assert.equal(audit.body.events[0].actorName, "Dono");
     assert.equal(audit.body.events[0].after.status, "confirmado");
     assert.equal((await request("/reports/appointment-audit?month=invalid")).status, 400);
-    assert.equal((await request("/reports/appointment-audit?month=2026-11&action=invalid")).status, 400);
+    assert.equal((await request(`/reports/appointment-audit?month=${currentMonth}&action=invalid`)).status, 400);
     assert.equal(db.prepare("SELECT count(*) AS count FROM appointment_audit WHERE tenant_id = 'foreign'").get().count, 0);
   } finally {
     await new Promise(resolve => server.close(resolve));
