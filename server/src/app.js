@@ -267,6 +267,77 @@ app.post("/api/installation/setup", limitAttempts("setup", 8, 15 * 60 * 1000), a
 });
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+// SaaS operator uses an independent high-entropy key, never a tenant user session.
+// Configure SAAS_ADMIN_KEY (>= 32 characters) locally and use HTTPS for network access.
+function requireSaasAdmin(req,res,next) {
+  const configured=process.env.SAAS_ADMIN_KEY || "";
+  const provided=String(req.get("X-Saas-Admin-Key")||"");
+  if(configured.length<32)return fail(res,503,"Central SaaS não configurada no servidor.");
+  const first=Buffer.from(configured),second=Buffer.from(provided);
+  if(first.length!==second.length || !crypto.timingSafeEqual(first,second))
+    return fail(res,403,"Credencial da Central SaaS inválida.");
+  next();
+}
+app.get("/api/saas/businesses", requireSaasAdmin, (req,res)=>{
+  const businesses=db.prepare(`SELECT t.id,t.name,t.slug,t.created_at AS createdAt,
+    COALESCE(ss.plan,'comercial') AS plan,COALESCE(ss.status,'active') AS status,
+    ss.due_date AS dueDate,ss.notes,u.email AS ownerEmail,u.name AS ownerName
+    FROM tenants t LEFT JOIN tenant_subscriptions ss ON ss.tenant_id=t.id
+    LEFT JOIN users u ON u.tenant_id=t.id AND u.role='dono'
+    ORDER BY t.created_at DESC`).all();
+  res.setHeader("Cache-Control","no-store");
+  res.json({businesses});
+});
+app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",20,15*60*1000), async(req,res)=>{
+  const name=requiredText(req.body?.businessName,"Estabelecimento",120);
+  const ownerName=requiredText(req.body?.ownerName,"Proprietário",120);
+  const email=requiredText(req.body?.ownerEmail,"E-mail do proprietário",200).toLowerCase();
+  const slug=String(req.body?.slug||"").trim().toLowerCase();
+  const plan=String(req.body?.plan||"comercial").trim();
+  if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)||slug.length>80||
+      slug==="studio-bela-vista" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||
+      !["comercial","profissional","premium"].includes(plan))
+    return fail(res,400,"Revise identificador, e-mail e plano.");
+  // Initial credential is shown once; operator must deliver it securely to the owner.
+  const password=crypto.randomBytes(18).toString("base64url");
+  const hash=await bcrypt.hash(password,12),id=createId(),userId=createId();
+  const days=[[0,null,null],[1,"09:00","18:00"],[2,"09:00","18:00"],
+    [3,"09:00","18:00"],[4,"09:00","18:00"],[5,"09:00","18:00"],[6,"09:00","13:00"]];
+  try {
+    db.transaction(()=>{
+      db.prepare("INSERT INTO tenants (id,name,slug) VALUES (?,?,?)").run(id,name,slug);
+      db.prepare("INSERT INTO business_settings (tenant_id,business_name) VALUES (?,?)").run(id,name);
+      db.prepare(`INSERT INTO users (id,tenant_id,name,email,password_hash,role)
+        VALUES (?,?,?,?,?,'dono')`).run(userId,id,ownerName,email,hash);
+      const hours=db.prepare("INSERT INTO business_hours (tenant_id,weekday,opens_at,closes_at) VALUES (?,?,?,?)");
+      days.forEach(d=>hours.run(id,...d));
+      db.prepare("INSERT INTO tenant_subscriptions (tenant_id,plan,status) VALUES (?,?,'active')").run(id,plan);
+    })();
+  } catch(err) {
+    if(err.code?.startsWith("SQLITE_CONSTRAINT"))return fail(res,409,"Identificador já utilizado.");
+    throw err;
+  }
+  res.setHeader("Cache-Control","no-store");
+  res.status(201).json({business:{id,name,slug,ownerEmail:email,plan,status:"active"},temporaryPassword:password,
+    warning:"Entregue a senha temporária de maneira privada. Ela não será exibida novamente."});
+});
+app.patch("/api/saas/businesses/:id",requireSaasAdmin,(req,res)=>{
+  const row=db.prepare("SELECT id,slug FROM tenants WHERE id=?").get(req.params.id);
+  if(!row || row.slug==="studio-bela-vista")return fail(res,404,"Estabelecimento indisponível.");
+  const plan=String(req.body?.plan||"comercial"),status=String(req.body?.status||"active");
+  const notes=String(req.body?.notes||"").trim(),dueDate=req.body?.dueDate||null;
+  if(!["comercial","profissional","premium"].includes(plan)||!["active","suspended"].includes(status)||
+     notes.length>300||(dueDate!==null && !/^\d{4}-\d{2}-\d{2}$/.test(String(dueDate))))
+    return fail(res,400,"Plano, status ou data inválidos.");
+  db.prepare(`INSERT INTO tenant_subscriptions (tenant_id,plan,status,notes,due_date)
+    VALUES (?,?,?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET plan=excluded.plan,
+    status=excluded.status,notes=excluded.notes,due_date=excluded.due_date`)
+    .run(row.id,plan,status,notes,dueDate);
+  if(status==="suspended") db.prepare("DELETE FROM sessions WHERE tenant_id=?").run(row.id);
+  res.json({ok:true});
+});
+
+
 
 const staffPasswordValid = (password) =>
   typeof password === "string" && /^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,8}$/.test(password);
