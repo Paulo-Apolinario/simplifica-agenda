@@ -348,6 +348,11 @@ function Shell({ user, onLogout, children }) {
       setBusinessLogo(settings?.logoUrl || "");
     }).catch(() => {});
   }, [location.pathname]);
+  useEffect(() => {
+    const onLogoChange = (event) => setBusinessLogo(event.detail || "");
+    window.addEventListener("simplifica:logo-updated", onLogoChange);
+    return () => window.removeEventListener("simplifica:logo-updated", onLogoChange);
+  }, []);
   const pageName = visibleNavItems.find((item) => item.to === location.pathname)?.label ?? "Simplifica Agenda";
   return (
     <div className="app-shell">
@@ -1522,6 +1527,7 @@ function SettingsPage({ user, onUserUpdated }) {
       });
       const response = await api("/settings/logo", { method: "POST", body: { image: dataUrl } });
       setSettings(previous => ({ ...previous, logoUrl: response.logoUrl }));
+      window.dispatchEvent(new CustomEvent("simplifica:logo-updated", { detail: response.logoUrl }));
       setMessage("Logo atualizada! Ela já está disponível na página pública.");
     } catch (reason) { setLogoError(reason.message); }
     finally { setLogoBusy(false); }
@@ -1532,6 +1538,7 @@ function SettingsPage({ user, onUserUpdated }) {
     try {
       await api("/settings/logo", { method: "DELETE" });
       setSettings(previous => ({ ...previous, logoUrl: "" }));
+      window.dispatchEvent(new CustomEvent("simplifica:logo-updated", { detail: "" }));
       setMessage("Logo removida. A imagem padrão será utilizada.");
     } catch (reason) { setLogoError(reason.message); }
     finally { setLogoBusy(false); }
