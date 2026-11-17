@@ -1279,7 +1279,7 @@ app.get("/api/export/backup", requireAuth, allowRoles("dono"), async (_req, res,
 app.get("/api/public/:slug", (req, res) => {
   const business = db.prepare(`
     SELECT t.id AS tenantId, t.slug, b.business_name AS businessName, b.logo_url AS logoUrl,
-      b.phone, b.address
+      b.phone, b.whatsapp, b.address
     FROM tenants t JOIN business_settings b ON b.tenant_id = t.id WHERE t.slug = ?
   `).get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
