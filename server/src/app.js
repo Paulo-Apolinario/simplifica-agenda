@@ -135,12 +135,12 @@ function tenant(req) {
 }
 
 
-const auditFields = "id, status, starts_at AS startsAt, ends_at AS endsAt, price_cents AS priceCents, payment_method AS paymentMethod, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent";
+const auditFields = "id, status, starts_at AS startsAt, ends_at AS endsAt, price_cents AS priceCents, payment_method AS paymentMethod, paid_on AS paidOn, completed_on AS completedOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent";
 function auditSnapshot(tenantId, appointmentId) {
   return db.prepare(`SELECT ${auditFields} FROM appointments WHERE tenant_id = ? AND id = ?`).get(tenantId, appointmentId) ?? null;
 }
 function auditSnapshotFromOriginal(row) {
-  return {id: row.id, status: row.status, startsAt: row.startsAt, endsAt: row.endsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod, commissionPercent: row.commissionPercent, houseSharePercent: row.houseSharePercent};
+  return {id: row.id, status: row.status, startsAt: row.startsAt, endsAt: row.endsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod, paidOn: row.paidOn, completedOn: row.completedOn, commissionPercent: row.commissionPercent, houseSharePercent: row.houseSharePercent};
 }
 function recordAppointmentAudit(tenantId, appointmentId, action, actor, before = null) {
   const after = auditSnapshot(tenantId, appointmentId);
@@ -156,7 +156,7 @@ function recordAppointmentAudit(tenantId, appointmentId, action, actor, before =
 function appointmentRows(tenantId, where = "", params = []) {
   return db.prepare(`
     SELECT a.id, a.starts_at AS startsAt, a.ends_at AS endsAt, a.status,
-      a.price_cents AS priceCents, a.payment_method AS paymentMethod,
+      a.price_cents AS priceCents, a.payment_method AS paymentMethod, a.paid_on AS paidOn,
       a.commission_percent AS commissionPercent, a.notes,
       c.id AS clientId, c.name AS clientName, c.phone AS clientPhone,
       s.id AS serviceId, s.name AS serviceName, s.duration_minutes AS durationMinutes,
@@ -1274,7 +1274,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   const appointment = db.prepare(`
     SELECT id, professional_id AS professionalId, service_id AS serviceId,
       starts_at AS startsAt, ends_at AS endsAt, status, price_cents AS priceCents,
-      payment_method AS paymentMethod, paid_on AS paidOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes
+      payment_method AS paymentMethod, paid_on AS paidOn, completed_on AS completedOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes
     FROM appointments WHERE id = ? AND tenant_id = ?
   `).get(req.params.id, tenant(req));
   if (!appointment) return fail(res, 404, "Atendimento não encontrado.");
@@ -1525,7 +1525,7 @@ app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, r
   res.json({ month, receivables: rows.map(row => ({
     id: row.id, clientName: row.clientName, serviceName: row.serviceName, professionalName: row.professionalName,
     startsAt: row.startsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod,
-    paid: Boolean(row.paymentMethod),
+    paidOn: row.paidOn, paid: Boolean(row.paymentMethod),
   })) });
 });
 
