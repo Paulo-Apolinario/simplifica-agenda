@@ -187,6 +187,50 @@ ensureColumn("business_settings", "booking_slot_interval_minutes", "INTEGER NOT 
 ensureColumn("business_settings", "booking_cancellation_hours", "INTEGER NOT NULL DEFAULT 12");
 ensureColumn("business_settings", "booking_allow_cancellation", "INTEGER NOT NULL DEFAULT 1");
 ensureColumn("services", "public_enabled", "INTEGER NOT NULL DEFAULT 1");
+// Per-professional overrides do not change already scheduled or settled services.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS professional_service_commissions (
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    professional_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    service_id TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+    commission_percent REAL NOT NULL CHECK (commission_percent BETWEEN 0 AND 100),
+    house_share_percent REAL NOT NULL DEFAULT 0 CHECK (house_share_percent BETWEEN 0 AND 100),
+    PRIMARY KEY (tenant_id, professional_id, service_id)
+  );
+  CREATE TABLE IF NOT EXISTS payout_batches (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    professional_id TEXT NOT NULL REFERENCES users(id),
+    period TEXT NOT NULL,
+    total_cents INTEGER NOT NULL CHECK (total_cents >= 0),
+    paid_at TEXT NOT NULL DEFAULT (datetime('now')),
+    created_by TEXT NOT NULL REFERENCES users(id)
+  );
+  CREATE TABLE IF NOT EXISTS saas_admins (
+    id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1
+  );
+  CREATE TABLE IF NOT EXISTS tenant_subscriptions (
+    tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    plan TEXT NOT NULL DEFAULT 'comercial',
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended')),
+    notes TEXT NOT NULL DEFAULT '',
+    due_date TEXT
+  );
+  CREATE TABLE IF NOT EXISTS whatsapp_notifications (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    appointment_id TEXT NOT NULL REFERENCES appointments(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    opened_at TEXT,
+    opened_by TEXT REFERENCES users(id)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_notification_event_idx
+    ON whatsapp_notifications(tenant_id, appointment_id, status);
+`);
+
 ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
 ensureColumn("appointments", "management_token_hash", "TEXT");
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS appointment_management_token_idx ON appointments(management_token_hash) WHERE management_token_hash IS NOT NULL");
