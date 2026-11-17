@@ -421,6 +421,22 @@ function StatCard({ title, value, note, icon: Icon, tone = "blue" }) {
 }
 
 function AppointmentCard({ appointment, onOpen, compact = false }) {
+  const completeOwn = async () => {
+    const future = appointment.startsAt > new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).format(new Date()).replace(" ", "T");
+    const prompt = future
+      ? "Este horário ainda não começou. Confirma que o serviço foi realmente realizado antecipadamente? O pagamento ficará pendente."
+      : "Confirmar que o serviço foi realizado? O pagamento ficará pendente para a administração.";
+    if (!window.confirm(prompt)) return;
+    setSaving(true); setError("");
+    try {
+      await api(`/professional/my-services/${appointment.id}/complete`, { method: "POST" });
+      onUpdated();
+    } catch (reason) { setError(reason.message); }
+    finally { setSaving(false); }
+  };
   const message = `Olá, ${appointment.clientName}! Passando para confirmar seu horário de ${appointment.serviceName} no dia ${dateTimeLabel(appointment.startsAt)} com ${appointment.professionalName}. Podemos confirmar?`;
   const whatsapp = whatsappUrl(appointment.clientPhone, message);
   return (
@@ -492,6 +508,7 @@ function ReceptionDashboard({ user }) {
 
 function OverviewPage({ user }) {
   const [data, setData] = useState(null);
+  const [selected, setSelected] = useState(null);
   const [error, setError] = useState("");
   const refresh = useCallback(() => api("/overview").then(setData).catch((reason) => setError(reason.message)), []);
   useEffect(() => { refresh(); }, [refresh]);
@@ -526,7 +543,7 @@ function OverviewPage({ user }) {
       <div className="panel upcoming-panel">
         <div className="panel-heading"><div><p className="eyebrow">AGENDA DO DIA</p><h2>Próximos atendimentos</h2></div><Link to="/agenda" className="text-link">Ver agenda <ArrowRight size={14} /></Link></div>
         {data?.upcoming?.length ? <div className="appointments-list">{data.upcoming.slice(0, 5).map((appointment) =>
-          <AppointmentCard key={appointment.id} appointment={appointment} compact onOpen={() => navigate("/agenda")} />)}</div>
+          <AppointmentCard key={appointment.id} appointment={appointment} compact onOpen={() => setSelected(appointment)} />)}</div>
           : <EmptyState icon={CalendarDays} title="Sua agenda está livre" description="Aproveite para organizar seus próximos horários." action={<Button variant="secondary" onClick={() => navigate("/agenda")}><CalendarDays size={15} /> Abrir agenda</Button>} />}
       </div>
       <div className="panel shortcut-panel">
@@ -544,6 +561,11 @@ function OverviewPage({ user }) {
         <div className="quick-tip"><Sparkles size={17} /><span><b>Dica para o seu dia</b><small>Confirme seus atendimentos pelo WhatsApp e evite faltas.</small></span></div>
       </div>
     </section>
+    {selected && <AppointmentDetails appointment={selected}
+      readOnly={user.role === "profissional" || user.tenantId === "tenant-salao-demo"}
+      canCompleteService={user.role === "profissional"}
+      onClose={() => setSelected(null)}
+      onUpdated={() => { setSelected(null); refresh(); }}/>}
     <footer className="page-footer">Feito para deixar sua rotina mais leve <span>♥</span></footer>
   </>;
 }
@@ -679,7 +701,7 @@ function BlockForm({ onClose, onSaved, initialDate, user }) {
   </Modal>;
 }
 
-function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false }) {
+function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false, canCompleteService = false }) {
   const [status, setStatus] = useState(appointment.status);
   const [method, setMethod] = useState(appointment.paymentMethod ?? "");
   const [price, setPrice] = useState(appointment.priceCents);
@@ -699,7 +721,13 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false 
       <div><span>Serviço</span><b>{appointment.serviceName}</b></div>
       <div><span>Profissional</span><b>{appointment.professionalName}</b></div>
     </div>
-    {readOnly && <p className="booking-share-notice"><Info size={17}/> Para concluir um serviço, acesse Meus atendimentos. Alterações de valores, pagamentos e remarcações ficam com a administração.</p>}
+    {readOnly && <p className="booking-share-notice"><Info size={17}/>{canCompleteService
+      ? "Você pode concluir seus próprios serviços aqui. O recebimento e alterações financeiras ficam com a administração."
+      : "Visualização somente leitura. Não é possível alterar este atendimento na demonstração."}</p>}
+    {canCompleteService && ["agendado", "confirmado"].includes(appointment.status) && <div className="form-stack mt-5">
+      <ErrorMessage>{error}</ErrorMessage>
+      <Button disabled={saving} onClick={completeOwn}><CheckCheck size={16}/> {saving ? "Concluindo..." : "Concluir serviço realizado"}</Button>
+    </div>}
     {!readOnly && <div className="form-stack mt-5">
       <Field label="Remarcar para" type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
       <div className="form-grid">
@@ -1117,7 +1145,14 @@ function ProfessionalWorkPage() {
   }, [month]);
   useEffect(() => { refresh(); }, [refresh]);
   const complete = async (id) => {
-    if (!window.confirm("Confirmar que este serviço foi realizado?")) return;
+    const item = data.services.find(service => service.id === id);
+    const aheadOfSchedule = item?.startsAt > new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit",
+      minute: "2-digit", hourCycle: "h23",
+    }).format(new Date()).replace(" ", "T");
+    if (!window.confirm(aheadOfSchedule
+      ? "O horário previsto ainda não começou. O serviço foi realmente realizado antecipadamente?"
+      : "Confirmar que este serviço foi realizado?")) return;
     setSaving(id);
     try {
       await api(`/professional/my-services/${encodeURIComponent(id)}/complete`, { method: "POST" });
@@ -1125,9 +1160,7 @@ function ProfessionalWorkPage() {
     } catch (reason) { setError(reason.message); }
     finally { setSaving(null); }
   };
-  const canComplete = (item) => ["agendado", "confirmado"].includes(item.status) && item.startsAt <=
-    new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date()).replace(" ", "T");
+  const canComplete = item => ["agendado", "confirmado"].includes(item.status);
   return <>
     <PageTitle eyebrow="ÁREA DO PROFISSIONAL" title="Meus atendimentos"
       description="Visualize seus serviços e registre os que foram efetivamente realizados." />
@@ -1456,7 +1489,13 @@ function SettingsPage() {
         <div className="form-stack mt-5">
           <Field label="Nome do negócio" required value={settings.businessName} onChange={(e) => setSettings({ ...settings, businessName: e.target.value })} />
           <Field label="Endereço da logo (opcional)" placeholder="/assets/simplifica-perfil.svg" value={settings.logoUrl} onChange={(e) => setSettings({ ...settings, logoUrl: e.target.value })} />
-          <Field label="Telefone / WhatsApp" type="tel" value={settings.phone} onChange={(e) => setSettings({ ...settings, phone: e.target.value })} />
+          <Field label="Telefone do estabelecimento" type="tel" maxLength={40} value={settings.phone ?? ""} onChange={(e) => setSettings({ ...settings, phone: e.target.value })} />
+          <Field label="WhatsApp do estabelecimento" type="tel" inputMode="tel" placeholder="(85) 99999-9999" required={false}
+            value={settings.whatsapp ?? ""} onChange={(e) => setSettings({ ...settings, whatsapp: e.target.value })} />
+          <p className="panel-subtitle">Informe DDD e número. O WhatsApp é usado para os clientes entrarem em contato com o comércio; não envia mensagens automaticamente.</p>
+          {settings.whatsapp && whatsappUrl(settings.whatsapp, "Olá! Gostaria de falar com o estabelecimento.") &&
+            <a className="button button-whatsapp" href={whatsappUrl(settings.whatsapp, "Olá! Gostaria de falar com o estabelecimento.")}
+              target="_blank" rel="noreferrer"><Phone size={15}/> Testar meu WhatsApp</a>}
           <Field label="Endereço" value={settings.address} onChange={(e) => setSettings({ ...settings, address: e.target.value })} />
           <SelectField label="Aparência" value={settings.theme} onChange={(e) => { setSettings({ ...settings, theme: e.target.value }); document.documentElement.classList.toggle("dark", e.target.value === "escuro"); }}>
             <option value="claro">Modo claro</option><option value="escuro">Modo escuro</option>
@@ -1516,7 +1555,10 @@ function PublicBooking({ slug }) {
     <header className="public-topbar"><Link to="/" className="public-brand"><img src="/assets/simplifica-perfil.svg" />Simplifica <span>Agenda</span></Link><span>Agendamento online</span></header>
     <section className="public-booking-card">
       <div className="public-business"><img className="public-business-logo" src={data.business.logoUrl || "/assets/simplifica-perfil.svg"} alt="" />
-        <div><p className="eyebrow">AGENDE SEU HORÁRIO</p><h1>{data.business.businessName}</h1><p>{data.business.address}</p></div>
+        <div><p className="eyebrow">AGENDE SEU HORÁRIO</p><h1>{data.business.businessName}</h1><p>{data.business.address}</p>
+          {data.business.whatsapp && <a className="text-link" target="_blank" rel="noreferrer"
+            href={whatsappUrl(data.business.whatsapp, "Olá! Gostaria de tirar uma dúvida sobre um agendamento.")}>
+            <Phone size={14}/> WhatsApp do estabelecimento</a>}</div>
       </div>
       {message ? <div className="booking-success"><span><Check size={25} /></span><h2>Horário solicitado!</h2><p>{message}</p><Button variant="secondary" onClick={() => setMessage("")}>Fazer outro agendamento</Button></div> :
         <form className="public-form" onSubmit={submit}>
