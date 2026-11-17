@@ -1521,13 +1521,63 @@ function UnreconciledCash({ user, onChange }) {
   </section>;
 }
 
+function CashOpeningPanel({ revision, onOpened }) {
+  const [state, setState] = useState(null);
+  const [openingAmount, setOpeningAmount] = useState("0.00");
+  const [openingNotes, setOpeningNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    api("/cash/daily")
+      .then(day => { if (active) { setState(day); setError(""); } })
+      .catch(reason => { if (active) setError(reason.message); });
+    return () => { active = false; };
+  }, [revision]);
+  const openDay = async () => {
+    const input = openingAmount.trim().replace(",", ".");
+    if (!/^\d+(?:\.\d{1,2})?$/.test(input))
+      return setError("Informe o dinheiro inicial em reais, com até duas casas decimais.");
+    const openingCashCents = Math.round(Number(input) * 100);
+    if (!Number.isSafeInteger(openingCashCents) || openingCashCents < 0)
+      return setError("Valor de abertura inválido.");
+    if (!await confirmAction(`Abrir o caixa de ${state.today} com ${money(openingCashCents)} em espécie?`, "Abertura de caixa")) return;
+    setBusy(true); setError("");
+    try {
+      await api("/cash/openings", { method:"POST",
+        body:{date:state.today, openingCashCents, notes:openingNotes} });
+      setOpeningNotes("");
+      setState(previous => ({...previous, cashState:"open"}));
+      onOpened();
+    } catch (reason) {setError(reason.message);}
+    finally {setBusy(false);}
+  };
+  if (!state || state.cashState !== "unopened") return error ? <ErrorMessage>{error}</ErrorMessage> : null;
+  return <section className="panel management-panel" style={{marginBottom:20}}>
+    <div className="panel-heading"><div>
+      <p className="eyebrow">INÍCIO DO EXPEDIENTE</p>
+      <h2>Abertura do caixa</h2>
+      <p className="panel-subtitle">Abra o caixa antes de registrar os serviços e recebimentos do dia. Informe R$ 0,00 se não houver troco.</p>
+    </div><span className="count-chip">Caixa não aberto</span></div>
+    <div className="form-grid">
+      <Field label="Dinheiro inicial (R$)" value={openingAmount}
+        onChange={event=>setOpeningAmount(event.target.value)} inputMode="decimal"/>
+      <Field label="Observação (opcional)" value={openingNotes} maxLength={500}
+        placeholder="Ex.: troco deixado pelo caixa anterior"
+        onChange={event=>setOpeningNotes(event.target.value)}/>
+    </div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <div style={{marginTop:16}}>
+      <Button disabled={busy} onClick={openDay}><Wallet size={16}/>{busy ? "Abrindo caixa..." : "Abrir caixa do dia"}</Button>
+    </div>
+  </section>;
+}
+
 function DailyCashClosing({ revision, user }) {
   const [date, setDate] = useState(localDate().slice(0, 10));
   const [summary, setSummary] = useState(null);
   const [closings, setClosings] = useState([]);
   const [counted, setCounted] = useState("");
-  const [openingAmount, setOpeningAmount] = useState("0.00");
-  const [openingNotes, setOpeningNotes] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1557,21 +1607,6 @@ function DailyCashClosing({ revision, user }) {
     const cents = Math.round(Number(text) * 100);
     return Number.isSafeInteger(cents) ? cents : null;
   };
-  const openDay = async () => {
-    const openingCashCents = parseCash(openingAmount);
-    if (openingCashCents === null) {
-      setError("Informe um valor inicial válido em espécie."); return;
-    }
-    if (!await confirmAction(`Registrar abertura de caixa em ${date} com ${money(openingCashCents)} em espécie?`)) return;
-    setBusy(true); setError("");
-    try {
-      await api("/cash/openings", {method:"POST",body:{date,openingCashCents,notes:openingNotes}});
-      setUpdated(n => n + 1);
-      setOpeningNotes("");
-    } catch (reason) { setError(reason.message); }
-    finally { setBusy(false); }
-  };
-
   const downloadPdf = async (id, cashDate) => {
     setPdfBusy(id); setError("");
     try {
@@ -1631,21 +1666,11 @@ function DailyCashClosing({ revision, user }) {
         <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents + (summary.closing.supplyCents || 0) - (summary.closing.withdrawalCents || 0) : summary.expectedDrawerCashCents)} note="Saldo inicial + recebimentos em espécie" icon={CircleDollarSign} tone="blue"/>
         <StatCard title="Situação" value={summary.cashState === "closed" ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.cashState === "closed" ? "green" : "orange"}/>
       </div>
-      {summary.opening ? <div className="panel" style={{marginTop:16}}>
+      {summary.opening && <div className="panel" style={{marginTop:16}}>
         <b>Abertura registrada por {summary.opening.openedByName}</b>
         <p className="panel-subtitle">Saldo inicial em espécie: {money(summary.opening.openingCashCents)} · {summary.opening.openedAt}</p>
         {summary.opening.notes && <p className="panel-subtitle">{summary.opening.notes}</p>}
-      </div> : !summary.closing && date === summary.today ? <div className="panel" style={{marginTop:16}}>
-        <h3>Abertura do caixa</h3>
-        <p className="panel-subtitle">Registre o dinheiro disponível na gaveta no início do expediente. Informe 0,00 se não houver troco.</p>
-        <div className="month-filter"><label htmlFor="opening-amount">Dinheiro inicial (R$)</label>
-          <input className="input month-input" id="opening-amount" inputMode="decimal" value={openingAmount}
-            onChange={event=>setOpeningAmount(event.target.value)}/></div>
-        <div className="month-filter"><label htmlFor="opening-notes">Observação de abertura</label>
-          <textarea className="input" id="opening-notes" maxLength={500} value={openingNotes}
-            onChange={event=>setOpeningNotes(event.target.value)} placeholder="Ex.: troco deixado pelo caixa anterior"/></div>
-        <Button disabled={busy} onClick={openDay}>{busy ? "Registrando..." : "Abrir caixa do dia"}</Button>
-      </div> : null}
+      </div>}
 
       {summary.cashState === "open" && date === summary.today && <div className="panel" style={{marginTop:16}}>
         <h3>Movimentação em espécie</h3>
@@ -1780,6 +1805,7 @@ function ReceivablesPage({ user }) {
     } catch (reason) { setError(reason.message); } finally { setBusy(""); }
   };
   return <>
+    <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
     <PageTitle eyebrow="CONTROLE DE CAIXA" title="Caixa e recebimentos"
       description="Separe os serviços realizados dos pagamentos efetivamente registrados." />
     <div className="month-filter"><label htmlFor="cash-month">Mês de referência</label>
