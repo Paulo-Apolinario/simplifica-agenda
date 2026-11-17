@@ -1348,8 +1348,9 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
       appointment.id, tenant(req));
     return true;
   });
-  if (update === "closed") return fail(res, 409, "O caixa de hoje já está fechado.");
-  if (!update) return;
+  const result = update();
+  if (result === "closed") return fail(res, 409, "O caixa de hoje já está fechado.");
+  if (!result) return;
   const updated = auditSnapshot(tenant(req), appointment.id);
   if (JSON.stringify(updated) !== JSON.stringify(auditSnapshotFromOriginal(appointment)) || (req.body?.notes !== undefined && String(req.body.notes) !== appointment.notes)) {
     recordAppointmentAudit(tenant(req), appointment.id, appointment.startsAt !== updated.startsAt ? "remarcacao" : appointment.status !== updated.status ? "status" : appointment.paymentMethod !== updated.paymentMethod ? "pagamento" : "edicao", req.user, appointment);
