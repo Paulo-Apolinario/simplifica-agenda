@@ -343,6 +343,10 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.match(badReschedule.body.error, /fora do expediente/);
     assert.equal(db.prepare("SELECT starts_at AS startsAt FROM appointments WHERE id=?")
       .get("legacy-late-appointment").startsAt, "2026-11-17T18:00:00");
+    // Restore the fixture schedule for unrelated existing public booking tests.
+    db.prepare(`UPDATE professional_hours SET closes_at = '18:00'
+      WHERE tenant_id = ? AND professional_id = ? AND weekday = 2`)
+      .run(login.body.user.tenantId, staffId);
 
     const newPublicRequests = await request("/requests");
     assert.equal(newPublicRequests.status, 200);
