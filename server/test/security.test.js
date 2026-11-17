@@ -101,8 +101,8 @@ test("commercial setup, authenticated account and staff password rotation", asyn
 
     // Professional must be scoped to assigned work, without financial edit rights.
     const profPassword = "Abcd123";
-    db.prepare("UPDATE users SET password_hash = ?, staff_code = ? WHERE id = ?")
-      .run(await bcrypt.hash(profPassword, 12), "001", staffId);
+    db.prepare("UPDATE users SET password_hash = ?, staff_code = ?, login_code = ? WHERE id = ?")
+      .run(await bcrypt.hash(profPassword, 12), "001", "001", staffId);
     db.prepare(`INSERT INTO appointments (id, tenant_id, client_id, professional_id, service_id,
       starts_at, ends_at, status, price_cents) VALUES (?, ?, ?, ?, ?, ?, ?, 'confirmado', ?)`)
       .run("a-prof-test", login.body.user.tenantId, clientId, staffId, serviceId,
@@ -122,6 +122,10 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     });
     assert.equal(professionalLogin.status, 200);
     assert.equal(professionalLogin.body.user.role, "profissional");
+    assert.equal(professionalLogin.body.user.staffCode, "001");
+    assert.equal((await request("/auth/staff-login", "POST", {
+      staffCode: "001", password: profPassword,
+    })).status, 200);
     const sharedDirectory = await request("/booking/clients");
     assert.equal(sharedDirectory.status, 200);
     const visibleShared = sharedDirectory.body.clients.find(row => row.id === "shared-client");
@@ -202,6 +206,9 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(payCommission.status, 200);
     assert.equal(payCommission.body.amountCents, 3000);
     assert.equal((await request("/commissions/a-prof-test/pay", "POST")).status, 409);
+    assert.equal((await request("/commissions/a-prof-test", "PATCH", {
+      commissionPercent: 42, houseSharePercent: 10, reason: "Produtos do estabelecimento",
+    })).status, 409);
     assert.equal((await request("/appointments/a-prof-test", "PATCH", { priceCents: 1 })).status, 409);
 
 
@@ -232,6 +239,7 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     });
     assert.equal(createdStaff.status, 201);
     assert.equal(createdStaff.body.staffCode, "002");
+    assert.equal(createdStaff.body.loginCode, "002");
     assert.ok(createdStaff.body.activationToken);
     const wrongActivation = await request("/auth/activate-professional", "POST", {
       slug: "comercio-teste", staffCode: "002", activationToken: "errado", password: "Abcd123",
@@ -259,6 +267,19 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     const newActivation = await request(`/team-members/${createdStaff.body.id}/activation`, "POST");
     assert.equal(newActivation.status, 200);
     assert.equal(newActivation.body.staffCode, "002");
+    // Custom job functions and employees who do not have system accounts.
+    const support = await request("/team-members", "POST", {
+      name: "Funcionária de apoio", jobTitle: "Copeira", role: "sem_acesso",
+    });
+    assert.equal(support.status, 201);
+    const teamList = await request("/team-members");
+    assert.equal(teamList.body.team.some(row => row.id === support.body.id && row.jobTitle === "Copeira" && row.role === "sem_acesso"), true);
+    assert.equal((await request(`/team-members/${support.body.id}`, "PATCH", {
+      name: "Funcionária de apoio", jobTitle: "Serviços gerais", active: true,
+    })).status, 200);
+    const changedJob = await request("/team-members");
+    assert.equal(changedJob.body.team.find(row => row.id === support.body.id).jobTitle, "Serviços gerais");
+
     const member = await request("/team-members", "POST", {
       name: "Recepcionista", email: "recepcao@teste.local", password: "Senha-Inicial-1234",
       role: "recepcao",
