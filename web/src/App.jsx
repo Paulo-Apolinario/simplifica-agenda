@@ -1549,6 +1549,41 @@ function DailyCashClosing({ revision, user }) {
             onChange={event=>setOpeningNotes(event.target.value)} placeholder="Ex.: troco deixado pelo caixa anterior"/></div>
         <Button disabled={busy} onClick={openDay}>{busy ? "Registrando..." : "Abrir caixa do dia"}</Button>
       </div> : null}
+
+      {summary.cashState === "open" && date === summary.today && <div className="panel" style={{marginTop:16}}>
+        <h3>Movimentação em espécie</h3>
+        <p className="panel-subtitle">Sangria é retirada; suprimento é entrada de troco. Nenhum dos dois é faturamento.</p>
+        <div className="month-filter">
+          <label htmlFor="cash-movement-type">Tipo</label>
+          <select className="input" id="cash-movement-type" value={movementType}
+            onChange={e=>setMovementType(e.target.value)}>
+            <option value="sangria">Sangria — retirada</option>
+            <option value="suprimento">Suprimento — entrada</option>
+          </select>
+          <label htmlFor="cash-movement-amount">Valor (R$)</label>
+          <input id="cash-movement-amount" className="input month-input" inputMode="decimal"
+            value={movementAmount} onChange={e=>setMovementAmount(e.target.value)} placeholder="0,00"/>
+        </div>
+        <div className="month-filter">
+          <label htmlFor="cash-movement-reason">Motivo</label>
+          <input id="cash-movement-reason" className="input" maxLength={250} value={movementReason}
+            onChange={e=>setMovementReason(e.target.value)} placeholder="Ex.: retirada para depósito"/>
+        </div>
+        <Button disabled={busy} onClick={recordMovement}>Registrar movimentação</Button>
+      </div>}
+      <div className="management-list">
+        <div className="service-row"><b>Suprimentos</b>
+          <strong>{money(summary.closing?.supplyCents ?? summary.supplyCents ?? 0)}</strong></div>
+        <div className="service-row"><b>Sangrias</b>
+          <strong>{money(summary.closing?.withdrawalCents ?? summary.withdrawalCents ?? 0)}</strong></div>
+        {(summary.movements || []).map(movement => <article className="service-row" key={movement.id}>
+          <div className="min-w-0 flex-1">
+            <b>{movement.type === "sangria" ? "Sangria" : "Suprimento"} · {movement.createdByName}</b>
+            <small>{movement.reason} · {movement.createdAt}</small>
+          </div>
+          <strong>{money(movement.amountCents)}</strong>
+        </article>)}
+      </div>
       <div className="management-list">
         {Object.entries(paymentNames).map(([key,label]) => <div className="service-row" key={key}>
           <span className="service-row-icon"><Wallet size={18}/></span>
