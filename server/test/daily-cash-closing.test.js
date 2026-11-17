@@ -73,7 +73,7 @@ test("fechamento diário por data de recebimento, permissões e bloqueio de lan�
     const recep = await request("/auth/login", "POST", {email:"reception@cash.local",password:"Senha-Recepcao-123"});
     assert.equal(recep.status, 200);
     assert.equal((await request("/cash/daily?date=" + today)).status, 200);
-    assert.equal((await request("/cash/closings")).status, 200);
+    assert.equal((await request("/cash/closings")).status, 403);
   } finally {
     await new Promise(resolve => server.close(resolve));
     db.close();
