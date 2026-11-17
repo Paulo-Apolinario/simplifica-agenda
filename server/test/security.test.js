@@ -284,6 +284,9 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal((await request("/public/manage/" + "0".repeat(64))).status, 404);
     assert.equal((await request(`/public/manage/${token}/reschedule`, "POST", {
       startsAt: "2030-01-08T16:30:00",
+    })).status, 409);
+    assert.equal((await request(`/public/manage/${token}/reschedule`, "POST", {
+      startsAt: "2030-01-08T17:00:00",
     })).status, 200);
     assert.equal((await request(`/public/manage/${token}/reschedule`, "POST", {
       startsAt: "2030-01-08T16:31:00",
