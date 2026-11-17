@@ -53,6 +53,7 @@ test("fechamento diário por data de recebimento, permissões e bloqueio de lan�
     const initial = await request("/cash/daily");
     assert.equal(initial.status, 200);
     const today = initial.body.today;
+    assert.equal((await request("/cash/openings","POST",{date:today,openingCashCents:0})).status,201);
     assert.equal((await request("/receivables/cash-a/pay", "POST", {paymentMethod:"dinheiro"})).status, 200);
     assert.equal((await request("/receivables/cash-b/pay", "POST", {paymentMethod:"pix"})).status, 200);
     const report = await request("/cash/daily?date=" + today);
