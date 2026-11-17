@@ -5,7 +5,10 @@ import { fileURLToPath } from "node:url";
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 dotenv.config({ path: path.join(projectRoot, ".env") });
 const { db } = await import("./database.js");
-if (!db.prepare("SELECT 1 FROM tenants LIMIT 1").get()) await import("./seed.js");
+// Demo data is opt-in in production. Development retains the demo by default.
+const demoEnabled = process.env.DEMO_MODE === "true"
+  || (process.env.NODE_ENV !== "production" && process.env.DEMO_MODE !== "false");
+if (demoEnabled) await import("./seed.js");
 const { default: app } = await import("./app.js");
 
 const port = Number(process.env.PORT ?? 3000);
