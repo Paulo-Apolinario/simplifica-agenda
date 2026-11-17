@@ -549,7 +549,7 @@ app.get("/api/overview", requireAuth, (req, res) => {
       AND (? != 'profissional' OR professional_id = ?)
   `).get(localNow(tenant(req)), month, month, month, tenant(req), req.user.role, req.user.id);
   const upcoming = appointmentRows(tenant(req),
-    `AND a.starts_at >= ? AND a.status NOT IN ('cancelado', 'faltou')
+    `AND a.starts_at >= ? AND a.status IN ('agendado', 'confirmado')
       ${req.user.role === "profissional" ? "AND a.professional_id = ?" : ""}`,
     req.user.role === "profissional" ? [localNow(tenant(req)), req.user.id] : [localNow(tenant(req))],
   ).slice(0, 6);
@@ -559,7 +559,7 @@ app.get("/api/overview", requireAuth, (req, res) => {
       .get(tenant(req), req.user.id, `${localNow(tenant(req)).slice(0, 10)}T23:59:59`, `${localNow(tenant(req)).slice(0, 10)}T00:00:00`).total
     : null;
   const earnings = req.user.role === "profissional" ? professionalEarnings(tenant(req), req.user.id) : null;
-  const completedToday = req.user.role === "profissional" ? db.prepare(`SELECT count(*) AS total FROM appointments WHERE tenant_id = ? AND professional_id = ? AND status = 'concluido' AND substr(starts_at, 1, 10) = ?`).get(tenant(req), req.user.id, localNow(tenant(req)).slice(0, 10)).total : null;
+  const completedToday = req.user.role === "profissional" ? db.prepare(`SELECT count(*) AS total FROM appointments WHERE tenant_id = ? AND professional_id = ? AND status = 'concluido' AND COALESCE(completed_on, substr(starts_at, 1, 10)) = ?`).get(tenant(req), req.user.id, localNow(tenant(req)).slice(0, 10)).total : null;
   res.json({
     completedToday,
     blockedToday,
