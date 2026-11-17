@@ -773,7 +773,7 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
       <ErrorMessage>{error}</ErrorMessage>
       <div className="modal-actions modal-actions-split">
         {whatsApp && <a href={whatsApp} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={16} /> WhatsApp</a>}
-        <Button disabled={saving} onClick={() => save({ status, paymentMethod: method, priceCents: price, startsAt })}>{saving ? "Salvando..." : "Salvar alterações"}</Button>
+        <Button disabled={saving} onClick={() => save({ status, paymentMethod: method, priceCents: price, ...(startsAt !== appointment.startsAt.slice(0, 16) ? { startsAt } : {}) })}>{saving ? "Salvando..." : "Salvar alterações"}</Button>
       </div>
     </div>}
   </Modal>;
