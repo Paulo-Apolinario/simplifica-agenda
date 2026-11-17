@@ -315,6 +315,7 @@ function CalendarCheckDecoration() {
 const navItems = [
   { to: "/", label: "Visão geral", icon: LayoutDashboard, end: true },
   { to: "/agenda", label: "Agenda", icon: CalendarDays },
+  { to: "/solicitacoes", label: "Solicitações online", icon: ClipboardCheck },
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços", icon: Scissors },
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
@@ -333,7 +334,19 @@ function Shell({ user, onLogout, children }) {
   const location = useLocation();
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
   const [businessLogo, setBusinessLogo] = useState("");
+  const [pendingOnline,setPendingOnline] = useState(0);
   const isDemo = user.tenantId === "tenant-salao-demo";
+  useEffect(() => {
+    if (user.role === "profissional" || user.tenantId === "tenant-salao-demo") return;
+    let active = true;
+    const refreshPending = () => api("/requests")
+      .then(({requests}) => { if(active) setPendingOnline(requests.filter(item=>item.status==="agendado").length); })
+      .catch(()=>{});
+    refreshPending();
+    const id = window.setInterval(refreshPending, 60000);
+    return ()=>{ active=false; window.clearInterval(id); };
+  },[user.role,user.tenantId,location.pathname]);
+
   const visibleNavItems = navItems.filter((item) => {
     if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
@@ -373,6 +386,7 @@ function Shell({ user, onLogout, children }) {
             <NavLink key={to} to={to} end={end} onClick={() => setMobileOpen(false)}
               className={({ isActive }) => `nav-link ${isActive ? "nav-link-active" : ""}`}>
               <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
+              {to==="/solicitacoes" && pendingOnline>0 && <span className="nav-request-count" aria-label={`${pendingOnline} solicitações pendentes`}>{pendingOnline>99?"99+":pendingOnline}</span>}
             </NavLink>
           ))}
         </nav>
@@ -491,6 +505,7 @@ function ReceptionDashboard({ user }) {
       <section className="panel shortcut-panel">
         <div className="panel-heading"><div><p className="eyebrow">ATENDIMENTO RÁPIDO</p><h2>O que você precisa fazer?</h2></div></div>
         <div className="shortcuts">
+          <Link className="shortcut-item" to="/solicitacoes"><span className="shortcut-icon blue"><ClipboardCheck size={18}/></span><span><b>Solicitações online</b><small>Confirmar ou recusar pedidos públicos</small></span><ArrowRight size={15}/></Link>
           <Link className="shortcut-item" to="/agenda"><span className="shortcut-icon blue"><CalendarDays size={18}/></span><span><b>Organizar agenda</b><small>Registrar, confirmar ou remarcar</small></span><ArrowRight size={15}/></Link>
           <Link className="shortcut-item" to="/clientes"><span className="shortcut-icon green"><Users size={18}/></span><span><b>Clientes</b><small>Buscar e cadastrar clientes</small></span><ArrowRight size={15}/></Link>
           <Link className="shortcut-item" to="/compartilhar"><span className="shortcut-icon violet"><QrCode size={18}/></span><span><b>Agendamento público</b><small>Compartilhar link com o cliente</small></span><ArrowRight size={15}/></Link>
@@ -925,7 +940,8 @@ function ClientsPage({ user }) {
 function ServiceForm({ service, professionals, onClose, onSaved }) {
   const [values, setValues] = useState({
     name: service?.name ?? "", durationMinutes: service?.durationMinutes ?? 60,
-    priceCents: service?.priceCents ?? 0, houseSharePercent: service?.houseSharePercent ?? 0, professionalIds: service?.professionalIds ?? [],
+    priceCents: service?.priceCents ?? 0, houseSharePercent: service?.houseSharePercent ?? 0,
+    commissionMode: service?.commissionMode ?? "professional", serviceCommissionPercent: service?.serviceCommissionPercent ?? 0, publicEnabled: service?.publicEnabled !== 0, professionalIds: service?.professionalIds ?? [],
   });
   const [error, setError] = useState("");
   const submit = async (event) => {
@@ -946,13 +962,21 @@ function ServiceForm({ service, professionals, onClose, onSaved }) {
         <Field label="Preço (R$)" type="number" min="0" step="0.01" value={service ? (Number(values.priceCents) / 100).toFixed(2) : values.priceCents}
           onChange={(e) => setValues({ ...values, priceCents: service ? Math.round(Number(e.target.value) * 100) : e.target.value })} />
       </div>
-      <Field label="Retenção do estabelecimento para materiais (%)" type="number" min="0" max="100" step="0.5"
+      <SelectField label="Como calcular a comissão deste serviço?" value={values.commissionMode}
+        onChange={e => setValues(v => ({ ...v, commissionMode: e.target.value }))}>
+        <option value="professional">Usar comissão padrão do profissional</option>
+        <option value="custom">Definir percentual próprio deste serviço</option>
+      </SelectField>
+      {values.commissionMode === "custom" && <Field label="Percentual bruto destinado ao profissional (%)" type="number" min="0" max="100" step="0.5"
+        value={values.serviceCommissionPercent} onChange={e => setValues(v => ({ ...v, serviceCommissionPercent: e.target.value }))}/>}
+      {values.commissionMode === "custom" && Number(values.serviceCommissionPercent) === 100 && Number(values.houseSharePercent) === 0 &&
+        <p className="panel-subtitle">Repasse integral: 100% do preço ao profissional, sem retenção.</p>}
+      <Field label="Retenção adicional do estabelecimento (% do preço)" type="number" min="0" max="100" step="0.5"
         value={values.houseSharePercent} onChange={e => setValues(v => ({...v,houseSharePercent:e.target.value}))}/>
-      <p className="panel-subtitle">Ex.: comissão padrão 40% e materiais 10% → profissional recebe 30% do preço do serviço. A regra será aplicada apenas a novos agendamentos.</p>
-      <div className="field"><span className="field-label">Profissionais que realizam</span><div className="choice-list">
-        {professionals.map((person) => <label key={person.id} className="choice-option"><input type="checkbox" checked={values.professionalIds.includes(person.id)}
-          onChange={(event) => setValues({ ...values, professionalIds: event.target.checked ? [...values.professionalIds, person.id] : values.professionalIds.filter((id) => id !== person.id) })} />{person.name}</label>)}
-      </div></div>
+      <p className="panel-subtitle">Ex.: serviço com repasse de 70% e retenção de materiais de 10 pontos → profissional recebe 60% do preço. Altere a comissão deste serviço sem modificar os serviços já agendados ou pagos.</p>
+      <label className="choice-option"><input type="checkbox" checked={Boolean(values.publicEnabled)}
+        onChange={e=>setValues(v=>({...v,publicEnabled:e.target.checked}))}/> Disponível para reserva pelo link ou QR Code</label>
+      <p className="panel-subtitle">Todos os profissionais ativos deste estabelecimento podem ser selecionados pelos clientes para este serviço quando a reserva online estiver habilitada.</p>
       <ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button>Salvar serviço</Button></div>
     </form>
   </Modal>;
@@ -1236,7 +1260,7 @@ function ServicesPage({ user, section = "services" }) {
     <div className="management-grid">
       {section === "services" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">SERVIÇOS OFERECIDOS</p><h2>Serviços</h2></div><span className="count-chip">{services.length}</span></div>
         {services.length ? <div className="management-list">{services.map((service) => <article className="service-row" key={service.id}>
-          <span className="service-row-icon"><Scissors size={18} /></span><div className="min-w-0 flex-1"><b>{service.name}</b><small>{service.durationMinutes} min · {service.professionalNames || "Sem profissional"}</small></div>
+          <span className="service-row-icon"><Scissors size={18} /></span><div className="min-w-0 flex-1"><b>{service.name}</b><small>{service.durationMinutes} min · {service.commissionMode === "custom" ? `Repasse ${service.serviceCommissionPercent}%` : "Comissão padrão da equipe"} · Retenção ${service.houseSharePercent || 0}%</small></div>
           <strong>{money(service.priceCents)}</strong>{user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="icon-button compact" onClick={() => setModal(service)} aria-label="Editar serviço"><MoreHorizontal size={18} /></button>}
         </article>)}</div> : <EmptyState icon={Scissors} title="Nenhum serviço cadastrado" description="Adicione seu primeiro serviço." />}</section>}
       {section === "team" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe</h2></div><span className="count-chip">{team.filter((person) => person.active).length} ativos</span></div>
@@ -1485,6 +1509,7 @@ function SettingsPage({ user, onUserUpdated }) {
   const [settings, setSettings] = useState(null);
   const [hours, setHours] = useState([]);
   const [tab, setTab] = useState("business");
+  const [booking, setBooking] = useState(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1494,6 +1519,7 @@ function SettingsPage({ user, onUserUpdated }) {
     api("/settings").then(data => {
       setSettings(data.settings);
       setHours(data.hours);
+      setBooking({ ...data.settings, bookingAllowCancellation: Boolean(data.settings.bookingAllowCancellation) });
     }).catch(reason => setError(reason.message));
   }, []);
   const updateHour = (weekday, key, value) =>
@@ -1552,6 +1578,8 @@ function SettingsPage({ user, onUserUpdated }) {
         onClick={() => { setTab("business"); setError(""); setMessage(""); }}><Settings size={16}/> Estabelecimento</button>
       <button type="button" role="tab" aria-selected={tab === "hours"} className={tab === "hours" ? "active" : ""}
         onClick={() => { setTab("hours"); setError(""); setMessage(""); }}><Clock3 size={16}/> Horários</button>
+      <button type="button" role="tab" aria-selected={tab === "booking"} className={tab === "booking" ? "active" : ""}
+        onClick={() => { setTab("booking"); setError(""); setMessage(""); }}><CalendarClock size={16}/> Agendamento online</button>
       <button type="button" role="tab" aria-selected={tab === "account"} className={tab === "account" ? "active" : ""}
         onClick={() => { setTab("account"); setError(""); setMessage(""); }}><ShieldCheck size={16}/> Minha conta</button>
     </div>
@@ -1615,6 +1643,32 @@ function SettingsPage({ user, onUserUpdated }) {
       <div className="settings-save"><ErrorMessage>{error}</ErrorMessage>{message && <span className="success-message">{message}</span>}
         <Button disabled={saving}><Check size={16}/> {saving ? "Salvando..." : "Salvar horários"}</Button></div>
     </form>}
+    {tab === "booking" && booking && <form className="settings-single-section" onSubmit={async e => {
+      e.preventDefault(); setSaving(true); setError(""); setMessage("");
+      try { await api("/settings/booking", {method:"PATCH",body:booking}); setMessage("Regras de agendamento atualizadas."); }
+      catch(e) { setError(e.message); } finally {setSaving(false);}
+    }}>
+      <section className="panel settings-panel"><div className="panel-heading"><div><p className="eyebrow">RESERVAS PELO LINK OU QR CODE</p>
+        <h2>Regras do agendamento online</h2><p className="panel-subtitle">Essas regras se aplicam apenas às novas reservas públicas deste estabelecimento.</p></div></div>
+        <div className="form-stack">
+          <Field label="Antecedência mínima para reservar (minutos)" type="number" min="0" max="10080" step="15" required
+            value={booking.bookingMinNoticeMinutes} onChange={e=>setBooking(v=>({...v,bookingMinNoticeMinutes:Number(e.target.value)}))}/>
+          <Field label="Até quantos dias à frente aceitar reservas" type="number" min="1" max="365" required
+            value={booking.bookingMaxDays} onChange={e=>setBooking(v=>({...v,bookingMaxDays:Number(e.target.value)}))}/>
+          <SelectField label="Intervalos para início dos horários" value={booking.bookingSlotIntervalMinutes}
+            onChange={e=>setBooking(v=>({...v,bookingSlotIntervalMinutes:Number(e.target.value)}))}>
+            <option value={15}>15 minutos</option><option value={30}>30 minutos</option><option value={60}>60 minutos</option>
+          </SelectField>
+          <label className="choice-option"><input type="checkbox" checked={Boolean(booking.bookingAllowCancellation)}
+            onChange={e=>setBooking(v=>({...v,bookingAllowCancellation:e.target.checked}))}/> Permitir cancelamento e remarcação pelo link do cliente</label>
+          {booking.bookingAllowCancellation && <Field label="Limite para cancelar ou remarcar (horas antes)" type="number" min="0" max="168" required
+            value={booking.bookingCancellationHours} onChange={e=>setBooking(v=>({...v,bookingCancellationHours:Number(e.target.value)}))}/>}
+          <p className="panel-subtitle">Disponibilidade pública de cada serviço pode ser ligada ou desligada em Serviços. Reservas já feitas continuam registradas.</p>
+        </div>
+      </section>
+      <div className="settings-save"><ErrorMessage>{error}</ErrorMessage>{message && <span className="success-message">{message}</span>}
+        <Button disabled={saving}>{saving ? "Salvando..." : "Salvar regras"}</Button></div>
+    </form>}
     {tab === "account" && <div className="settings-single-section">
       <AccountPage user={user} onUserUpdated={onUserUpdated} embedded/>
     </div>}
@@ -1629,6 +1683,7 @@ function PublicBooking({ slug }) {
   const [time, setTime] = useState("");
   const [client, setClient] = useState({ name: "", phone: "" });
   const [message, setMessage] = useState("");
+  const [managementToken,setManagementToken] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingSlots, setLoadingSlots] = useState(false);
@@ -1665,6 +1720,7 @@ function PublicBooking({ slug }) {
         ...client, serviceId, professionalId, startsAt: `${date}T${time}:00`,
       } });
       setMessage(result.message);
+      setManagementToken(result.managementToken || "");
       setTime("");
       setClient({ name: "", phone: "" });
     } catch (reason) { setTime(""); setError(reason.message); } finally { setLoading(false); }
@@ -1681,7 +1737,12 @@ function PublicBooking({ slug }) {
             <Phone size={14}/> WhatsApp do estabelecimento</a>}</div>
       </div>
       {slug === "studio-bela-vista" && <p className="public-demo-notice"><Info size={16}/> Esta página é demonstrativa. Reservas reais permanecem desativadas.</p>}
-      {message ? <div className="booking-success" role="status"><span><Check size={25} /></span><h2>Horário solicitado!</h2><p>{message}</p><Button variant="secondary" onClick={() => setMessage("")}>Fazer outro agendamento</Button></div> :
+      {message ? <div className="booking-success" role="status"><span><Check size={25} /></span><h2>Horário solicitado!</h2><p>{message}</p>
+          {managementToken && <><p>Guarde seu comprovante para consultar, remarcar ou cancelar dentro das regras do estabelecimento.</p>
+            <Link to={`/acompanhar/${managementToken}`} className="button button-primary">Ver meu comprovante</Link>
+            <Button variant="secondary" onClick={()=>navigator.clipboard.writeText(window.location.origin+`/acompanhar/${managementToken}`)}>Copiar link do comprovante</Button>
+          </>}
+          <Button variant="secondary" onClick={() => {setMessage("");setManagementToken("");}}>Fazer outro agendamento</Button></div> :
         <form className="public-form" onSubmit={submit}>
           <div className="booking-step"><span>1</span><b>Qual serviço você deseja?</b></div>
           <div className="public-service-grid">{data.services.map((item) => <button key={item.id} type="button" aria-pressed={serviceId === item.id} onClick={() => { setServiceId(item.id); setProfessionalId(""); setTime(""); }}
@@ -1715,6 +1776,126 @@ function PublicBooking({ slug }) {
   </main>;
 }
 
+function OnlineRequestsPage() {
+  const [items,setItems]=useState([]);
+  const [filter,setFilter]=useState("agendado");
+  const [error,setError]=useState("");
+  const [busy,setBusy]=useState("");
+  const refresh=useCallback(()=>api("/requests")
+    .then(result=>{setItems(result.requests);setError("");})
+    .catch(e=>setError(e.message)),[]);
+  useEffect(()=>{refresh();},[refresh]);
+  const act=async(item,action)=>{
+    const description=action==="confirm"?"confirmar":"recusar";
+    if(!window.confirm(`Deseja ${description} a solicitação de ${item.clientName}?`))return;
+    setBusy(item.id);setError("");
+    try{await api(`/requests/${item.id}`,{method:"PATCH",body:{action}});await refresh();}
+    catch(e){setError(e.message);}finally{setBusy("");}
+  };
+  const visible=items.filter(item=>filter==="all" || item.status===filter);
+  return <>
+    <PageTitle eyebrow="CENTRAL DE AGENDAMENTOS" title="Solicitações online"
+      description="Confirme ou recuse os pedidos feitos pelo link e QR Code do seu estabelecimento." />
+    <div className="booking-queue-tools">
+      <SelectField label="Situação" value={filter} onChange={e=>setFilter(e.target.value)}>
+        <option value="agendado">Aguardando confirmação</option><option value="confirmado">Confirmados</option>
+        <option value="cancelado">Cancelados ou recusados</option><option value="all">Todos</option>
+      </SelectField>
+      <Button type="button" variant="secondary" onClick={refresh}><Search size={15}/> Atualizar lista</Button>
+    </div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><p className="eyebrow">PEDIDOS RECEBIDOS</p>
+        <h2>{filter==="agendado"?"Aguardando confirmação":"Histórico de solicitações"}</h2></div>
+        <span className="count-chip">{visible.length}</span></div>
+      {visible.length? <div className="management-list">{visible.map(item=>
+        <article className="service-row request-item" key={item.id}>
+          <span className="service-row-icon"><CalendarDays size={19}/></span>
+          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
+            <small>{dateTimeLabel(item.startsAt)} · {item.professionalName}</small>
+            <small>WhatsApp: {item.clientPhone} · {statusNames[item.status]||item.status}</small>
+          </div>
+          {item.status==="agendado"&&<>
+            <Button disabled={busy===item.id} onClick={()=>act(item,"confirm")}>Confirmar</Button>
+            <Button variant="secondary" disabled={busy===item.id} onClick={()=>act(item,"reject")}>Recusar</Button>
+          </>}
+          {item.clientPhone && <a className="button button-secondary" href={whatsappUrl(item.clientPhone,
+            `Olá, ${item.clientName}! Sobre seu agendamento de ${item.serviceName} em ${dateTimeLabel(item.startsAt)}.`)}
+            rel="noreferrer" target="_blank"><Phone size={16}/> WhatsApp</a>}
+        </article>)}</div>:
+        <EmptyState icon={ClipboardCheck} title="Nenhuma solicitação nesta situação"
+          description="Pedidos de clientes pelo link público aparecerão aqui." />}
+    </section>
+  </>;
+}
+function PublicRequestPage({ token }) {
+  const [info,setInfo]=useState(null);
+  const [error,setError]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [date,setDate]=useState(shiftDate(localDate(),1));
+  const [slots,setSlots]=useState([]);
+  const [slot,setSlot]=useState("");
+  const [loadingSlots,setLoadingSlots]=useState(false);
+  const refresh=useCallback(()=>api(`/public/manage/${encodeURIComponent(token)}`)
+    .then(result=>{setInfo(result.appointment);setError("");}).catch(e=>setError(e.message)),[token]);
+  useEffect(()=>{refresh();},[refresh]);
+  useEffect(()=>{
+    if(!info?.canManage)return;
+    let active=true;setLoadingSlots(true);setSlot("");
+    api(`/public/${encodeURIComponent(info.slug)}/slots?serviceId=${encodeURIComponent(info.serviceId)}&professionalId=${encodeURIComponent(info.professionalId)}&date=${date}`)
+      .then(result=>{if(active)setSlots(result.slots||[]);})
+      .catch(e=>{if(active)setError(e.message);})
+      .finally(()=>{if(active)setLoadingSlots(false);});
+    return()=>{active=false;};
+  },[info?.slug,info?.serviceId,info?.professionalId,info?.canManage,date]);
+  const perform=async(action)=>{
+    if(action==="cancel"&&!window.confirm("Confirma que deseja cancelar este horário?"))return;
+    if(action==="reschedule"&&!slot)return;
+    setBusy(true);setError("");
+    try {
+      await api(`/public/manage/${encodeURIComponent(token)}/${action}`,{
+        method:"POST",body:action==="reschedule"?{startsAt:`${date}T${slot}:00`}:{},
+      });
+      await refresh();
+    } catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  return <main className="public-page"><header className="public-topbar"><div className="public-brand">
+    <img src="/assets/simplifica-perfil.svg" alt=""/>Simplifica <span>Agenda</span></div><span>Meu agendamento</span></header>
+    <section className="public-booking-card public-manage">
+      {!info ? <ErrorMessage>{error||"Consultando agendamento..."}</ErrorMessage> : <>
+        <div className="booking-success public-receipt" role="status">
+          <span><ClipboardCheck size={26}/></span><p className="eyebrow">COMPROVANTE DIGITAL DE SOLICITAÇÃO</p>
+          <h2>{info.businessName}</h2><p>Protocolo: <strong>{info.protocol}</strong></p>
+          <div className="public-booking-summary">
+            <b>{info.status==="agendado"?"Aguardando confirmação":statusNames[info.status]||info.status}</b>
+            <span>Cliente: {info.clientName}</span>
+            <span>{info.serviceName} · {info.professionalName}</span>
+            <span>{dateTimeLabel(info.startsAt)} · {money(info.priceCents)}</span>
+          </div>
+          <p>{info.status==="agendado"?"Sua solicitação ainda aguarda confirmação do estabelecimento.":info.status==="confirmado"?"Seu horário foi confirmado pelo estabelecimento.":info.status==="cancelado"?"Esta solicitação foi cancelada.":"Consulte o estabelecimento em caso de dúvidas."}</p>
+          <div className="booking-share-actions">
+            <Button variant="secondary" onClick={refresh}><ArrowRight size={15}/> Atualizar situação</Button>
+            <Button variant="secondary" onClick={()=>window.print()}><Download size={15}/> Imprimir / salvar comprovante</Button>
+          </div>
+        </div>
+        {info.canManage && <div className="public-reschedule">
+          <h3>Remarcar atendimento</h3><p>Escolha uma nova data e um dos horários livres.</p>
+          <Field label="Nova data" type="date" min={localDate()} value={date} onChange={e=>setDate(e.target.value)}/>
+          <div className="slot-grid">{loadingSlots?<p>Consultando horários...</p>:slots.length?slots.map(t=>
+            <button type="button" key={t} aria-pressed={slot===t}
+              className={`slot-button ${slot===t?"slot-selected":""}`} onClick={()=>setSlot(t)}>{t}</button>)
+            :<p>Nenhum horário livre para esta data.</p>}</div>
+          <div className="booking-share-actions">
+            <Button disabled={busy||!slot} onClick={()=>perform("reschedule")}>Solicitar remarcação</Button>
+            <Button variant="secondary" disabled={busy} onClick={()=>perform("cancel")}>Cancelar atendimento</Button>
+          </div>
+        </div>}
+        <ErrorMessage>{error}</ErrorMessage>
+      </>}
+    </section>
+  </main>;
+}
+
 function AccessDenied() {
   return <div className="panel"><EmptyState icon={ShieldCheck} title="Acesso restrito"
     description="Esta área está disponível apenas para o perfil de dono." /></div>;
@@ -1726,7 +1907,7 @@ export default function App() {
   const [installation, setInstallation] = useState(null);
   const location = useLocation();
   useEffect(() => {
-    if (location.pathname.startsWith("/agendar/")) { setLoading(false); return; }
+    if (location.pathname.startsWith("/agendar/") || location.pathname.startsWith("/acompanhar/")) { setLoading(false); return; }
     Promise.all([
       api("/installation/status"),
       api("/auth/me").then(({ user: current }) => current).catch(() => null),
@@ -1736,6 +1917,10 @@ export default function App() {
   useEffect(() => {
     api("/settings").then(({ settings }) => document.documentElement.classList.toggle("dark", settings?.theme === "escuro")).catch(() => {});
   }, [user]);
+  if (location.pathname.startsWith("/acompanhar/")) {
+    const token=decodeURIComponent(location.pathname.slice("/acompanhar/".length).split("/")[0]);
+    return <PublicRequestPage token={token}/>;
+  }
   if (location.pathname.startsWith("/agendar/")) {
     const slug = decodeURIComponent(location.pathname.slice("/agendar/".length).split("/")[0]);
     return <PublicBooking slug={slug} />;
@@ -1748,6 +1933,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={user.role === "recepcao" ? <ReceptionDashboard user={user}/> : <OverviewPage user={user} />} />
       <Route path="/agenda" element={<AgendaPage user={user} />} />
+      <Route path="/solicitacoes" element={user.role!=="profissional" ? <OnlineRequestsPage/> : <AccessDenied/>}/>
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />

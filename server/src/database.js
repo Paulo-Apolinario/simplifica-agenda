@@ -177,8 +177,20 @@ ensureColumn("business_settings", "whatsapp", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("users", "job_title", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("users", "login_code", "TEXT");
 ensureColumn("services", "house_share_percent", "REAL NOT NULL DEFAULT 0 CHECK (house_share_percent BETWEEN 0 AND 100)");
+ensureColumn("services", "commission_mode", "TEXT NOT NULL DEFAULT 'professional'");
+ensureColumn("services", "service_commission_percent", "REAL NOT NULL DEFAULT 0");
 ensureColumn("appointments", "house_share_percent", "REAL NOT NULL DEFAULT 0 CHECK (house_share_percent BETWEEN 0 AND 100)");
 ensureColumn("blocked_slots", "created_by_user_id", "TEXT");
+ensureColumn("business_settings", "booking_min_notice_minutes", "INTEGER NOT NULL DEFAULT 60");
+ensureColumn("business_settings", "booking_max_days", "INTEGER NOT NULL DEFAULT 60");
+ensureColumn("business_settings", "booking_slot_interval_minutes", "INTEGER NOT NULL DEFAULT 30");
+ensureColumn("business_settings", "booking_cancellation_hours", "INTEGER NOT NULL DEFAULT 12");
+ensureColumn("business_settings", "booking_allow_cancellation", "INTEGER NOT NULL DEFAULT 1");
+ensureColumn("services", "public_enabled", "INTEGER NOT NULL DEFAULT 1");
+ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
+ensureColumn("appointments", "management_token_hash", "TEXT");
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS appointment_management_token_idx ON appointments(management_token_hash) WHERE management_token_hash IS NOT NULL");
+
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS global_staff_login_code_idx ON users(login_code) WHERE login_code IS NOT NULL");
 db.transaction(() => {
   const members = db.prepare(`SELECT id, staff_code FROM users WHERE role = 'profissional'
