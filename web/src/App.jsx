@@ -2059,6 +2059,7 @@ function SaasAdminPage() {
   const [businesses,setBusinesses]=useState([]);
   const [values,setValues]=useState({businessName:"",slug:"",ownerName:"",ownerEmail:"",plan:"comercial"});
   const [issued,setIssued]=useState(null);
+  const [editing,setEditing]=useState(null);
   const [error,setError]=useState(""),[busy,setBusy]=useState(false);
   const call=useCallback(async(path,method="GET",body)=>{
     const response=await fetch("/api/saas"+path,{
@@ -2149,13 +2150,40 @@ function SaasAdminPage() {
               <div className="min-w-0 flex-1"><b>{item.name}</b>
                 <small>{item.ownerName} · {item.ownerEmail}</small>
                 <small>{item.slug} · {item.plan} · {item.status==="suspended"?"Suspenso":"Ativo"}</small></div>
-              {item.slug!=="studio-bela-vista"&&
+              {item.slug!=="studio-bela-vista"&&<>
+                <Button type="button" variant="secondary" onClick={()=>setEditing({...item})}>Editar plano</Button>
                 <Button type="button" variant="secondary" disabled={busy}
                   onClick={()=>change(item,item.status==="suspended"?"active":"suspended")}>
                   {item.status==="suspended"?"Reativar":"Suspender"}
-                </Button>}
+                </Button></>}
             </article>)}</div>
         </section>
+        {editing&&<Modal title={`Plano de ${editing.name}`} onClose={()=>setEditing(null)}>
+          <form className="form-stack" onSubmit={async e=>{
+            e.preventDefault();setBusy(true);setError("");
+            try{
+              await call(`/businesses/${editing.id}`,"PATCH",{
+                plan:editing.plan,status:editing.status,notes:editing.notes||"",dueDate:editing.dueDate||null,
+              });
+              setEditing(null);await refresh();
+            }catch(err){setError(err.message);}finally{setBusy(false);}
+          }}>
+            <SelectField label="Plano" value={editing.plan}
+              onChange={e=>setEditing(v=>({...v,plan:e.target.value}))}>
+              <option value="comercial">Comercial</option><option value="profissional">Profissional</option><option value="premium">Premium</option>
+            </SelectField>
+            <Field label="Vencimento (registro administrativo)" type="date" value={editing.dueDate||""}
+              onChange={e=>setEditing(v=>({...v,dueDate:e.target.value}))}/>
+            <Field label="Observações contratuais">
+              <textarea className="input" rows={3} maxLength={300} value={editing.notes||""}
+                onChange={e=>setEditing(v=>({...v,notes:e.target.value}))}/>
+            </Field>
+            <p className="panel-subtitle">O vencimento é apenas informativo nesta fase. Não existe cobrança automática.</p>
+            <ErrorMessage>{error}</ErrorMessage>
+            <div className="modal-actions"><Button type="button" variant="secondary"
+              onClick={()=>setEditing(null)}>Cancelar</Button><Button disabled={busy}>Salvar</Button></div>
+          </form>
+        </Modal>}
       </>}
     </div>
   </main>;
