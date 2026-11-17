@@ -456,7 +456,11 @@ app.get("/api/overview", requireAuth, (req, res) => {
       ${req.user.role === "profissional" ? "AND a.professional_id = ?" : ""}`,
     req.user.role === "profissional" ? [localNow(tenant(req)), req.user.id] : [localNow(tenant(req))],
   ).slice(0, 6);
+  const earnings = req.user.role === "profissional" ? professionalEarnings(tenant(req), req.user.id) : null;
+  const completedToday = req.user.role === "profissional" ? db.prepare(`SELECT count(*) AS total FROM appointments WHERE tenant_id = ? AND professional_id = ? AND status = 'concluido' AND substr(starts_at, 1, 10) = ?`).get(tenant(req), req.user.id, localNow(tenant(req)).slice(0, 10)).total : null;
   res.json({
+    completedToday,
+    earningsDueCents: earnings?.dueCents ?? null,
     todayCount: summary.today_count,
     activeClients: summary.active_clients,
     monthRevenueCents: req.user.role === "dono" ? summary.month_revenue : null,
@@ -785,6 +789,67 @@ app.get("/api/schedule", requireAuth, (req, res) => {
   res.json({ appointments, blockedSlots });
 });
 
+// Commission is earned when a service is completed; payment requires an explicit owner action.
+const commissionCents = row => Math.round(row.priceCents * row.commissionPercent / 100);
+function professionalEarnings(tenantId, professionalId, month = null) {
+  const whereMonth = month ? " AND substr(a.starts_at, 1, 7) = ?" : "";
+  const params = month ? [tenantId, professionalId, month] : [tenantId, professionalId];
+  const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, s.name AS serviceName,
+    c.name AS clientName, a.price_cents AS priceCents,
+    a.commission_percent AS commissionPercent,
+    cp.amount_cents AS paidCents, cp.paid_at AS paidAt
+    FROM appointments a
+    JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
+    JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
+    LEFT JOIN commission_payments cp ON cp.appointment_id = a.id AND cp.tenant_id = a.tenant_id
+    WHERE a.tenant_id = ? AND a.professional_id = ? AND a.status = 'concluido'${whereMonth}
+    ORDER BY a.starts_at DESC`).all(...params);
+  const services = rows.map(row => ({
+    ...row, earnedCents: commissionCents(row), paid: row.paidCents !== null,
+  }));
+  const earnedCents = services.reduce((sum, row) => sum + row.earnedCents, 0);
+  const paidCents = services.reduce((sum, row) => sum + (row.paidCents ?? 0), 0);
+  return { services, earnedCents, paidCents, dueCents: earnedCents - paidCents };
+}
+app.get("/api/professional/earnings", requireAuth, allowRoles("profissional"), (req, res) => {
+  const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
+  if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ month, ...professionalEarnings(tenant(req), req.user.id, month),
+    allTime: professionalEarnings(tenant(req), req.user.id) });
+});
+app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
+  const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
+  if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
+  const rows = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
+    a.starts_at AS startsAt, a.price_cents AS priceCents,
+    a.commission_percent AS commissionPercent, s.name AS serviceName,
+    cp.amount_cents AS paidCents, cp.paid_at AS paidAt
+    FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
+    JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
+    LEFT JOIN commission_payments cp ON cp.appointment_id = a.id AND cp.tenant_id = a.tenant_id
+    WHERE a.tenant_id = ? AND a.status = 'concluido' AND substr(a.starts_at, 1, 7) = ?
+    ORDER BY a.starts_at DESC`).all(tenant(req), month);
+  res.json({ month, commissions: rows.map(row => ({...row,
+    earnedCents: commissionCents(row), paid: row.paidCents !== null })) });
+});
+app.post("/api/commissions/:id/pay", requireAuth, allowRoles("dono"), (req, res) => {
+  const row = db.prepare(`SELECT id, professional_id AS professionalId,
+    price_cents AS priceCents, commission_percent AS commissionPercent
+    FROM appointments WHERE id = ? AND tenant_id = ? AND status = 'concluido'`)
+    .get(req.params.id, tenant(req));
+  if (!row) return fail(res, 404, "Serviço concluído não encontrado.");
+  const amount = commissionCents(row);
+  try {
+    db.prepare(`INSERT INTO commission_payments (appointment_id, tenant_id, professional_id, amount_cents)
+      VALUES (?, ?, ?, ?)`).run(row.id, tenant(req), row.professionalId, amount);
+  } catch (error) {
+    if (error.code?.startsWith("SQLITE_CONSTRAINT")) return fail(res, 409, "Comissão já registrada como paga.");
+    throw error;
+  }
+  res.json({ ok: true, amountCents: amount });
+});
+
 // Each professional can see and complete only their own work, without editing finances.
 app.get("/api/professional/my-services", requireAuth, allowRoles("profissional"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
@@ -826,8 +891,8 @@ app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("
 app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "recepcao"), (req, res) => {
   const { clientId, professionalId, serviceId } = req.body ?? {};
   const startsAt = String(req.body?.startsAt ?? "");
-  if (!validDateTime(startsAt) || !clientId || !professionalId || !serviceId) {
-    return fail(res, 400, "Informe cliente, profissional, serviço e horário válidos.");
+  if (!validDateTime(startsAt) || !professionalId || !serviceId) {
+    return fail(res, 400, "Informe profissional, serviço e horário válidos.");
   }
   if (req.user.role === "profissional" && professionalId !== req.user.id) {
     return fail(res, 403, "Profissionais só podem agendar na própria agenda.");
@@ -840,8 +905,8 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
     JOIN users u ON u.id = ps.professional_id AND u.tenant_id = s.tenant_id
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
   `).get(tenant(req), serviceId, professionalId);
-  const client = db.prepare("SELECT id FROM clients WHERE id = ? AND tenant_id = ?").get(clientId, tenant(req));
-  if (!chosen || !client) return fail(res, 400, "Cliente, serviço ou profissional inválido.");
+  const client = clientId ? db.prepare("SELECT id FROM clients WHERE id = ? AND tenant_id = ?").get(clientId, tenant(req)) : null;
+  if (!chosen || (clientId && !client)) return fail(res, 400, "Cliente, serviço ou profissional inválido.");
   const normalizedStart = startsAt.length === 16 ? `${startsAt}:00` : startsAt;
   if (normalizedStart <= localNow(tenant(req))) return fail(res, 400, "Escolha um horário futuro.");
   const endsAt = addLocalMinutes(normalizedStart, chosen.duration);
@@ -851,12 +916,17 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
   const id = createId();
   const create = db.transaction(() => {
     if (scheduleConflict(res, { tenantId: tenant(req), professionalId, startsAt: normalizedStart, endsAt })) return false;
+    // Anonymous internal appointments get their own unregistered-client record.
+    // Preserve the existing NOT NULL foreign key without an unsafe table rebuild.
+    const resolvedClientId = client?.id ?? createId();
+    if (!client) db.prepare("INSERT INTO clients (id, tenant_id, name) VALUES (?, ?, ?)")
+      .run(resolvedClientId, tenant(req), "Cliente não informado");
     db.prepare(`
       INSERT INTO appointments
         (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at,
          price_cents, commission_percent, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, tenant(req), clientId, professionalId, serviceId, normalizedStart, endsAt,
+    `).run(id, tenant(req), resolvedClientId, professionalId, serviceId, normalizedStart, endsAt,
       chosen.price, chosen.commission, String(req.body?.notes ?? "").trim());
     return true;
   });
@@ -877,6 +947,9 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   }
   if (req.user.role === "profissional") {
     return fail(res, 403, "Para registrar um serviço, utilize a opção Concluir atendimento em Meus atendimentos.");
+  }
+  if (db.prepare("SELECT 1 FROM commission_payments WHERE appointment_id = ? AND tenant_id = ?").get(appointment.id, tenant(req))) {
+    return fail(res, 409, "Comissão já paga. Não é permitido alterar este serviço sem estorno auditado.");
   }
   const status = req.body?.status ?? appointment.status;
   const method = req.body?.paymentMethod === undefined ? appointment.paymentMethod : req.body.paymentMethod;
@@ -919,13 +992,15 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   res.json({ ok: true });
 });
 
-app.post("/api/blocked-slots", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+app.post("/api/blocked-slots", requireAuth, allowRoles("dono", "recepcao", "profissional"), (req, res) => {
   const startsAt = String(req.body?.startsAt ?? "");
   const endsAt = String(req.body?.endsAt ?? "");
   if (!validDateTime(startsAt) || !validDateTime(endsAt) || startsAt >= endsAt) {
     return fail(res, 400, "Informe um período de bloqueio válido.");
   }
-  const professionalId = req.body?.professionalId || null;
+  if (startsAt < localNow(tenant(req))) return fail(res, 400, "Bloqueios só podem começar no presente ou futuro.");
+  const professionalId = req.user.role === "profissional" ? req.user.id : (req.body?.professionalId || null);
+  if (req.user.role === "profissional" && req.body?.professionalId && req.body.professionalId !== req.user.id) return fail(res, 403, "Você só pode bloquear a própria agenda.");
   if (professionalId && !db.prepare("SELECT id FROM users WHERE id = ? AND tenant_id = ? AND role = 'profissional'")
     .get(professionalId, tenant(req))) return fail(res, 400, "Profissional inválido.");
   const conflict = db.prepare(`
@@ -943,8 +1018,12 @@ app.post("/api/blocked-slots", requireAuth, allowRoles("dono", "recepcao"), (req
   res.status(201).json({ id });
 });
 
-app.delete("/api/blocked-slots/:id", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
-  const result = db.prepare("DELETE FROM blocked_slots WHERE id = ? AND tenant_id = ?").run(req.params.id, tenant(req));
+app.delete("/api/blocked-slots/:id", requireAuth, allowRoles("dono", "recepcao", "profissional"), (req, res) => {
+  const result = req.user.role === "profissional"
+    ? db.prepare("DELETE FROM blocked_slots WHERE id = ? AND tenant_id = ? AND professional_id = ?")
+      .run(req.params.id, tenant(req), req.user.id)
+    : db.prepare("DELETE FROM blocked_slots WHERE id = ? AND tenant_id = ?")
+      .run(req.params.id, tenant(req));
   if (!result.changes) return fail(res, 404, "Bloqueio não encontrado.");
   res.status(204).end();
 });
