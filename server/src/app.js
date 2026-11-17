@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import session from "express-session";
 import bcrypt from "bcryptjs";
-import { db, createId } from "./database.js";
+import { db, createId, allocateStaffCode } from "./database.js";
 import { allowRoles, publicUser, requireAuth } from "./auth.js";
 import { SQLiteSessionStore } from "./session-store.js";
 import { findScheduleConflict } from "./schedule.js";
@@ -268,6 +268,78 @@ app.post("/api/installation/setup", limitAttempts("setup", 8, 15 * 60 * 1000), a
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 
+const staffPasswordValid = (password) =>
+  typeof password === "string" && /^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,8}$/.test(password);
+function generateActivation() {
+  const token = crypto.randomBytes(24).toString("base64url");
+  return { token, hash: crypto.createHash("sha256").update(token).digest("hex"), expires: Date.now() + 24 * 60 * 60 * 1000 };
+}
+const codeFailures = new Map();
+function staffLoginLimit(req, res, next) {
+  const slug = String(req.body?.slug ?? "").trim().toLowerCase();
+  const code = String(req.body?.staffCode ?? "").trim();
+  const key = `${slug}:${code}`;
+  const now = Date.now();
+  if (codeFailures.size > 4000) {
+    for (const [k, v] of codeFailures) if (v.until <= now) codeFailures.delete(k);
+  }
+  const entry = codeFailures.get(key);
+  if (entry && entry.until > now && entry.count >= 5) {
+    res.setHeader("Retry-After", String(Math.ceil((entry.until - now) / 1000)));
+    return fail(res, 429, "Acesso temporariamente bloqueado. Aguarde 15 minutos.");
+  }
+  req.staffLoginKey = key;
+  next();
+}
+function recordStaffFailure(req) {
+  const now = Date.now(), key = req.staffLoginKey;
+  const item = codeFailures.get(key);
+  if (!item || item.until <= now) codeFailures.set(key, { count: 1, until: now + 15 * 60 * 1000 });
+  else item.count += 1;
+}
+app.post("/api/auth/staff-login", limitAttempts("staff-ip", 20, 15 * 60 * 1000), staffLoginLimit, async (req, res) => {
+  const slug = String(req.body?.slug ?? "").trim().toLowerCase();
+  const code = String(req.body?.staffCode ?? "").trim();
+  const password = String(req.body?.password ?? "");
+  if (!slug || !/^\\d{3}$/.test(code) || !password) return fail(res, 400, "Informe comércio, código de três dígitos e senha.");
+  const user = db.prepare(`SELECT u.*, t.slug FROM users u JOIN tenants t ON t.id = u.tenant_id
+    WHERE t.slug = ? AND u.staff_code = ? AND u.role = 'profissional' AND u.active = 1`).get(slug, code);
+  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    recordStaffFailure(req);
+    return fail(res, 401, "Código ou senha incorretos.");
+  }
+  codeFailures.delete(req.staffLoginKey);
+  req.session.regenerate(error => {
+    if (error) return fail(res, 500, "Não foi possível iniciar a sessão.");
+    req.session.user = publicUser(user);
+    req.session.save(saveError => saveError ? fail(res, 500, "Erro ao salvar sessão.") : res.json({ user: req.session.user }));
+  });
+});
+app.post("/api/auth/activate-professional", limitAttempts("staff-activate", 8, 15 * 60 * 1000), (req, res) => {
+  const slug = String(req.body?.slug ?? "").trim().toLowerCase();
+  const staffCode = String(req.body?.staffCode ?? "").trim();
+  const token = String(req.body?.activationToken ?? "");
+  const password = String(req.body?.password ?? "");
+  if (!/^\\d{3}$/.test(staffCode) || !slug || !token) return fail(res, 400, "Informe comércio, código e código de ativação.");
+  if (!staffPasswordValid(password)) return fail(res, 400, "A senha deve ter 6 a 8 caracteres, com letras e números.");
+  const member = db.prepare(`SELECT u.* FROM users u JOIN tenants t ON t.id = u.tenant_id
+    WHERE t.slug = ? AND u.staff_code = ? AND u.role = 'profissional' AND u.active = 1`).get(slug, staffCode);
+  if (!member || !member.activation_hash || !member.activation_expires_at || member.activation_expires_at < Date.now()) {
+    return fail(res, 403, "Ativação inválida ou expirada. Solicite um novo código ao administrador.");
+  }
+  const givenHash = crypto.createHash("sha256").update(token).digest("hex");
+  if (!crypto.timingSafeEqual(Buffer.from(givenHash), Buffer.from(member.activation_hash))) {
+    return fail(res, 403, "Ativação inválida ou expirada.");
+  }
+  bcrypt.hash(password, 12).then(hash => {
+    const result = db.prepare(`UPDATE users SET password_hash = ?, activation_hash = NULL,
+      activation_expires_at = NULL WHERE id = ? AND tenant_id = ? AND activation_hash = ?`)
+      .run(hash, member.id, member.tenant_id, givenHash);
+    if (!result.changes) return fail(res, 409, "Ativação já utilizada.");
+    db.prepare("DELETE FROM sessions WHERE user_id = ? AND tenant_id = ?").run(member.id, member.tenant_id);
+    res.json({ ok: true });
+  }).catch(() => fail(res, 500, "Não foi possível definir a senha."));
+});
 app.post("/api/auth/login", limitAttempts("login", 15, 15 * 60 * 1000), async (req, res) => {
   const email = String(req.body?.email ?? "").trim().toLowerCase();
   const password = String(req.body?.password ?? "");
@@ -277,12 +349,12 @@ app.post("/api/auth/login", limitAttempts("login", 15, 15 * 60 * 1000), async (r
   const candidates = db.prepare(`
     SELECT u.*, t.slug FROM users u
     JOIN tenants t ON t.id = u.tenant_id
-    WHERE lower(u.email) = ? AND u.active = 1 AND (? = '' OR t.slug = ?)
+    WHERE lower(u.email) = ? AND u.role != 'profissional' AND u.active = 1 AND (? = '' OR t.slug = ?)
   `).all(email, slug, slug);
 
   if (candidates.length > 1) return fail(res, 400, "Informe o identificador do negócio para entrar.");
   const user = candidates[0];
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+  if (!user || user.role === "profissional" || !(await bcrypt.compare(password, user.password_hash))) {
     return fail(res, 401, "E-mail ou senha incorretos.");
   }
 
@@ -307,7 +379,7 @@ app.post("/api/auth/logout", requireAuth, (req, res, next) => {
 
 app.get("/api/account", requireAuth, (req, res) => {
   const account = db.prepare(`
-    SELECT name, email, phone, role FROM users WHERE id = ? AND tenant_id = ?
+    SELECT name, email, phone, role, staff_code AS staffCode FROM users WHERE id = ? AND tenant_id = ?
   `).get(req.user.id, req.user.tenantId);
   res.setHeader("Cache-Control", "no-store");
   res.json({ account });
@@ -324,7 +396,8 @@ app.patch("/api/account", requireAuth, async (req, res) => {
   const phone = String(req.body?.phone ?? user.phone).trim();
   if (phone.length > 40) return fail(res, 400, "Telefone inválido.");
   const newPassword = String(req.body?.newPassword ?? "");
-  if (newPassword && (newPassword.length < 12 || newPassword.length > 200)) {
+  if (user.role === "profissional" && newPassword && !staffPasswordValid(newPassword)) return fail(res, 400, "A senha deve ter 6 a 8 caracteres, com letras e números.");
+  if (user.role !== "profissional" && newPassword && (newPassword.length < 12 || newPassword.length > 200)) {
     return fail(res, 400, "A nova senha deve ter entre 12 e 200 caracteres.");
   }
   if (newPassword && newPassword === currentPassword) {
@@ -350,8 +423,8 @@ app.post("/api/team-members/:id/reset-password", requireAuth, allowRoles("dono")
     .get(req.params.id, tenant(req));
   if (!member) return fail(res, 404, "Pessoa da equipe não encontrada.");
   const password = String(req.body?.password ?? "");
-  if (password.length < 12 || password.length > 200) {
-    return fail(res, 400, "A senha deve ter entre 12 e 200 caracteres.");
+  if (member.role === "profissional" ? !staffPasswordValid(password) : password.length < 12 || password.length > 200) {
+    return fail(res, 400, member.role === "profissional" ? "Use 6 a 8 caracteres, com letras e números." : "A senha deve ter entre 12 e 200 caracteres.");
   }
   const hash = await bcrypt.hash(password, 12);
   db.transaction(() => {
@@ -568,7 +641,7 @@ app.get("/api/professionals", requireAuth, (_req, res) => {
 
 app.get("/api/team-members", requireAuth, allowRoles("dono"), (_req, res) => {
   const team = db.prepare(`
-    SELECT id, name, email, phone, role, commission_percent AS commissionPercent, active
+    SELECT id, name, email, phone, role, staff_code AS staffCode, commission_percent AS commissionPercent, active
     FROM users WHERE tenant_id = ? AND role IN ('profissional', 'recepcao')
     ORDER BY role, name
   `).all(tenant(_req));
@@ -577,21 +650,27 @@ app.get("/api/team-members", requireAuth, allowRoles("dono"), (_req, res) => {
 
 app.post("/api/team-members", requireAuth, allowRoles("dono"), async (req, res) => {
   const name = requiredText(req.body?.name, "Nome");
-  const email = requiredText(req.body?.email, "E-mail").toLowerCase();
-  const password = requiredText(req.body?.password, "Senha", 200);
   const role = req.body?.role;
   if (!["profissional", "recepcao"].includes(role)) return fail(res, 400, "Perfil inválido.");
-  if (password.length < 12) return fail(res, 400, "A senha deve ter pelo menos 12 caracteres.");
+  const email = role === "recepcao" ? requiredText(req.body?.email, "E-mail").toLowerCase() : "";
+  const password = role === "recepcao" ? requiredText(req.body?.password, "Senha", 200) : "";
+  if (role === "recepcao" && password.length < 12) return fail(res, 400, "A senha deve ter pelo menos 12 caracteres.");
   const commission = role === "profissional" ? Number(req.body?.commissionPercent ?? 0) : 0;
   if (!Number.isFinite(commission) || commission < 0 || commission > 100) return fail(res, 400, "Comissão inválida.");
-  const passwordHash = await bcrypt.hash(password, 12);
   const id = createId();
+  const activation = role === "profissional" ? generateActivation() : null;
+  const passwordHash = await bcrypt.hash(role === "profissional" ? crypto.randomBytes(32).toString("hex") : password, 12);
+  let staffCode = null;
   try {
     const create = db.transaction(() => {
+      staffCode = role === "profissional" ? allocateStaffCode(tenant(req)) : null;
       db.prepare(`
-        INSERT INTO users (id, tenant_id, name, email, password_hash, role, phone, commission_percent)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(id, tenant(req), name, email, passwordHash, role, String(req.body?.phone ?? "").trim(), commission);
+        INSERT INTO users (id, tenant_id, name, email, password_hash, role, phone, commission_percent,
+          staff_code, activation_hash, activation_expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(id, tenant(req), name, role === "profissional" ? `${id}@staff.invalid` : email,
+        passwordHash, role, String(req.body?.phone ?? "").trim(), commission,
+        staffCode, activation?.hash ?? null, activation?.expires ?? null);
       if (role === "profissional") {
         const assign = db.prepare(`
           INSERT INTO professional_services (tenant_id, professional_id, service_id)
@@ -610,7 +689,20 @@ app.post("/api/team-members", requireAuth, allowRoles("dono"), async (req, res) 
     if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return fail(res, 409, "Já existe uma conta com este e-mail.");
     throw error;
   }
-  res.status(201).json({ id });
+  res.status(201).json({ id, staffCode, activationToken: activation?.token ?? null });
+});
+
+app.post("/api/team-members/:id/activation", requireAuth, allowRoles("dono"), (req, res) => {
+  const member = db.prepare("SELECT id, staff_code AS staffCode FROM users WHERE id = ? AND tenant_id = ? AND role = 'profissional' AND active = 1")
+    .get(req.params.id, tenant(req));
+  if (!member) return fail(res, 404, "Profissional não encontrado.");
+  const activation = generateActivation();
+  db.transaction(() => {
+    db.prepare("UPDATE users SET activation_hash = ?, activation_expires_at = ? WHERE id = ? AND tenant_id = ?")
+      .run(activation.hash, activation.expires, member.id, tenant(req));
+    db.prepare("DELETE FROM sessions WHERE user_id = ? AND tenant_id = ?").run(member.id, tenant(req));
+  })();
+  res.json({ staffCode: member.staffCode, activationToken: activation.token, expiresInHours: 24 });
 });
 
 app.patch("/api/team-members/:id", requireAuth, allowRoles("dono"), (req, res) => {
@@ -629,6 +721,7 @@ app.patch("/api/team-members/:id", requireAuth, allowRoles("dono"), (req, res) =
 });
 
 app.post("/api/professionals", requireAuth, allowRoles("dono"), async (req, res) => {
+  return fail(res, 410, "Cadastre profissionais em Equipe e acessos para gerar código e ativação.");
   const name = requiredText(req.body?.name, "Nome");
   const email = requiredText(req.body?.email, "E-mail").toLowerCase();
   const password = requiredText(req.body?.password, "Senha", 200);
