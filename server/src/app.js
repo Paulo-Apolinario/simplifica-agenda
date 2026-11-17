@@ -1145,8 +1145,9 @@ app.get("/api/settings", requireAuth, (req, res) => {
 app.put("/api/settings", requireAuth, allowRoles("dono"), (req, res) => {
   const businessName = requiredText(req.body?.businessName, "Nome do negócio");
   const theme = req.body?.theme === "escuro" ? "escuro" : "claro";
-  const whatsapp = String(req.body?.whatsapp ?? "").replace(/[^\d]/g, "");
-  if (whatsapp && !/^(?:55)?\d{10,11}$/.test(whatsapp))
+  const rawWhatsApp = String(req.body?.whatsapp ?? "").trim();
+  const whatsapp = rawWhatsApp.replace(/[^\d]/g, "");
+  if (rawWhatsApp && !/^(?:55)?\d{10,11}$/.test(whatsapp))
     return fail(res, 400, "WhatsApp inválido. Informe DDD e número brasileiro.");
   const phone = String(req.body?.phone ?? "").trim();
   if (phone.length > 40) return fail(res, 400, "Telefone inválido.");
