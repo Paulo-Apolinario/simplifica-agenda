@@ -28,6 +28,70 @@ const dateLabel = (date, options = { day: "2-digit", month: "long", year: "numer
 const dateTimeLabel = (value) => new Intl.DateTimeFormat("pt-BR", {
   day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
 }).format(new Date(value));
+
+function confirmAction(message, title = "Confirmar ação") {
+  return new Promise(resolve => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    const panel = document.createElement("section");
+    panel.className = "modal-panel max-w-lg";
+    panel.setAttribute("role", "alertdialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", title);
+    const header = document.createElement("header");
+    header.className = "modal-header";
+    const heading = document.createElement("h2");
+    heading.textContent = title;
+    header.appendChild(heading);
+    const description = document.createElement("p");
+    description.className = "panel-subtitle";
+    description.style.margin = "20px 0";
+    description.style.whiteSpace = "pre-wrap";
+    description.textContent = message;
+    const actions = document.createElement("div");
+    actions.className = "modal-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "button button-secondary";
+    cancel.textContent = "Cancelar";
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "button button-primary";
+    confirm.textContent = "Confirmar";
+    actions.append(cancel, confirm);
+    panel.append(header, description, actions);
+    backdrop.appendChild(panel);
+    document.body.appendChild(backdrop);
+    const previousFocus = document.activeElement;
+    const finish = accepted => {
+      document.removeEventListener("keydown", onKey);
+      backdrop.remove();
+      if (previousFocus instanceof HTMLElement) previousFocus.focus();
+      resolve(accepted);
+    };
+    const onKey = event => {
+      if (event.key === "Escape") finish(false);
+      if (event.key === "Tab") {
+        event.preventDefault();
+        (document.activeElement === cancel ? confirm : cancel).focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    cancel.addEventListener("click", () => finish(false));
+    confirm.addEventListener("click", () => finish(true));
+    backdrop.addEventListener("mousedown", event => { if (event.target === backdrop) finish(false); });
+    cancel.focus();
+  });
+}
+function showNotice(message, type = "warning") {
+  const notice = document.createElement("div");
+  notice.setAttribute("role", "alert");
+  notice.style.cssText = "position:fixed;top:24px;right:24px;z-index:10000;max-width:min(420px,calc(100vw - 32px));padding:16px 20px;border-radius:14px;box-shadow:0 16px 40px rgba(15,23,42,.20);font-weight:600;line-height:1.5;background:var(--surface,#fff);color:var(--text,#17253c);border:1px solid #d8e1ed;border-left:5px solid " + (type === "warning" ? "#d97706" : "#2563eb");
+  notice.textContent = message;
+  document.body.appendChild(notice);
+  window.setTimeout(() => notice.remove(), 6500);
+}
+
 const api = async (url, options = {}) => {
   const response = await fetch(`/api${url}`, {
     credentials: "same-origin",
@@ -41,7 +105,12 @@ const api = async (url, options = {}) => {
   if (response.status === 204) return null;
   const data = response.headers.get("content-type")?.includes("application/json")
     ? await response.json() : await response.blob();
-  if (!response.ok) throw new Error(data?.error ?? "Não foi possível concluir a solicitação.");
+  if (!response.ok) {
+    const message = data?.error ?? "Não foi possível concluir a solicitação.";
+    if (response.status === 409 && /caixa|abertura|abr[a-z]* o caixa/i.test(message))
+      showNotice(message, "warning");
+    throw new Error(message);
+  }
   return data;
 };
 const statusNames = {
@@ -321,10 +390,7 @@ const navItems = [
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
-  { to: "/comissoes", label: "Comissões da equipe", icon: CircleDollarSign },
-  { to: "/regras-comissao", label: "Regras de comissão", icon: Settings },
-  { to: "/fechamentos", label: "Fechamentos", icon: Wallet },
-  { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
+  { to: "/recebimentos", label: "Gestão financeira", icon: Wallet },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
   { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/configuracoes", label: "Configurações do estabelecimento", icon: Settings },
@@ -353,7 +419,7 @@ function Shell({ user, onLogout, children }) {
     if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
-    if (user.role === "recepcao") return !["/financeiro", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes", "/regras-comissao", "/fechamentos"].includes(item.to);
+    if (user.role === "recepcao") return !["/financeiro", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos"].includes(item.to);
     if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
     return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
@@ -368,7 +434,9 @@ function Shell({ user, onLogout, children }) {
     window.addEventListener("simplifica:logo-updated", onLogoChange);
     return () => window.removeEventListener("simplifica:logo-updated", onLogoChange);
   }, []);
-  const pageName = visibleNavItems.find((item) => item.to === location.pathname)?.label ?? "Simplifica Agenda";
+  const pageName = location.pathname === "/recebimentos" && user.role === "recepcao"
+    ? "Caixa e recebimentos"
+    : (visibleNavItems.find((item) => item.to === location.pathname)?.label ?? "Simplifica Agenda");
   return (
     <div className="app-shell">
       {mobileOpen && <button className="sidebar-scrim" onClick={() => setMobileOpen(false)} aria-label="Fechar menu" />}
@@ -387,7 +455,7 @@ function Shell({ user, onLogout, children }) {
           {visibleNavItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} onClick={() => setMobileOpen(false)}
               className={({ isActive }) => `nav-link ${isActive ? "nav-link-active" : ""}`}>
-              <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
+              <Icon size={18} strokeWidth={1.8} /><span>{to === "/recebimentos" && user.role === "recepcao" ? "Caixa e recebimentos" : label}</span>
               {to==="/solicitacoes" && pendingOnline>0 && <span className="nav-request-count" aria-label={`${pendingOnline} solicitações pendentes`}>{pendingOnline>99?"99+":pendingOnline}</span>}
             </NavLink>
           ))}
@@ -466,6 +534,33 @@ function AppointmentCard({ appointment, onOpen, compact = false }) {
   );
 }
 
+
+function CashStatusBanner({ user }) {
+  const [state, setState] = useState(null);
+  useEffect(() => {
+    if (!["dono", "recepcao"].includes(user.role) || user.tenantId === "tenant-salao-demo") return;
+    let active = true;
+    api("/cash/daily").then(data => {if (active) setState(data.cashState);}).catch(() => {});
+    return () => {active = false;};
+  }, [user.role, user.tenantId]);
+  if (!state || state === "open") return null;
+  return <section className="panel" role="status" style={{marginBottom:20,padding:"18px 20px",borderLeft:"4px solid #d97706"}}>
+    <div className="row items-center gap-3" style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}>
+      <div>
+        <strong>{state === "closed" ? "Caixa do dia encerrado" : "Caixa ainda não aberto"}</strong>
+        <p className="panel-subtitle" style={{marginTop:5}}>
+          {state === "closed"
+            ? "O caixa deste dia já foi fechado. Novas movimentações serão liberadas somente após a abertura do próximo dia."
+            : "Para concluir serviços e receber pagamentos, registre primeiro a abertura do caixa de hoje."}
+        </p>
+      </div>
+      <Link className="button button-primary" to="/recebimentos">
+        <Wallet size={16}/> {state === "closed" ? "Consultar caixa" : "Abrir caixa"}
+      </Link>
+    </div>
+  </section>;
+}
+
 function ReceptionDashboard({ user }) {
   const [overview, setOverview] = useState(null);
   const [schedule, setSchedule] = useState({ appointments: [], blockedSlots: [] });
@@ -485,6 +580,7 @@ function ReceptionDashboard({ user }) {
       description="Acompanhe os horários, confirme solicitações e organize o atendimento ao cliente."
       actions={<Link className="button button-primary" to="/agenda"><CalendarDays size={16}/> Abrir agenda</Link>}/>
     <ErrorMessage>{error}</ErrorMessage>
+    <CashStatusBanner user={user}/>
     <section className="stats-grid">
       <StatCard title="Atendimentos hoje" value={overview?.todayCount ?? "—"} icon={CalendarDays}
         note="Agenda do estabelecimento"/>
@@ -532,6 +628,7 @@ function OverviewPage({ user }) {
         <CalendarDays size={17} /> {user.role === "profissional" ? "Meus atendimentos" : "Ver agenda"}
       </Button>} />
     <ErrorMessage>{error}</ErrorMessage>
+    {user.role === "dono" && <CashStatusBanner user={user}/>}
     <section className="stats-grid">
       {user.role === "profissional" ? <>
         <StatCard title="Atendimentos hoje" value={data?.todayCount ?? "—"} note="Na minha agenda" icon={CalendarDays} />
@@ -731,7 +828,7 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
     const confirmation = earlyCompletion
       ? "Este horário ainda não começou. Confirma que o serviço foi realmente realizado antecipadamente? O pagamento ficará pendente."
       : "Confirmar que o serviço foi realizado? O pagamento ficará pendente para a administração.";
-    if (!window.confirm(confirmation)) return;
+    if (!await confirmAction(confirmation)) return;
     setSaving(true);
     setError("");
     try {
@@ -1178,7 +1275,7 @@ function ProfessionalWorkPage() {
       timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit",
       minute: "2-digit", hourCycle: "h23",
     }).format(new Date()).replace(" ", "T");
-    if (!window.confirm(aheadOfSchedule
+    if (!await confirmAction(aheadOfSchedule
       ? "O horário previsto ainda não começou. O serviço foi realmente realizado antecipadamente?"
       : "Confirmar que este serviço foi realizado?")) return;
     setSaving(id);
@@ -1395,7 +1492,7 @@ function UnreconciledCash({ user, onChange }) {
     .then(result => setReceipts(result.receipts)).catch(err => setError(err.message)), []);
   useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
   const reconcile = async receipt => {
-    if (!window.confirm(`Confirma que o pagamento de ${money(receipt.priceCents)} foi recebido em ${date}? A conciliação ficará registrada no histórico.`)) return;
+    if (!await confirmAction(`Confirma que o pagamento de ${money(receipt.priceCents)} foi recebido em ${date}? A conciliação ficará registrada no histórico.`)) return;
     setBusy(receipt.id); setError("");
     try {
       await api(`/cash/reconcile/${encodeURIComponent(receipt.id)}`, {method:"POST", body:{date}});
@@ -1465,7 +1562,7 @@ function DailyCashClosing({ revision, user }) {
     if (openingCashCents === null) {
       setError("Informe um valor inicial válido em espécie."); return;
     }
-    if (!window.confirm(`Registrar abertura de caixa em ${date} com ${money(openingCashCents)} em espécie?`)) return;
+    if (!await confirmAction(`Registrar abertura de caixa em ${date} com ${money(openingCashCents)} em espécie?`)) return;
     setBusy(true); setError("");
     try {
       await api("/cash/openings", {method:"POST",body:{date,openingCashCents,notes:openingNotes}});
@@ -1496,7 +1593,7 @@ function DailyCashClosing({ revision, user }) {
     const cents = parseCash(movementAmount);
     if (cents === null || cents <= 0) return setError("Informe um valor positivo.");
     if (movementReason.trim().length < 5) return setError("Informe o motivo (mínimo de 5 caracteres).");
-    if (!window.confirm(`Registrar ${movementType} de ${money(cents)}?`)) return;
+    if (!await confirmAction(`Registrar ${movementType} de ${money(cents)}?`)) return;
     setBusy(true);setError("");
     try {
       await api("/cash/movements", {method:"POST",body:{
@@ -1510,7 +1607,7 @@ function DailyCashClosing({ revision, user }) {
     if (countedCashCents === null) {
       setError("Informe o valor em dinheiro contado, com até duas casas decimais."); return;
     }
-    if (!window.confirm(`Confirmar fechamento de ${date}? O registro ficará bloqueado para edição.`)) return;
+    if (!await confirmAction(`Confirmar fechamento de ${date}? O registro ficará bloqueado para edição.`)) return;
     setBusy(true); setError("");
     try {
       await api("/cash/closings", {method:"POST", body:{date, countedCashCents, notes}});
@@ -1626,6 +1723,37 @@ function DailyCashClosing({ revision, user }) {
     <p className="panel-subtitle">Recebimentos antigos sem data registrada não entram automaticamente na conferência diária.</p>
       </>}
   </section>;
+}
+
+function FinancialHubPage({ user }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const requestedTab = new URLSearchParams(location.search).get("aba") || "caixa";
+  const available = ["caixa", "comissoes", "regras", "fechamentos"];
+  const tab = user.role === "dono" && available.includes(requestedTab) ? requestedTab : "caixa";
+  const tabs = [
+    {id:"caixa",title:"Caixa e recebimentos",icon:Wallet},
+    {id:"comissoes",title:"Comissões da equipe",icon:CircleDollarSign},
+    {id:"regras",title:"Regras de comissão",icon:Settings},
+    {id:"fechamentos",title:"Fechamentos quinzenais",icon:CalendarDays},
+  ];
+  return <>
+    {user.role === "dono" && <>
+      <PageTitle eyebrow="CENTRAL FINANCEIRA" title="Gestão financeira"
+        description="Caixa, comissões, regras e fechamentos em um único lugar." />
+      <div className="settings-tab-bar" role="tablist" aria-label="Seções da gestão financeira">
+        {tabs.map(item => <button key={item.id} type="button" role="tab"
+          aria-selected={tab === item.id} className={tab === item.id ? "active" : ""}
+          onClick={() => navigate(`/recebimentos?aba=${item.id}`)}>
+          <item.icon size={16}/> {item.title}
+        </button>)}
+      </div>
+    </>}
+    {tab === "caixa" && <ReceivablesPage user={user}/>}
+    {tab === "comissoes" && user.role === "dono" && <TeamCommissionsPage/>}
+    {tab === "regras" && user.role === "dono" && <CommissionPoliciesPage/>}
+    {tab === "fechamentos" && user.role === "dono" && <SettlementsPage/>}
+  </>;
 }
 
 function ReceivablesPage({ user }) {
@@ -1842,7 +1970,7 @@ function SettingsPage({ user, onUserUpdated }) {
     finally { setLogoBusy(false); }
   };
   const removeLogo = async () => {
-    if (!window.confirm("Remover a logo personalizada e voltar à imagem padrão?")) return;
+    if (!await confirmAction("Remover a logo personalizada e voltar à imagem padrão?")) return;
     setLogoError(""); setLogoBusy(true);
     try {
       await api("/settings/logo", { method: "DELETE" });
@@ -2077,7 +2205,7 @@ function OnlineRequestsPage() {
   useEffect(()=>{refresh();},[refresh]);
   const act=async(item,action)=>{
     const description=action==="confirm"?"confirmar":"recusar";
-    if(!window.confirm(`Deseja ${description} a solicitação de ${item.clientName}?`))return;
+    if(!await confirmAction(`Deseja ${description} a solicitação de ${item.clientName}?`))return;
     setBusy(item.id);setError("");
     try{
       const result=await api(`/requests/${item.id}`,{method:"PATCH",body:{action}});
@@ -2170,7 +2298,7 @@ function PublicRequestPage({ token }) {
     return()=>{active=false;};
   },[info?.slug,info?.serviceId,info?.professionalId,info?.canManage,date]);
   const perform=async(action)=>{
-    if(action==="cancel"&&!window.confirm("Confirma que deseja cancelar este horário?"))return;
+    if(action==="cancel"&&!await confirmAction("Confirma que deseja cancelar este horário?"))return;
     if(action==="reschedule"&&!slot)return;
     setBusy(true);setError("");
     try {
@@ -2237,7 +2365,7 @@ function CommissionPoliciesPage() {
     catch(e){setError(e.message);}
   };
   const remove=async rule=>{
-    if(!window.confirm("Remover esta regra? Novos agendamentos usarão a comissão padrão do serviço ou profissional."))return;
+    if(!await confirmAction("Remover esta regra? Novos agendamentos usarão a comissão padrão do serviço ou profissional."))return;
     try{await api("/commission-rules",{method:"DELETE",body:{professionalId:rule.professionalId,serviceId:rule.serviceId}});await refresh();}
     catch(e){setError(e.message);}
   };
@@ -2293,7 +2421,7 @@ function SettlementsPage() {
     .then(result => { setData(result); setError(""); }).catch(err => setError(err.message)), [period]);
   useEffect(() => { refresh(); }, [refresh]);
   const close = async professional => {
-    if (!window.confirm(`Confirma que o valor de ${money(professional.dueCents)} JÁ FOI REALMENTE TRANSFERIDO para ${professional.professionalName}? Esta ação registra pagamento efetivo e não realiza PIX.`)) return;
+    if (!await confirmAction(`Confirma que o valor de ${money(professional.dueCents)} JÁ FOI REALMENTE TRANSFERIDO para ${professional.professionalName}? Esta ação registra pagamento efetivo e não realiza PIX.`)) return;
     setBusy(professional.professionalId); setError(""); setMessage("");
     try {
       const result = await api("/settlements", {method:"POST", body:{period,professionalId:professional.professionalId}});
@@ -2384,7 +2512,7 @@ function SaasAdminPage() {
     }catch(e){setError(e.message);}finally{setBusy(false);}
   };
   const change=async(item,status)=>{
-    if(!window.confirm(`Deseja ${status==="suspended"?"suspender":"reativar"} ${item.name}?`))return;
+    if(!await confirmAction(`Deseja ${status==="suspended"?"suspender":"reativar"} ${item.name}?`))return;
     setBusy(true);setError("");
     try{await call(`/businesses/${item.id}`,"PATCH",{
       plan:item.plan,status,notes:item.notes||"",dueDate:item.dueDate||null,
@@ -2530,12 +2658,12 @@ export default function App() {
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage /> : <AccessDenied />} />
       <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>
-      <Route path="/comissoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <TeamCommissionsPage/> : <AccessDenied/>}/>
-      <Route path="/regras-comissao" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <CommissionPoliciesPage/> : <AccessDenied/>}/>
-      <Route path="/fechamentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettlementsPage/> : <AccessDenied/>}/>
+      <Route path="/comissoes" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=comissoes" replace/> : <AccessDenied/>}/>
+      <Route path="/regras-comissao" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=regras" replace/> : <AccessDenied/>}/>
+      <Route path="/fechamentos" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=fechamentos" replace/> : <AccessDenied/>}/>
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
-      <Route path="/recebimentos" element={["dono", "recepcao"].includes(user.role) && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
+      <Route path="/recebimentos" element={["dono", "recepcao"].includes(user.role) && user.tenantId !== "tenant-salao-demo" ? <FinancialHubPage user={user} /> : <AccessDenied />} />
       <Route path="/configuracoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettingsPage user={user} onUserUpdated={setUser} /> : <AccessDenied />} />
       <Route path="/minha-conta" element={user.tenantId === "tenant-salao-demo" ? <AccessDenied /> :
         user.role === "dono" ? <Navigate to="/configuracoes" replace /> :
