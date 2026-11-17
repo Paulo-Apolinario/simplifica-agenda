@@ -1266,7 +1266,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   const appointment = db.prepare(`
     SELECT id, professional_id AS professionalId, service_id AS serviceId,
       starts_at AS startsAt, ends_at AS endsAt, status, price_cents AS priceCents,
-      payment_method AS paymentMethod, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes
+      payment_method AS paymentMethod, paid_on AS paidOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes
     FROM appointments WHERE id = ? AND tenant_id = ?
   `).get(req.params.id, tenant(req));
   if (!appointment) return fail(res, 404, "Atendimento não encontrado.");
@@ -1285,6 +1285,15 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   if (!statuses.includes(status)) return fail(res, 400, "Status inválido.");
   if (method && !paymentMethods.includes(method)) return fail(res, 400, "Forma de pagamento inválida.");
   if (!Number.isInteger(priceCents) || priceCents < 0) return fail(res, 400, "Valor inválido.");
+  if (appointment.paidOn && cashClosing(tenant(req), appointment.paidOn)
+      && (method !== appointment.paymentMethod || priceCents !== appointment.priceCents || status !== appointment.status))
+    return fail(res, 409, "Pagamento de caixa já fechado não pode ser alterado.");
+  if (appointment.paymentMethod && method !== appointment.paymentMethod)
+    return fail(res, 409, "O pagamento registrado não pode ser alterado diretamente.");
+  if (!appointment.paymentMethod && method && status !== "concluido")
+    return fail(res, 409, "Apenas atendimentos concluídos podem receber pagamento.");
+  if (!appointment.paymentMethod && method && cashClosing(tenant(req), cashDay(tenant(req))))
+    return fail(res, 409, "O caixa de hoje está fechado.");
 
   let startsAt = appointment.startsAt;
   let endsAt = appointment.endsAt;
@@ -1305,6 +1314,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     }
   }
   const update = db.transaction(() => {
+    if (!appointment.paymentMethod && method && cashClosing(tenant(req), cashDay(tenant(req)))) return "closed";
     if (startsAt !== appointment.startsAt && scheduleConflict(res, {
       tenantId: tenant(req),
       professionalId: appointment.professionalId,
@@ -1314,14 +1324,17 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     })) return false;
     db.prepare(`
       UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?,
-        payment_method = ?, price_cents = ?, notes = ?
+        payment_method = ?, paid_on = CASE WHEN payment_method = '' AND ? != '' THEN ? ELSE paid_on END,
+        paid_at = CASE WHEN payment_method = '' AND ? != '' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE paid_at END,
+        price_cents = ?, notes = ?
       WHERE id = ? AND tenant_id = ?
-    `).run(startsAt, endsAt, status, method || "",
+    `).run(startsAt, endsAt, status, method || "", method || "", cashDay(tenant(req)), method || "",
       priceCents, req.body?.notes === undefined ? appointment.notes : String(req.body.notes),
       appointment.id, tenant(req));
     return true;
   });
-  if (!update()) return;
+  if (update === "closed") return fail(res, 409, "O caixa de hoje já está fechado.");
+  if (!update) return;
   const updated = auditSnapshot(tenant(req), appointment.id);
   if (JSON.stringify(updated) !== JSON.stringify(auditSnapshotFromOriginal(appointment)) || (req.body?.notes !== undefined && String(req.body.notes) !== appointment.notes)) {
     recordAppointmentAudit(tenant(req), appointment.id, appointment.startsAt !== updated.startsAt ? "remarcacao" : appointment.status !== updated.status ? "status" : appointment.paymentMethod !== updated.paymentMethod ? "pagamento" : "edicao", req.user, appointment);
