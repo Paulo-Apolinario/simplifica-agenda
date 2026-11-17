@@ -166,6 +166,7 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(ownBlock.status, 201);
     const schedule = await request("/schedule?from=2030-01-08T00:00:00&to=2030-01-09T00:00:00");
     assert.equal(schedule.body.blockedSlots.some(row => row.id === ownBlock.body.id && row.reason === "Almoço"), true);
+    assert.equal(schedule.body.blockedSlots.find(row => row.id === ownBlock.body.id).createdByName, "Profissional");
     const anonymousAppointment = await request("/appointments", "POST", {
       professionalId: staffId, serviceId, startsAt: "2030-01-08T10:00:00", notes: "Sem cadastro de cliente",
     });
