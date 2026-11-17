@@ -1505,15 +1505,24 @@ app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, r
   })) });
 });
 
+
 app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const method = String(req.body?.paymentMethod ?? "");
   if (!paymentMethods.includes(method)) return fail(res, 400, "Informe a forma de pagamento.");
-  const beforeAudit = auditSnapshot(tenant(req), req.params.id);
-  const result = db.prepare(`UPDATE appointments SET payment_method = ?
-    WHERE id = ? AND tenant_id = ? AND status = 'concluido' AND payment_method = ''`)
-    .run(method, req.params.id, tenant(req));
-  if (!result.changes) return fail(res, 409, "Atendimento não encontrado, não concluído ou já pago.");
-  recordAppointmentAudit(tenant(req), req.params.id, "pagamento", req.user, beforeAudit);
+  const before = auditSnapshot(tenant(req), req.params.id);
+  const day = cashDay(tenant(req));
+  const result = db.transaction(() => {
+    if (cashClosing(tenant(req), day)) return "closed";
+    const updated = db.prepare(`UPDATE appointments
+      SET payment_method = ?, paid_on = ?, paid_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      WHERE id = ? AND tenant_id = ? AND status = 'concluido' AND payment_method = ''`)
+      .run(method, day, req.params.id, tenant(req));
+    if (!updated.changes) return "conflict";
+    recordAppointmentAudit(tenant(req), req.params.id, "pagamento", req.user, before);
+    return "ok";
+  })();
+  if (result === "closed") return fail(res, 409, "O caixa de hoje já foi fechado. Novos recebimentos só podem ser lançados no próximo dia.");
+  if (result !== "ok") return fail(res, 409, "Atendimento não encontrado, não concluído ou já pago.");
   res.json({ ok: true });
 });
 
