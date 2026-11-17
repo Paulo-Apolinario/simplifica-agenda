@@ -4,6 +4,7 @@ export function publicUser(user) {
   return {
     id: user.id,
     tenantId: user.tenantId ?? user.tenant_id,
+    slug: user.slug ?? user.businessSlug,
     name: user.name,
     email: user.email,
     role: user.role,
