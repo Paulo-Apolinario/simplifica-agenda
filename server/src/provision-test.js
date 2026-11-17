@@ -14,7 +14,7 @@ const password = process.env.TEST_ACCOUNT_PASSWORD ?? "";
 if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12 || password.length > 200) {
   throw new Error("Defina TEST_ACCOUNT_EMAIL válido e TEST_ACCOUNT_PASSWORD de 12 a 200 caracteres.");
 }
-const { db, allocateStaffCode } = await import("./database.js");
+const { db, allocateStaffCode, allocateLoginCode } = await import("./database.js");
 const tenantId = "tenant-comercio-teste";
 const slug = "comercio-teste";
 const ownerId = "user-comercio-teste-owner";
@@ -38,8 +38,8 @@ db.transaction(() => {
   db.prepare(`INSERT OR IGNORE INTO users (id, tenant_id, name, email, password_hash, role, commission_percent)
     VALUES (?, ?, ?, ?, ?, 'profissional', 30)`)
     .run(professionalId, tenantId, "Profissional Exemplo", "profissional@comercio-teste.local", staffHash);
-  db.prepare("UPDATE users SET staff_code = ? WHERE id = ? AND tenant_id = ? AND staff_code IS NULL")
-    .run(allocateStaffCode(tenantId), professionalId, tenantId);
+  db.prepare("UPDATE users SET staff_code = ?, login_code = ? WHERE id = ? AND tenant_id = ? AND staff_code IS NULL")
+    .run(allocateStaffCode(tenantId), allocateLoginCode(), professionalId, tenantId);
   db.prepare(`INSERT OR IGNORE INTO services (id, tenant_id, name, duration_minutes, price_cents)
     VALUES (?, ?, ?, ?, ?)`).run(serviceId, tenantId, "Atendimento de teste", 60, 5000);
   db.prepare("INSERT OR IGNORE INTO professional_services (tenant_id, professional_id, service_id) VALUES (?, ?, ?)")
