@@ -54,9 +54,19 @@ test("atendimento antecipado entra no caixa da empresa e gera saldo quinzenal se
       (id,tenant_id,client_id,professional_id,service_id,starts_at,ends_at,status,price_cents,commission_percent)
       VALUES(?,?,?,?,?,?,?,'confirmado',?,?)`);
     add.run("anticipated",tenant,"client-1","pro-1","service-1",tomorrow+"T10:00:00",tomorrow+"T10:30:00",5000,40);
+    const unopened = await request("/appointments/anticipated","PATCH",{status:"concluido"});
+    assert.equal(unopened.status,409);
+    assert.match(unopened.body.error,/Abra o caixa/);
+    assert.equal((await request("/cash/openings","POST",{date:current,openingCashCents:0})).status,201);
     const complete = await request("/appointments/anticipated","PATCH",{status:"concluido"});
     assert.equal(complete.status,200);
     assert.equal(db.prepare("SELECT completed_on FROM appointments WHERE id='anticipated'").get().completed_on,current);
+    const overview = await request("/overview");
+    assert.equal(overview.status,200);
+    assert.equal(overview.body.upcoming.some(item=>item.id==="anticipated"),false);
+    const schedule = await request("/schedule?from="+tomorrow+"T00:00:00&to="+tomorrow+"T23:59:59");
+    assert.equal(schedule.status,200);
+    assert.equal(schedule.body.appointments.some(item=>item.id==="anticipated"),false);
     assert.equal((await request("/receivables/anticipated/pay","POST",{paymentMethod:"pix"})).status,200);
     const day = await request("/cash/daily?date="+current);
     assert.equal(day.body.expectedTotalCents,5000);

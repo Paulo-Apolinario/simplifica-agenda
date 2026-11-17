@@ -5,7 +5,7 @@ const escapePdf = value => plain(value).replace(/\\/g, "\\\\").replace(/\(/g, "\
 const brl = cents => "R$ " + (Number(cents ?? 0) / 100).toFixed(2).replace(".", ",");
 const methods = { dinheiro: "Dinheiro", pix: "Pix", cartao_credito: "Cartao de credito",
   cartao_debito: "Cartao de debito", transferencia: "Transferencia" };
-export function cashClosingPdf({ businessName, closing, opening, receipts }) {
+export function cashClosingPdf({ businessName, closing, opening, receipts, movements = [] }) {
   const lines = [
     "SIMPLIFICA AGENDA  |  FECHAMENTO DIARIO DE CAIXA",
     "============================================================",
@@ -20,7 +20,10 @@ export function cashClosingPdf({ businessName, closing, opening, receipts }) {
     "Saldo inicial em especie: " + brl(closing.openingCashCents),
     "Recebimentos de servicos: " + brl(closing.expectedTotalCents),
     "Pagamentos em dinheiro: " + brl(closing.expectedCashCents),
-    "Dinheiro esperado (inicial + recebimentos): " + brl(closing.openingCashCents + closing.expectedCashCents),
+    "Suprimentos em especie: " + brl(closing.supplyCents),
+    "Sangrias em especie: " + brl(closing.withdrawalCents),
+    "Dinheiro esperado (inicial + entradas - retiradas): " +
+      brl(closing.openingCashCents + closing.expectedCashCents + closing.supplyCents - closing.withdrawalCents),
     "Dinheiro contado: " + brl(closing.countedCashCents),
     "Diferenca: " + brl(closing.differenceCents),
     "Atendimentos recebidos: " + closing.receiptCount,
@@ -36,6 +39,13 @@ export function cashClosingPdf({ businessName, closing, opening, receipts }) {
       (methods[row.paymentMethod] || row.paymentMethod || "-") + " | " + brl(row.priceCents));
     if (row.clientName || row.serviceName) lines.push("  " + plain((row.clientName || "") + " / " + (row.serviceName || "")).slice(0, 84));
   }
+  lines.push("------------------------------------------------------------");
+  lines.push("MOVIMENTACOES DE CAIXA");
+  for (const movement of movements) lines.push(
+    (movement.createdAt || "").slice(0, 19) + " | " +
+    (movement.type === "sangria" ? "Sangria" : "Suprimento") +
+    " | " + brl(movement.amountCents) + " | " + plain(movement.reason).slice(0, 65));
+  if (!movements.length) lines.push("Nenhuma movimentacao adicional.");
   lines.push("------------------------------------------------------------");
   lines.push("Observacoes: " + (closing.notes || "Nenhuma"));
   lines.push("Documento gerado a partir do fechamento registrado.");

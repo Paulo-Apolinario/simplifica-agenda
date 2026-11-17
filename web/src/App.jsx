@@ -1096,7 +1096,6 @@ function TeamCommissionsPage() {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
-  const [saving, setSaving] = useState(null);
   const [adjusting, setAdjusting] = useState(null);
   const refresh = useCallback(async () => {
     try {
@@ -1105,19 +1104,10 @@ function TeamCommissionsPage() {
     } catch(reason) { setError(reason.message); }
   }, [month]);
   useEffect(() => { refresh(); }, [refresh]);
-  const registerPayment = async item => {
-    if (!window.confirm(`Confirmar pagamento da comissão de ${item.professionalName} no valor de ${money(item.earnedCents)}? Essa operação será registrada como paga.`)) return;
-    setSaving(item.id);
-    try {
-      await api(`/commissions/${item.id}/pay`, { method: "POST" });
-      await refresh();
-    } catch (reason) { setError(reason.message); }
-    finally { setSaving(null); }
-  };
   const unpaid = items.filter(item => !item.paid);
   return <>
     <PageTitle eyebrow="CONTROLE DA EQUIPE" title="Comissões da equipe"
-      description="Registre o pagamento de comissões pelos serviços concluídos; o saldo do profissional é atualizado automaticamente."/>
+      description="Consulte as comissões acumuladas. O pagamento ao profissional é confirmado somente em Fechamentos quinzenais."/>
     <div className="month-filter"><label htmlFor="commissions-month">Mês</label>
       <input id="commissions-month" className="input month-input" type="month" value={month}
         onChange={event => setMonth(event.target.value)}/></div>
@@ -1130,7 +1120,7 @@ function TeamCommissionsPage() {
     </section>
     <section className="panel management-panel">
       <div className="panel-heading"><div><h2>Comissões por serviço</h2>
-        <p className="panel-subtitle">Registrar pagamento não transfere dinheiro. Confirme apenas após pagar o profissional.</p></div></div>
+        <p className="panel-subtitle">Valores a receber pelos profissionais. A confirmação do repasse acontece exclusivamente na aba Fechamentos quinzenais.</p></div></div>
       {items.length ? <div className="management-list">{items.map(item =>
         <article className="service-row" key={item.id}>
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
@@ -1139,7 +1129,6 @@ function TeamCommissionsPage() {
           <strong>{money(item.earnedCents)}</strong>
           {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Pago</span> : <>
             <Button variant="secondary" onClick={()=>setAdjusting({...item, reason:""})}>Ajustar comissão</Button>
-            <Button disabled={saving === item.id} onClick={()=>registerPayment(item)}>{saving === item.id ? "Salvando..." : "Registrar pagamento"}</Button>
           </>}
         </article>)}</div> : <EmptyState icon={Wallet} title="Sem comissões neste mês"
           description="Conclua os atendimentos para registrar comissões."/>}
@@ -1435,7 +1424,7 @@ function UnreconciledCash({ user, onChange }) {
   </section>;
 }
 
-function DailyCashClosing({ revision }) {
+function DailyCashClosing({ revision, user }) {
   const [date, setDate] = useState(localDate().slice(0, 10));
   const [summary, setSummary] = useState(null);
   const [closings, setClosings] = useState([]);
@@ -1446,11 +1435,16 @@ function DailyCashClosing({ revision }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [updated, setUpdated] = useState(0);
+  const isOwner = user.role === "dono";
+  const [pdfBusy, setPdfBusy] = useState("");
+  const [movementType,setMovementType] = useState("sangria");
+  const [movementAmount,setMovementAmount] = useState("");
+  const [movementReason,setMovementReason] = useState("");
   useEffect(() => {
     let active = true;
     Promise.all([
       api(`/cash/daily?date=${encodeURIComponent(date)}`),
-      api("/cash/closings")
+      isOwner ? api("/cash/closings") : Promise.resolve({closings:[]})
     ]).then(([day, history]) => {
       if (!active) return;
       setSummary(day);
@@ -1459,7 +1453,7 @@ function DailyCashClosing({ revision }) {
       setError("");
     }).catch(reason => { if (active) setError(reason.message); });
     return () => { active = false; };
-  }, [date, updated, revision]);
+  }, [date, updated, revision, isOwner]);
   const parseCash = (value) => {
     const text = String(value).trim().replace(",", ".");
     if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null;
@@ -1479,6 +1473,37 @@ function DailyCashClosing({ revision }) {
       setOpeningNotes("");
     } catch (reason) { setError(reason.message); }
     finally { setBusy(false); }
+  };
+
+  const downloadPdf = async (id, cashDate) => {
+    setPdfBusy(id); setError("");
+    try {
+      const blob = await api(`/cash/closings/${encodeURIComponent(id)}/pdf`);
+      if (!(blob instanceof Blob) || (blob.type && !blob.type.includes("pdf")))
+        throw new Error("Não foi possível obter o arquivo PDF.");
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = `fechamento-caixa-${cashDate}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 3000);
+    } catch (err) { setError(err.message); }
+    finally { setPdfBusy(""); }
+  };
+  const recordMovement = async () => {
+    const cents = parseCash(movementAmount);
+    if (cents === null || cents <= 0) return setError("Informe um valor positivo.");
+    if (movementReason.trim().length < 5) return setError("Informe o motivo (mínimo de 5 caracteres).");
+    if (!window.confirm(`Registrar ${movementType} de ${money(cents)}?`)) return;
+    setBusy(true);setError("");
+    try {
+      await api("/cash/movements", {method:"POST",body:{
+        type:movementType, amountCents:cents, reason:movementReason.trim()
+      }});
+      setMovementAmount("");setMovementReason("");setUpdated(n=>n+1);
+    } catch(err) {setError(err.message);} finally {setBusy(false);}
   };
   const closeDay = async () => {
     const countedCashCents = parseCash(counted);
@@ -1500,14 +1525,14 @@ function DailyCashClosing({ revision }) {
       <div><p className="eyebrow">CONFERÊNCIA DIÁRIA</p><h2>Fechamento diário de caixa</h2>
         <p className="panel-subtitle">Registre a abertura em espécie, confira os recebimentos e encerre o dia. O saldo inicial não é faturamento.</p></div>
       <input className="input" type="date" aria-label="Data do caixa" value={date}
-        max={summary?.today || localDate().slice(0,10)} onChange={e => setDate(e.target.value)}/>
+        max={summary?.today || localDate().slice(0,10)} min={!isOwner ? (summary?.today || localDate().slice(0,10)) : undefined} onChange={e => setDate(e.target.value)}/>
     </div>
     <ErrorMessage>{error}</ErrorMessage>
     {!summary ? <p className="report-empty">Carregando o caixa...</p> : <>
       <div className="stats-grid finance-stats">
         <StatCard title="Total recebido" value={money(summary.closing?.expectedTotalCents ?? summary.expectedTotalCents)} note={`${summary.closing?.receiptCount ?? summary.receiptCount} recebimento(s)`} icon={Wallet} tone="green"/>
-        <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents : summary.expectedDrawerCashCents)} note="Saldo inicial + recebimentos em espécie" icon={CircleDollarSign} tone="blue"/>
-        <StatCard title="Situação" value={summary.closing ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.closing ? "green" : "orange"}/>
+        <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents + (summary.closing.supplyCents || 0) - (summary.closing.withdrawalCents || 0) : summary.expectedDrawerCashCents)} note="Saldo inicial + recebimentos em espécie" icon={CircleDollarSign} tone="blue"/>
+        <StatCard title="Situação" value={summary.cashState === "closed" ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.cashState === "closed" ? "green" : "orange"}/>
       </div>
       {summary.opening ? <div className="panel" style={{marginTop:16}}>
         <b>Abertura registrada por {summary.opening.openedByName}</b>
@@ -1524,6 +1549,41 @@ function DailyCashClosing({ revision }) {
             onChange={event=>setOpeningNotes(event.target.value)} placeholder="Ex.: troco deixado pelo caixa anterior"/></div>
         <Button disabled={busy} onClick={openDay}>{busy ? "Registrando..." : "Abrir caixa do dia"}</Button>
       </div> : null}
+
+      {summary.cashState === "open" && date === summary.today && <div className="panel" style={{marginTop:16}}>
+        <h3>Movimentação em espécie</h3>
+        <p className="panel-subtitle">Sangria é retirada; suprimento é entrada de troco. Nenhum dos dois é faturamento.</p>
+        <div className="month-filter">
+          <label htmlFor="cash-movement-type">Tipo</label>
+          <select className="input" id="cash-movement-type" value={movementType}
+            onChange={e=>setMovementType(e.target.value)}>
+            <option value="sangria">Sangria — retirada</option>
+            <option value="suprimento">Suprimento — entrada</option>
+          </select>
+          <label htmlFor="cash-movement-amount">Valor (R$)</label>
+          <input id="cash-movement-amount" className="input month-input" inputMode="decimal"
+            value={movementAmount} onChange={e=>setMovementAmount(e.target.value)} placeholder="0,00"/>
+        </div>
+        <div className="month-filter">
+          <label htmlFor="cash-movement-reason">Motivo</label>
+          <input id="cash-movement-reason" className="input" maxLength={250} value={movementReason}
+            onChange={e=>setMovementReason(e.target.value)} placeholder="Ex.: retirada para depósito"/>
+        </div>
+        <Button disabled={busy} onClick={recordMovement}>Registrar movimentação</Button>
+      </div>}
+      <div className="management-list">
+        <div className="service-row"><b>Suprimentos</b>
+          <strong>{money(summary.closing?.supplyCents ?? summary.supplyCents ?? 0)}</strong></div>
+        <div className="service-row"><b>Sangrias</b>
+          <strong>{money(summary.closing?.withdrawalCents ?? summary.withdrawalCents ?? 0)}</strong></div>
+        {(summary.movements || []).map(movement => <article className="service-row" key={movement.id}>
+          <div className="min-w-0 flex-1">
+            <b>{movement.type === "sangria" ? "Sangria" : "Suprimento"} · {movement.createdByName}</b>
+            <small>{movement.reason} · {movement.createdAt}</small>
+          </div>
+          <strong>{money(movement.amountCents)}</strong>
+        </article>)}
+      </div>
       <div className="management-list">
         {Object.entries(paymentNames).map(([key,label]) => <div className="service-row" key={key}>
           <span className="service-row-icon"><Wallet size={18}/></span>
@@ -1531,10 +1591,10 @@ function DailyCashClosing({ revision }) {
           <strong>{money(methods[key] || 0)}</strong>
         </div>)}
       </div>
-      {summary.closing ? <div className="panel" style={{marginTop:16}}>
+      {summary.cashState === "closed" && !summary.closing ? <p className="panel-subtitle">Caixa encerrado. Histórico e PDF exclusivos do administrador.</p> : summary.closing ? <div className="panel" style={{marginTop:16}}>
         <b>Fechado por {summary.closing.closedByName}</b>
         <p className="panel-subtitle">Saldo inicial: {money(summary.closing.openingCashCents)} · Dinheiro recebido: {money(summary.closing.expectedCashCents)}</p>
-        <a className="button button-secondary" href={`/api/cash/closings/${encodeURIComponent(summary.closing.id)}/pdf`}><Download size={16}/> Baixar PDF deste fechamento</a>
+        {isOwner && <Button variant="secondary" onClick={()=>downloadPdf(summary.closing.id,date)}><Download size={16}/> Baixar PDF deste fechamento</Button>}
         <p className="panel-subtitle">Dinheiro contado: {money(summary.closing.countedCashCents)} · Diferença: {money(summary.closing.differenceCents)}</p>
         {summary.closing.notes && <p className="panel-subtitle">Observação: {summary.closing.notes}</p>}
       </div> : summary.opening ? <>
@@ -1553,6 +1613,7 @@ function DailyCashClosing({ revision }) {
         </Button>
       </> : <p className="panel-subtitle">Abra o caixa do dia para habilitar o fechamento.</p>}
     </>}
+    {isOwner && <>
     <div className="panel-heading" style={{marginTop:24}}><div><p className="eyebrow">REGISTROS</p><h3>Últimos fechamentos</h3></div></div>
     {closings.length ? <div className="management-list">{closings.map(item =>
       <article className="service-row" key={item.id}>
@@ -1560,9 +1621,10 @@ function DailyCashClosing({ revision }) {
         <div className="min-w-0 flex-1"><b>{item.cashDate} · {item.closedByName}</b>
           <small>{item.receiptCount} recebimento(s) · Diferença: {money(item.differenceCents)}</small></div>
         <strong>{money(item.expectedTotalCents)}</strong>
-        <a className="button button-secondary" href={`/api/cash/closings/${encodeURIComponent(item.id)}/pdf`}><Download size={15}/> PDF</a>
+        <Button variant="secondary" onClick={()=>downloadPdf(item.id,item.cashDate)}><Download size={15}/> PDF</Button>
       </article>)}</div> : <p className="report-empty">Ainda não existem fechamentos registrados.</p>}
     <p className="panel-subtitle">Recebimentos antigos sem data registrada não entram automaticamente na conferência diária.</p>
+      </>}
   </section>;
 }
 
@@ -1631,7 +1693,7 @@ function ReceivablesPage({ user }) {
         </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
     </section>
     <UnreconciledCash user={user} onChange={() => setCashRevision(n => n + 1)}/>
-    <DailyCashClosing revision={cashRevision}/>
+    <DailyCashClosing revision={cashRevision} user={user}/>
   </>;
 }
 
