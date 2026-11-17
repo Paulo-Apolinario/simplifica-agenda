@@ -1424,7 +1424,7 @@ function UnreconciledCash({ user, onChange }) {
   </section>;
 }
 
-function DailyCashClosing({ revision }) {
+function DailyCashClosing({ revision, user }) {
   const [date, setDate] = useState(localDate().slice(0, 10));
   const [summary, setSummary] = useState(null);
   const [closings, setClosings] = useState([]);
@@ -1435,11 +1435,16 @@ function DailyCashClosing({ revision }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [updated, setUpdated] = useState(0);
+  const isOwner = user.role === "dono";
+  const [pdfBusy, setPdfBusy] = useState("");
+  const [movementType,setMovementType] = useState("sangria");
+  const [movementAmount,setMovementAmount] = useState("");
+  const [movementReason,setMovementReason] = useState("");
   useEffect(() => {
     let active = true;
     Promise.all([
       api(`/cash/daily?date=${encodeURIComponent(date)}`),
-      api("/cash/closings")
+      isOwner ? api("/cash/closings") : Promise.resolve({closings:[]})
     ]).then(([day, history]) => {
       if (!active) return;
       setSummary(day);
@@ -1448,7 +1453,7 @@ function DailyCashClosing({ revision }) {
       setError("");
     }).catch(reason => { if (active) setError(reason.message); });
     return () => { active = false; };
-  }, [date, updated, revision]);
+  }, [date, updated, revision, isOwner]);
   const parseCash = (value) => {
     const text = String(value).trim().replace(",", ".");
     if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null;
@@ -1620,7 +1625,7 @@ function ReceivablesPage({ user }) {
         </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
     </section>
     <UnreconciledCash user={user} onChange={() => setCashRevision(n => n + 1)}/>
-    <DailyCashClosing revision={cashRevision}/>
+    <DailyCashClosing revision={cashRevision} user={user}/>
   </>;
 }
 
