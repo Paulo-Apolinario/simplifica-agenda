@@ -199,6 +199,8 @@ const DEMO_TENANT_ID = "tenant-salao-demo";
 const isDemoTenant = (tenantId) => tenantId === DEMO_TENANT_ID;
 app.use("/api", (req, res, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  // SaaS operations use an independent operator key and never write demo tenant data.
+  if (req.path.startsWith("/saas/")) return next();
   if (req.path.startsWith("/auth/") || req.path.startsWith("/installation/")) return next();
   if (req.session?.user && isDemoTenant(req.session.user.tenantId)) {
     return fail(res, 403, "A demonstração é somente leitura. Entre com uma conta comercial para salvar alterações.");
