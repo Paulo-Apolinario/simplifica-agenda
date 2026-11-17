@@ -1474,6 +1474,7 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
     return fail(res, 400, "O horário está fora do expediente deste profissional.");
   }
   const id = createId();
+  const accessToken = crypto.randomBytes(32).toString("hex");
   const create = db.transaction(() => {
     if (scheduleConflict(res, {
       tenantId: business.id, professionalId, startsAt: normalizedStart, endsAt,
