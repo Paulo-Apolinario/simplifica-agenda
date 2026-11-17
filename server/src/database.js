@@ -283,8 +283,10 @@ ensureColumn("appointments", "payment_reconciled_by", "TEXT");
 function businessDateFromTimestamp(timestamp, timezone) {
   const parsed = new Date(timestamp.endsWith("Z") ? timestamp : timestamp.replace(" ", "T") + "Z");
   if (Number.isNaN(parsed.getTime())) return null;
-  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone || "America/Sao_Paulo",
-    year: "numeric", month: "2-digit", day: "2-digit" }).format(parsed);
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: timezone || "America/Sao_Paulo",
+    year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(parsed);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 // Recover exact historic receipt/completion dates only from traceable audit events.
 // If the source has no timestamp, leave the record pending manual reconciliation.
