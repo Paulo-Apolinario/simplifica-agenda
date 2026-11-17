@@ -112,7 +112,12 @@ function ErrorMessage({ children }) {
 }
 
 function Login({ onLogin, demoEnabled = false }) {
-  const [values, setValues] = useState({ email: demoEnabled ? "admin@simplifica.local" : "", password: demoEnabled ? "Agenda123!" : "", slug: "" });
+  const [values, setValues] = useState({ email: demoEnabled ? "admin@simplifica.local" : "", staffCode: "", password: demoEnabled ? "Agenda123!" : "", slug: "" });
+  const [mode, setMode] = useState("email");
+  const [activation, setActivation] = useState(false);
+  const [activationToken, setActivationToken] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [success, setSuccess] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const submit = async (event) => {
@@ -158,7 +163,7 @@ function Login({ onLogin, demoEnabled = false }) {
             onChange={(e) => setValues({ ...values, email: e.target.value })} />}
           {mode === "staff" && <Field label="Código do profissional (ex.: 001)" inputMode="numeric" pattern="[0-9]{3}" maxLength={3} required value={values.staffCode} onChange={(e) => setValues({ ...values, staffCode: e.target.value.replace(/\D/g, "").slice(0, 3) })}/>}
           <Field label={activation ? "Escolha sua senha (6 a 8 letras e números)" : "Senha"} type="password" autoComplete="current-password" required value={values.password}
-            onChange={(e) => setValues({ ...values, password: e.target.value })} minLength={mode === "staff" ? 6 : undefined} maxLength={mode === "staff" ? 8 : undefined} />
+            onChange={(e) => setValues({ ...values, password: e.target.value })} minLength={mode === "staff" && activation ? 6 : undefined} maxLength={mode === "staff" && activation ? 8 : undefined} />
           {mode === "staff" && activation && <>
             <Field label="Repita a senha" type="password" required minLength={6} maxLength={8} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}/>
             <Field label="Código de ativação fornecido pelo administrador" required value={activationToken} onChange={e => setActivationToken(e.target.value)}/>
@@ -762,7 +767,7 @@ function ServiceForm({ service, professionals, onClose, onSaved }) {
   </Modal>;
 }
 
-function TeamMemberForm({ services, onClose, onSaved }) {
+function TeamMemberForm({ services, businessSlug, onClose, onSaved }) {
   const [values, setValues] = useState({ name: "", email: "", password: "", phone: "", role: "profissional", commissionPercent: 40, serviceIds: [] });
   const [error, setError] = useState("");
   const [issued, setIssued] = useState(null);
@@ -779,8 +784,8 @@ function TeamMemberForm({ services, onClose, onSaved }) {
     {issued ? <div className="form-stack">
       <p className="success-message">Profissional cadastrado. Copie os dados de ativação agora; o código temporário não poderá ser consultado depois.</p>
       <Field label="Código profissional" readOnly value={issued.staffCode}/>
-      <Field label="Código de ativação (válido por 24h)" readOnly value={issued.activationToken}/>
-      <Button type="button" onClick={() => navigator.clipboard.writeText(`Comércio: ${window.location.hostname} | Código: ${issued.staffCode} | Ativação: ${issued.activationToken}`)}>Copiar informações</Button>
+      <Field label="Identificador do comércio" readOnly value={businessSlug}/><Field label="Código de ativação (válido por 24h)" readOnly value={issued.activationToken}/>
+      <Button type="button" onClick={() => navigator.clipboard.writeText(`Comércio: ${businessSlug} | Código: ${issued.staffCode} | Ativação: ${issued.activationToken}`)}>Copiar informações</Button>
       <Button type="button" variant="secondary" onClick={onSaved}>Concluir</Button>
     </div> : <form className="form-stack" onSubmit={submit}>
       <Field label="Nome" required value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
@@ -934,7 +939,7 @@ function ServicesPage({ user, section = "services" }) {
           }} aria-label={person.active ? "Desativar pessoa da equipe" : "Ativar pessoa da equipe"}><ShieldCheck size={16} /></button>}
         </article>)}</div> : <EmptyState icon={UserRound} title="Só você por enquanto" description="Adicione profissionais para compartilhar a agenda." />}</section>}
     </div>
-    {modal === "team" && <TeamMemberForm services={services} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
+    {modal === "team" && <TeamMemberForm services={services} businessSlug={user.slug} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {(modal === "service" || modal?.id) && <ServiceForm service={modal?.id ? modal : null} professionals={professionals} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {hoursFor && <TeamHours professional={hoursFor} onClose={() => { setHoursFor(null); refresh(); }} />}
     {activationIssued && <Modal title={`Ativação de ${activationIssued.name}`} onClose={() => setActivationIssued(null)}>
@@ -942,7 +947,7 @@ function ServicesPage({ user, section = "services" }) {
         <p className="booking-share-notice"><Info size={16}/> Entregue o código de ativação diretamente ao profissional. Validade de 24 horas. A senha anterior deixa de funcionar após a nova ativação; as sessões já foram encerradas.</p>
         <Field label="Código profissional" value={activationIssued.staffCode} readOnly/>
         <Field label="Código temporário de ativação" value={activationIssued.activationToken} readOnly/>
-        <Button type="button" onClick={() => navigator.clipboard.writeText(`Código: ${activationIssued.staffCode} | Ativação: ${activationIssued.activationToken}`)}>Copiar código de ativação</Button>
+        <Button type="button" onClick={() => navigator.clipboard.writeText(`Comércio: ${user.slug} | Código: ${activationIssued.staffCode} | Ativação: ${activationIssued.activationToken}`)}>Copiar código de ativação</Button>
         <Button type="button" variant="secondary" onClick={() => setActivationIssued(null)}>Fechar</Button>
       </div>
     </Modal>}
