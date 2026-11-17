@@ -1498,6 +1498,95 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
   res.status(201).json({ id, protocol: id.slice(0, 8).toUpperCase(), managementToken: accessToken, status: "agendado", message: "Solicitação recebida. O estabelecimento ainda precisa confirmar." });
 });
 
+// Public customer management URL is a bearer capability: send only over HTTPS.
+app.get("/api/public/manage/:token", (req, res) => {
+  const record = managedPublicAppointment(req.params.token);
+  if (!record) return fail(res, 404, "Solicitação não encontrada ou link inválido.");
+  const cutoff = addLocalMinutes(record.startsAt, -record.cancelHours * 60);
+  const canManage = !!record.allowCancellation &&
+    ["agendado", "confirmado"].includes(record.status) &&
+    localNow(record.tenantId) < cutoff;
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ appointment: {
+    protocol: record.id.slice(0, 8).toUpperCase(), businessName: record.businessName,
+    clientName: record.clientName, serviceName: record.serviceName, professionalName: record.professionalName,
+    startsAt: record.startsAt, status: record.status, priceCents: record.priceCents,
+    whatsapp: record.whatsapp, canManage,
+  } });
+});
+app.post("/api/public/manage/:token/cancel", limitAttempts("manage-cancel", 15, 15 * 60 * 1000), (req, res) => {
+  const row = managedPublicAppointment(req.params.token);
+  if (!row) return fail(res, 404, "Solicitação não encontrada.");
+  if (!row.allowCancellation || !["agendado", "confirmado"].includes(row.status) ||
+    localNow(row.tenantId) >= addLocalMinutes(row.startsAt, -row.cancelHours * 60))
+    return fail(res, 409, "Cancelamento não permitido. Contate o estabelecimento.");
+  const changed = db.prepare("UPDATE appointments SET status='cancelado' WHERE id=? AND tenant_id=? AND status IN ('agendado','confirmado')")
+    .run(row.id, row.tenantId);
+  if (!changed.changes) return fail(res, 409, "O atendimento foi atualizado. Recarregue a página.");
+  res.json({ ok:true, status:"cancelado" });
+});
+app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedule", 15, 15 * 60 * 1000), (req, res) => {
+  const row = managedPublicAppointment(req.params.token);
+  if (!row) return fail(res, 404, "Solicitação não encontrada.");
+  if (!row.allowCancellation || !["agendado", "confirmado"].includes(row.status) ||
+    localNow(row.tenantId) >= addLocalMinutes(row.startsAt, -row.cancelHours * 60))
+    return fail(res, 409, "Remarcação não permitida. Contate o estabelecimento.");
+  const startsAt = String(req.body?.startsAt ?? "");
+  if (!validDateTime(startsAt)) return fail(res, 400, "Informe data e horário válidos.");
+  const normalized = startsAt.length === 16 ? startsAt + ":00" : startsAt;
+  if (!publicStartAllowed(row.tenantId, normalized)) return fail(res, 400, "Data fora das regras de agendamento.");
+  const selected = db.prepare(`SELECT s.duration_minutes AS duration, s.public_enabled AS publicEnabled,
+    s.active, u.active AS professionalActive
+    FROM services s JOIN users u ON u.id=? AND u.tenant_id=s.tenant_id
+    WHERE s.id=? AND s.tenant_id=?`).get(row.professionalId, row.serviceId, row.tenantId);
+  if (!selected || !selected.publicEnabled || !selected.active || !selected.professionalActive)
+    return fail(res, 409, "Serviço ou profissional indisponível.");
+  const endsAt = addLocalMinutes(normalized, selected.duration);
+  if (!withinWorkingHours(row.tenantId, row.professionalId, normalized, endsAt))
+    return fail(res, 400, "Fora do expediente.");
+  const policy = bookingPolicy(row.tenantId);
+  const weekday = new Date(normalized.slice(0,10)+"T12:00:00Z").getUTCDay();
+  const open = db.prepare("SELECT opens_at AS opensAt FROM business_hours WHERE tenant_id=? AND weekday=?")
+    .get(row.tenantId, weekday)?.opensAt;
+  const minutes = Number(normalized.slice(11,13))*60 + Number(normalized.slice(14,16));
+  const openMinutes = open ? Number(open.slice(0,2))*60 + Number(open.slice(3,5)) : 0;
+  if ((minutes-openMinutes) % policy.interval !== 0)
+    return fail(res, 400, "Escolha um horário da agenda disponível.");
+  const changed = db.transaction(() => {
+    if (findScheduleConflict(db, { tenantId:row.tenantId, professionalId:row.professionalId,
+      startsAt:normalized, endsAt, excludeAppointmentId:row.id })) return false;
+    return db.prepare(`UPDATE appointments SET starts_at=?, ends_at=?, status='agendado'
+      WHERE id=? AND tenant_id=? AND status IN ('agendado','confirmado')`)
+      .run(normalized, endsAt, row.id, row.tenantId).changes > 0;
+  })();
+  if (!changed) return fail(res, 409, "Horário ocupado ou solicitação alterada. Escolha outro horário.");
+  res.json({ ok:true, status:"agendado", startsAt:normalized, message:"Remarcação solicitada. Aguarde nova confirmação." });
+});
+
+// Reception and owner handle only public requests for their own business.
+app.get("/api/requests", requireAuth, allowRoles("dono","recepcao"), (req, res) => {
+  const rows=db.prepare(`SELECT a.id, a.starts_at AS startsAt, a.status,
+    c.name AS clientName, c.phone AS clientPhone, s.name AS serviceName,
+    u.name AS professionalName
+    FROM appointments a JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
+    JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
+    JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    WHERE a.tenant_id=? AND a.booking_source='public'
+    ORDER BY CASE WHEN a.status='agendado' THEN 0 ELSE 1 END, a.starts_at DESC LIMIT 250`).all(tenant(req));
+  res.setHeader("Cache-Control","no-store");
+  res.json({ requests:rows });
+});
+app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), (req,res) => {
+  const action=String(req.body?.action ?? "");
+  if (!["confirm","reject"].includes(action)) return fail(res,400,"Ação inválida.");
+  const next=action==="confirm"?"confirmado":"cancelado";
+  const changed=db.prepare(`UPDATE appointments SET status=?
+    WHERE id=? AND tenant_id=? AND booking_source='public' AND status='agendado'`)
+    .run(next,req.params.id,tenant(req));
+  if (!changed.changes) return fail(res,409,"Solicitação não encontrada ou já analisada.");
+  res.json({ok:true,status:next});
+});
+
 const webDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
 if (fs.existsSync(path.join(webDirectory, "index.html"))) {
   app.use(express.static(webDirectory));
