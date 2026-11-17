@@ -334,7 +334,19 @@ function Shell({ user, onLogout, children }) {
   const location = useLocation();
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
   const [businessLogo, setBusinessLogo] = useState("");
+  const [pendingOnline,setPendingOnline] = useState(0);
   const isDemo = user.tenantId === "tenant-salao-demo";
+  useEffect(() => {
+    if (user.role === "profissional" || user.tenantId === "tenant-salao-demo") return;
+    let active = true;
+    const refreshPending = () => api("/requests")
+      .then(({requests}) => { if(active) setPendingOnline(requests.filter(item=>item.status==="agendado").length); })
+      .catch(()=>{});
+    refreshPending();
+    const id = window.setInterval(refreshPending, 60000);
+    return ()=>{ active=false; window.clearInterval(id); };
+  },[user.role,user.tenantId,location.pathname]);
+
   const visibleNavItems = navItems.filter((item) => {
     if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
@@ -374,6 +386,7 @@ function Shell({ user, onLogout, children }) {
             <NavLink key={to} to={to} end={end} onClick={() => setMobileOpen(false)}
               className={({ isActive }) => `nav-link ${isActive ? "nav-link-active" : ""}`}>
               <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
+              {to==="/solicitacoes" && pendingOnline>0 && <span className="nav-request-count" aria-label={`${pendingOnline} solicitações pendentes`}>{pendingOnline>99?"99+":pendingOnline}</span>}
             </NavLink>
           ))}
         </nav>
@@ -492,6 +505,7 @@ function ReceptionDashboard({ user }) {
       <section className="panel shortcut-panel">
         <div className="panel-heading"><div><p className="eyebrow">ATENDIMENTO RÁPIDO</p><h2>O que você precisa fazer?</h2></div></div>
         <div className="shortcuts">
+          <Link className="shortcut-item" to="/solicitacoes"><span className="shortcut-icon blue"><ClipboardCheck size={18}/></span><span><b>Solicitações online</b><small>Confirmar ou recusar pedidos públicos</small></span><ArrowRight size={15}/></Link>
           <Link className="shortcut-item" to="/agenda"><span className="shortcut-icon blue"><CalendarDays size={18}/></span><span><b>Organizar agenda</b><small>Registrar, confirmar ou remarcar</small></span><ArrowRight size={15}/></Link>
           <Link className="shortcut-item" to="/clientes"><span className="shortcut-icon green"><Users size={18}/></span><span><b>Clientes</b><small>Buscar e cadastrar clientes</small></span><ArrowRight size={15}/></Link>
           <Link className="shortcut-item" to="/compartilhar"><span className="shortcut-icon violet"><QrCode size={18}/></span><span><b>Agendamento público</b><small>Compartilhar link com o cliente</small></span><ArrowRight size={15}/></Link>
@@ -962,10 +976,7 @@ function ServiceForm({ service, professionals, onClose, onSaved }) {
       <p className="panel-subtitle">Ex.: serviço com repasse de 70% e retenção de materiais de 10 pontos → profissional recebe 60% do preço. Altere a comissão deste serviço sem modificar os serviços já agendados ou pagos.</p>
       <label className="choice-option"><input type="checkbox" checked={Boolean(values.publicEnabled)}
         onChange={e=>setValues(v=>({...v,publicEnabled:e.target.checked}))}/> Disponível para reserva pelo link ou QR Code</label>
-      <div className="field"><span className="field-label">Profissionais que realizam</span><div className="choice-list">
-        {professionals.map((person) => <label key={person.id} className="choice-option"><input type="checkbox" checked={values.professionalIds.includes(person.id)}
-          onChange={(event) => setValues({ ...values, professionalIds: event.target.checked ? [...values.professionalIds, person.id] : values.professionalIds.filter((id) => id !== person.id) })} />{person.name}</label>)}
-      </div></div>
+      <p className="panel-subtitle">Todos os profissionais ativos deste estabelecimento podem ser selecionados pelos clientes para este serviço quando a reserva online estiver habilitada.</p>
       <ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button>Salvar serviço</Button></div>
     </form>
   </Modal>;
