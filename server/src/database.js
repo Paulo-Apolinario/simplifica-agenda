@@ -232,6 +232,7 @@ db.exec(`
 `);
 
 ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
+ensureColumn("commission_payments", "batch_id", "TEXT");
 ensureColumn("appointments", "management_token_hash", "TEXT");
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS appointment_management_token_idx ON appointments(management_token_hash) WHERE management_token_hash IS NOT NULL");
 
