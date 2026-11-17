@@ -10,6 +10,8 @@ services:
       DATABASE_PATH: /app/data/simplifica-agenda.sqlite
       DEMO_EMAIL: ${DEMO_EMAIL:-admin@simplifica.local}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-Agenda123!}
+      DEMO_MODE: ${DEMO_MODE:-false}
+      INSTALL_TOKEN: ${INSTALL_TOKEN:-}
     ports:
       - "3000:3000"
     volumes:
