@@ -203,6 +203,13 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     const listCommissions = await request("/commissions?month=2026-11");
     assert.equal(listCommissions.status, 200);
     assert.equal(listCommissions.body.commissions.find(row => row.id === "a-prof-test").earnedCents, 3000);
+    const adjustment = await request("/commissions/a-prof-test", "PATCH", {
+      commissionPercent: 50, houseSharePercent: 10, reason: "Material fornecido pelo estabelecimento",
+    });
+    assert.equal(adjustment.status, 200);
+    assert.equal(adjustment.body.earnedCents, 3000);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM commission_adjustments WHERE appointment_id = ?")
+      .get("a-prof-test").n, 1);
     const payCommission = await request("/commissions/a-prof-test/pay", "POST");
     assert.equal(payCommission.status, 200);
     assert.equal(payCommission.body.amountCents, 3000);
