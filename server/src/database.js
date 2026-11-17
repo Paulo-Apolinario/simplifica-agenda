@@ -167,6 +167,7 @@ function ensureColumn(table, name, declaration) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
   if (!columns.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${declaration}`);
 }
+ensureColumn("business_settings", "whatsapp", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("users", "job_title", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("users", "login_code", "TEXT");
 ensureColumn("services", "house_share_percent", "REAL NOT NULL DEFAULT 0 CHECK (house_share_percent BETWEEN 0 AND 100)");
