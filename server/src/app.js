@@ -1349,7 +1349,8 @@ app.post("/api/public/:slug/appointments", (req, res) => {
   const startsAt = String(req.body?.startsAt ?? "");
   if (!validDateTime(startsAt) || !serviceId || !professionalId) return fail(res, 400, "Escolha serviço, profissional e horário.");
   const selected = db.prepare(`
-    SELECT s.duration_minutes AS duration, s.price_cents AS price, u.commission_percent AS commission
+    SELECT s.duration_minutes AS duration, s.price_cents AS price,
+      u.commission_percent AS commission, s.house_share_percent AS houseShare
     FROM services s JOIN professional_services ps ON ps.service_id = s.id AND ps.tenant_id = s.tenant_id
     JOIN users u ON u.id = ps.professional_id AND u.tenant_id = s.tenant_id
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
@@ -1376,10 +1377,10 @@ app.post("/api/public/:slug/appointments", (req, res) => {
     }
     db.prepare(`
       INSERT INTO appointments
-        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent, house_share_percent)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(id, business.id, client.id, professionalId, serviceId, normalizedStart, endsAt,
-      selected.price, selected.commission);
+      selected.price, selected.commission, selected.houseShare);
     return true;
   });
   if (!create()) return;
