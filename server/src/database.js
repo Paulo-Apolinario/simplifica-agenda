@@ -231,6 +231,24 @@ db.exec(`
     ON whatsapp_notifications(tenant_id, appointment_id, status);
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS appointment_audit (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    appointment_id TEXT NOT NULL REFERENCES appointments(id) ON DELETE CASCADE,
+    actor_id TEXT,
+    actor_name TEXT NOT NULL,
+    action TEXT NOT NULL,
+    before_json TEXT,
+    after_json TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE INDEX IF NOT EXISTS appointment_audit_tenant_time_idx
+    ON appointment_audit(tenant_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS appointment_audit_appointment_idx
+    ON appointment_audit(tenant_id, appointment_id, created_at DESC);
+`);
+
 ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
 ensureColumn("commission_payments", "batch_id", "TEXT");
 ensureColumn("whatsapp_notifications", "delivery_state", "TEXT NOT NULL DEFAULT 'pending'");
