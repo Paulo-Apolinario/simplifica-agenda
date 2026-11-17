@@ -1645,7 +1645,8 @@ app.get("/api/cash/closings/:id/pdf", requireAuth, allowRoles("dono"), (req, res
     expected_total_cents AS expectedTotalCents, expected_cash_cents AS expectedCashCents,
     counted_cash_cents AS countedCashCents, difference_cents AS differenceCents,
     receipt_count AS receiptCount, notes, method_totals_json AS methodsJson,
-    receipts_snapshot_json AS receiptsSnapshotJson
+    receipts_snapshot_json AS receiptsSnapshotJson, supply_cents AS supplyCents,
+    withdrawal_cents AS withdrawalCents, movements_snapshot_json AS movementsSnapshotJson
     FROM daily_cash_closings WHERE tenant_id = ? AND id = ?`).get(tenant(req), req.params.id);
   if (!closing) return fail(res, 404, "Fechamento não encontrado.");
   const opening = cashOpening(tenant(req), closing.cashDate);
@@ -1655,7 +1656,7 @@ app.get("/api/cash/closings/:id/pdf", requireAuth, allowRoles("dono"), (req, res
   closing.methods = JSON.parse(closing.methodsJson);
   const business = db.prepare("SELECT business_name AS name FROM business_settings WHERE tenant_id = ?").get(tenant(req));
   const pdf = cashClosingPdf({ businessName: business?.name || "Estabelecimento",
-    closing, opening, receipts });
+    closing, opening, receipts, movements: closing.movementsSnapshotJson ? JSON.parse(closing.movementsSnapshotJson) : [] });
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="fechamento-caixa-${closing.cashDate}.pdf"`);
@@ -1739,13 +1740,15 @@ app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req
     if (cashClosing(tenant(req), date)) return null;
     const summary = cashDaySummary(tenant(req), date);
     const openingCashCents = cashOpening(tenant(req), date)?.openingCashCents ?? 0;
-    const difference = counted - openingCashCents - summary.expectedCashCents;
+    const movements=cashMovements(tenant(req),date);
+    const difference = counted - openingCashCents - summary.expectedCashCents
+      - movements.supplyCents + movements.withdrawalCents;
     const id = createId();
     db.prepare(`INSERT INTO daily_cash_closings
       (id, tenant_id, cash_date, closed_by, closed_by_name, expected_total_cents, expected_cash_cents,
        counted_cash_cents, difference_cents, method_totals_json, receipt_count, notes,
-       opening_cash_cents, receipts_snapshot_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+       opening_cash_cents, receipts_snapshot_json, supply_cents, withdrawal_cents, movements_snapshot_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, tenant(req), date, req.user.id, req.user.name || "Usuário",
       summary.expectedTotalCents, summary.expectedCashCents, counted, difference,
       JSON.stringify(summary.methods), summary.receiptCount, notes, openingCashCents,
@@ -1755,7 +1758,8 @@ app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req
         FROM appointments a JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
         JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
         WHERE a.tenant_id = ? AND a.paid_on = ? AND a.status = 'concluido' AND a.payment_method != ''
-        ORDER BY a.paid_at, a.id`).all(tenant(req), date)));
+        ORDER BY a.paid_at, a.id`).all(tenant(req), date)),
+      movements.supplyCents,movements.withdrawalCents,JSON.stringify(movements.rows));
     return { id, date, differenceCents: difference };
   })();
   if (!result) return fail(res, 409, "Esse dia já possui um fechamento de caixa.");
