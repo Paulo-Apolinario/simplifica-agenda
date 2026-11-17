@@ -110,8 +110,8 @@ function ErrorMessage({ children }) {
   return children ? <p className="form-error" role="alert">{children}</p> : null;
 }
 
-function Login({ onLogin }) {
-  const [values, setValues] = useState({ email: "admin@simplifica.local", password: "Agenda123!", slug: "" });
+function Login({ onLogin, demoEnabled = false }) {
+  const [values, setValues] = useState({ email: demoEnabled ? "admin@simplifica.local" : "", password: demoEnabled ? "Agenda123!" : "", slug: "" });
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const submit = async (event) => {
@@ -148,11 +148,13 @@ function Login({ onLogin }) {
             {loading ? "Entrando..." : "Entrar na minha agenda"}
           </Button>
         </form>
-        <div className="demo-hint">
-          <Sparkles size={16} />
-          <span>Demonstração: <strong>admin@simplifica.local</strong> · <strong>Agenda123!</strong></span>
-        </div>
-        <Link to="/agendar/studio-bela-vista" className="login-public-link">Ver página pública de agendamento <ArrowRight size={15} /></Link>
+        {demoEnabled && <>
+          <div className="demo-hint">
+            <Sparkles size={16} />
+            <span>Demonstração: <strong>admin@simplifica.local</strong> · <strong>Agenda123!</strong></span>
+          </div>
+          <Link to="/agendar/studio-bela-vista" className="login-public-link">Ver página pública de agendamento <ArrowRight size={15} /></Link>
+        </>}
       </section>
       <div className="login-decoration">
         <div className="login-decoration-inner">
@@ -160,6 +162,62 @@ function Login({ onLogin }) {
           <h2>Mais tempo para<br />cuidar do que importa.</h2>
           <p>Uma agenda organizada deixa seu negócio crescer no seu ritmo.</p>
           <div className="decoration-card"><CalendarCheckDecoration /><div><b>Seu dia, em boas mãos.</b><span>Agendamentos sem complicação.</span></div></div>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+function InstallationSetup({ onReady }) {
+  const [form, setForm] = useState({
+    businessName: "", slug: "", ownerName: "", ownerEmail: "", password: "", installToken: "",
+  });
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const submit = async (event) => {
+    event.preventDefault();
+    setError("");
+    setSaving(true);
+    try {
+      await api("/installation/setup", { method: "POST", body: form });
+      onReady();
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <main className="login-page">
+      <section className="login-card" style={{ maxWidth: 540 }}>
+        <img className="login-logo" src="/assets/simplifica-logo.svg" alt="Simplifica Agenda" />
+        <p className="eyebrow">PRIMEIRO ACESSO</p>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Configure seu comércio</h1>
+        <p className="mt-2 mb-6 text-sm text-slate-500">Cadastre o negócio e crie a conta administradora. Nenhum dado demonstrativo será adicionado.</p>
+        <form className="space-y-4" onSubmit={submit}>
+          <Field label="Nome do comércio" required maxLength={120} value={form.businessName}
+            onChange={(e) => setForm({ ...form, businessName: e.target.value })} />
+          <Field label="Identificador do negócio" required placeholder="ex.: minha-barbearia" pattern="[a-z0-9]+(-[a-z0-9]+)*"
+            maxLength={80} value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value.toLowerCase() })} />
+          <Field label="Nome do administrador" required maxLength={120} value={form.ownerName}
+            onChange={(e) => setForm({ ...form, ownerName: e.target.value })} />
+          <Field label="E-mail do administrador" type="email" required value={form.ownerEmail}
+            onChange={(e) => setForm({ ...form, ownerEmail: e.target.value })} />
+          <Field label="Senha do administrador (mínimo 12 caracteres)" type="password" required minLength={12} autoComplete="new-password"
+            value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          <Field label="Código de instalação fornecido pelo técnico" type="password" required autoComplete="off"
+            value={form.installToken} onChange={(e) => setForm({ ...form, installToken: e.target.value })} />
+          <ErrorMessage>{error}</ErrorMessage>
+          <Button className="w-full justify-center" type="submit" disabled={saving}>
+            {saving ? "Configurando..." : "Criar meu comércio"}
+          </Button>
+        </form>
+      </section>
+      <div className="login-decoration">
+        <div className="login-decoration-inner">
+          <span className="decoration-kicker"><span /> SUA ROTINA, MAIS SIMPLES</span>
+          <h2>Comece com sua agenda organizada.</h2>
+          <p>Depois de configurar seu negócio, entre com o e-mail e a senha que você criou.</p>
         </div>
       </div>
     </main>
@@ -867,10 +925,15 @@ function AccessDenied() {
 export default function App() {
   const [user, setUser] = useState(undefined);
   const [loading, setLoading] = useState(true);
+  const [installation, setInstallation] = useState(null);
   const location = useLocation();
   useEffect(() => {
     if (location.pathname.startsWith("/agendar/")) { setLoading(false); return; }
-    api("/auth/me").then(({ user: current }) => setUser(current)).catch(() => setUser(null)).finally(() => setLoading(false));
+    Promise.all([
+      api("/installation/status"),
+      api("/auth/me").then(({ user: current }) => current).catch(() => null),
+    ]).then(([status, current]) => { setInstallation(status); setUser(current); })
+      .catch(() => setUser(null)).finally(() => setLoading(false));
   }, [location.pathname]);
   useEffect(() => {
     api("/settings").then(({ settings }) => document.documentElement.classList.toggle("dark", settings?.theme === "escuro")).catch(() => {});
@@ -880,7 +943,8 @@ export default function App() {
     return <PublicBooking slug={slug} />;
   }
   if (loading) return <div className="app-loading"><img src="/assets/simplifica-perfil.svg" alt="" /><Loading /></div>;
-  if (!user) return <Login onLogin={setUser} />;
+  if (installation?.needsSetup) return <InstallationSetup onReady={() => { setInstallation({ needsSetup: false, demoEnabled: false }); setUser(null); }} />;
+  if (!user) return <Login key={String(installation?.demoEnabled)} onLogin={setUser} demoEnabled={installation?.demoEnabled} />;
   const logout = async () => { await api("/auth/logout", { method: "POST" }); setUser(null); };
   return <Shell user={user} onLogout={logout}>
     <Routes>
