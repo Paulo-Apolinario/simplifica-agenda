@@ -1331,12 +1331,15 @@ app.get("/api/public/:slug", (req, res) => {
     SELECT id, name, duration_minutes AS durationMinutes, price_cents AS priceCents
     FROM services WHERE tenant_id = ? AND active = 1 ORDER BY name
   `).all(business.tenantId);
+  // The public directory includes only active professionals from this specific business.
+  // Service assignments remain useful internally, but never hide a qualified team member.
   const professionals = db.prepare(`
-    SELECT u.id, u.name, group_concat(ps.service_id, ',') AS service_ids
-    FROM users u JOIN professional_services ps ON ps.professional_id = u.id AND ps.tenant_id = u.tenant_id
+    SELECT u.id, u.name
+    FROM users u
     WHERE u.tenant_id = ? AND u.role = 'profissional' AND u.active = 1
-    GROUP BY u.id ORDER BY u.name
-  `).all(business.tenantId).map((pro) => ({ id: pro.id, name: pro.name, serviceIds: pro.service_ids.split(",") }));
+    ORDER BY u.name COLLATE NOCASE
+  `).all(business.tenantId);
+  res.setHeader("Cache-Control", "no-store");
   res.json({ business, services, professionals });
 });
 
@@ -1356,8 +1359,7 @@ app.get("/api/public/:slug/slots", (req, res) => {
       ph.professional_id AS hasProfessionalSchedule,
       bh.opens_at AS businessOpens, bh.closes_at AS businessCloses
     FROM services s
-    JOIN professional_services ps ON ps.service_id = s.id AND ps.tenant_id = s.tenant_id
-    JOIN users u ON u.id = ps.professional_id AND u.tenant_id = s.tenant_id
+    JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
     LEFT JOIN professional_hours ph ON ph.professional_id = u.id AND ph.weekday = ?
     LEFT JOIN business_hours bh ON bh.tenant_id = s.tenant_id AND bh.weekday = ?
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
@@ -1402,8 +1404,7 @@ app.post("/api/public/:slug/appointments", (req, res) => {
   const selected = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
       u.commission_percent AS commission, s.house_share_percent AS houseShare
-    FROM services s JOIN professional_services ps ON ps.service_id = s.id AND ps.tenant_id = s.tenant_id
-    JOIN users u ON u.id = ps.professional_id AND u.tenant_id = s.tenant_id
+    FROM services s JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
   `).get(business.id, serviceId, professionalId);
   if (!selected) return fail(res, 400, "Serviço ou profissional inválido.");
