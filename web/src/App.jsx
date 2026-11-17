@@ -318,13 +318,13 @@ const navItems = [
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços", icon: Scissors },
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
+  { to: "/configuracoes", label: "Configurações do estabelecimento", icon: Settings },
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
   { to: "/comissoes", label: "Comissões da equipe", icon: CircleDollarSign },
   { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
-  { to: "/configuracoes", label: "Configurações do estabelecimento", icon: Settings },
   { to: "/minha-conta", label: "Minha conta", icon: ShieldCheck },
 ];
 
