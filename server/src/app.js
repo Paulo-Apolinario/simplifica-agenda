@@ -134,6 +134,25 @@ function tenant(req) {
   return req.user.tenantId;
 }
 
+
+const auditFields = "id, status, starts_at AS startsAt, ends_at AS endsAt, price_cents AS priceCents, payment_method AS paymentMethod, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent";
+function auditSnapshot(tenantId, appointmentId) {
+  return db.prepare(`SELECT ${auditFields} FROM appointments WHERE tenant_id = ? AND id = ?`).get(tenantId, appointmentId) ?? null;
+}
+function auditSnapshotFromOriginal(row) {
+  return {id: row.id, status: row.status, startsAt: row.startsAt, endsAt: row.endsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod, commissionPercent: row.commissionPercent, houseSharePercent: row.houseSharePercent};
+}
+function recordAppointmentAudit(tenantId, appointmentId, action, actor, before = null) {
+  const after = auditSnapshot(tenantId, appointmentId);
+  if (!after) return;
+  db.prepare(`INSERT INTO appointment_audit
+    (id, tenant_id, appointment_id, actor_id, actor_name, action, before_json, after_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    createId(), tenantId, appointmentId, actor?.id ?? null,
+    actor?.name || (actor?.role === "cliente" ? "Cliente (link público)" : "Sistema / agendamento público"),
+    action, before ? JSON.stringify(before) : null, JSON.stringify(after));
+}
+
 function appointmentRows(tenantId, where = "", params = []) {
   return db.prepare(`
     SELECT a.id, a.starts_at AS startsAt, a.ends_at AS endsAt, a.status,
@@ -1187,6 +1206,7 @@ app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("
     AND status IN ('agendado', 'confirmado')
   `).run(appointment.id, tenant(req), req.user.id);
   if (!result.changes) return fail(res, 409, "Atendimento já atualizado.");
+  recordAppointmentAudit(tenant(req), appointment.id, "conclusao", req.user, appointment);
   res.json({ ok: true });
 });
 
@@ -1235,6 +1255,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
     return true;
   });
   if (!create()) return;
+  recordAppointmentAudit(tenant(req), id, "criacao", req.user);
   res.status(201).json({ id });
 });
 
@@ -1242,7 +1263,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   const appointment = db.prepare(`
     SELECT id, professional_id AS professionalId, service_id AS serviceId,
       starts_at AS startsAt, ends_at AS endsAt, status, price_cents AS priceCents,
-      payment_method AS paymentMethod, notes
+      payment_method AS paymentMethod, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes
     FROM appointments WHERE id = ? AND tenant_id = ?
   `).get(req.params.id, tenant(req));
   if (!appointment) return fail(res, 404, "Atendimento não encontrado.");
@@ -1298,6 +1319,10 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     return true;
   });
   if (!update()) return;
+  const updated = auditSnapshot(tenant(req), appointment.id);
+  if (JSON.stringify(updated) !== JSON.stringify(auditSnapshotFromOriginal(appointment))) {
+    recordAppointmentAudit(tenant(req), appointment.id, appointment.startsAt !== updated.startsAt ? "remarcacao" : appointment.status !== updated.status ? "status" : appointment.paymentMethod !== updated.paymentMethod ? "pagamento" : "edicao", req.user, appointment);
+  }
   res.json({ ok: true });
 });
 
@@ -1465,7 +1490,33 @@ app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao")
     WHERE id = ? AND tenant_id = ? AND status = 'concluido' AND payment_method = ''`)
     .run(method, req.params.id, tenant(req));
   if (!result.changes) return fail(res, 409, "Atendimento não encontrado, não concluído ou já pago.");
+  recordAppointmentAudit(tenant(req), req.params.id, "pagamento", req.user);
   res.json({ ok: true });
+});
+
+
+app.get("/api/reports/appointment-audit", requireAuth, allowRoles("dono"), (req, res) => {
+  const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
+  if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
+  const action = String(req.query.action ?? "").trim();
+  const permitted = ["criacao", "confirmacao", "cancelamento", "remarcacao", "conclusao", "pagamento", "status", "edicao", "comissao"];
+  if (action && !permitted.includes(action)) return fail(res, 400, "Ação inválida.");
+  const rows = db.prepare(`
+    SELECT audit.id, audit.appointment_id AS appointmentId, audit.actor_name AS actorName,
+      audit.action, audit.before_json AS beforeJson, audit.after_json AS afterJson,
+      audit.created_at AS createdAt, c.name AS clientName, s.name AS serviceName
+    FROM appointment_audit audit
+    JOIN appointments ap ON ap.id = audit.appointment_id AND ap.tenant_id = audit.tenant_id
+    JOIN clients c ON c.id = ap.client_id AND c.tenant_id = audit.tenant_id
+    JOIN services s ON s.id = ap.service_id AND s.tenant_id = audit.tenant_id
+    WHERE audit.tenant_id = ? AND substr(audit.created_at, 1, 7) = ?
+      AND (? = '' OR audit.action = ?)
+    ORDER BY audit.created_at DESC, audit.rowid DESC LIMIT 300
+  `).all(tenant(req), month, action, action);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ events: rows.map(({ beforeJson, afterJson, ...event }) => ({
+    ...event, before: beforeJson ? JSON.parse(beforeJson) : null, after: afterJson ? JSON.parse(afterJson) : null,
+  })) });
 });
 
 app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
@@ -1871,6 +1922,7 @@ app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), async
     WHERE id=? AND tenant_id=? AND booking_source='public' AND status='agendado'`)
     .run(next,req.params.id,tenant(req));
   if (!changed.changes) return fail(res,409,"Solicitação não encontrada ou já analisada.");
+  recordAppointmentAudit(tenant(req), req.params.id, action === "confirm" ? "confirmacao" : "cancelamento", req.user);
   queueWhatsAppNotification(tenant(req),req.params.id,next);
   const whatsappState=await notifyStatusWhatsApp(tenant(req),req.params.id,next);
   db.prepare(`UPDATE whatsapp_notifications SET delivery_state=?
