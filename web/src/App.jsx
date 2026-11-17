@@ -1631,17 +1631,35 @@ function PublicBooking({ slug }) {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  useEffect(() => { api(`/public/${slug}`).then(setData).catch((reason) => setError(reason.message)); }, [slug]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
   useEffect(() => {
-    setSlots([]); setTime("");
+    setData(null); setServiceId(""); setProfessionalId(""); setTime(""); setSlots([]); setError("");
+    let active = true;
+    api(`/public/${encodeURIComponent(slug)}`)
+      .then(result => { if (active) setData(result); })
+      .catch(reason => { if (active) setError(reason.message); });
+    return () => { active = false; };
+  }, [slug]);
+  useEffect(() => {
+    setSlots([]); setTime(""); setLoadingSlots(false);
     if (!serviceId || !professionalId || !date) return;
-    api(`/public/${slug}/slots?serviceId=${serviceId}&professionalId=${professionalId}&date=${date}`)
-      .then(({ slots: available }) => setSlots(available)).catch((reason) => setError(reason.message));
+    let active = true;
+    setLoadingSlots(true); setError("");
+    api(`/public/${encodeURIComponent(slug)}/slots?serviceId=${encodeURIComponent(serviceId)}&professionalId=${encodeURIComponent(professionalId)}&date=${encodeURIComponent(date)}`)
+      .then(({ slots: available }) => { if (active) setSlots(available || []); })
+      .catch(reason => { if (active) setError(reason.message); })
+      .finally(() => { if (active) setLoadingSlots(false); });
+    return () => { active = false; };
   }, [slug, serviceId, professionalId, date]);
   const service = data?.services.find((item) => item.id === serviceId);
-  const professionals = data?.professionals.filter((person) => !serviceId || person.serviceIds.includes(serviceId)) ?? [];
+  const professionals = data?.professionals ?? [];
+  const professional = professionals.find(person => person.id === professionalId);
   const submit = async (event) => {
-    event.preventDefault(); setError(""); setMessage(""); setLoading(true);
+    event.preventDefault(); setError(""); setMessage("");
+    if (!serviceId || !professionalId || !time) { setError("Selecione serviço, profissional e horário."); return; }
+    const digits = client.phone.replace(/\D/g, "");
+    if (!/^(?:55)?\d{10,11}$/.test(digits)) { setError("Informe WhatsApp com DDD válido."); return; }
+    setLoading(true);
     try {
       const result = await api(`/public/${slug}/appointments`, { method: "POST", body: {
         ...client, serviceId, professionalId, startsAt: `${date}T${time}:00`,
@@ -1649,40 +1667,48 @@ function PublicBooking({ slug }) {
       setMessage(result.message);
       setTime("");
       setClient({ name: "", phone: "" });
-    } catch (reason) { setError(reason.message); } finally { setLoading(false); }
+    } catch (reason) { setTime(""); setError(reason.message); } finally { setLoading(false); }
   };
   if (!data && !error) return <div className="public-page"><Loading /></div>;
-  if (error && !data) return <div className="public-page"><div className="public-booking-card"><img className="public-logo" src="/assets/simplifica-perfil.svg" /><h1>Não encontramos esse negócio</h1><p>{error}</p></div></div>;
+  if (error && !data) return <div className="public-page"><div className="public-booking-card"><img className="public-logo" src="/assets/simplifica-perfil.svg" alt="Simplifica Agenda"/><h1>Não encontramos esse estabelecimento</h1><p>{error}</p><p>Confira o link recebido do estabelecimento.</p></div></div>;
   return <main className="public-page">
-    <header className="public-topbar"><Link to="/" className="public-brand"><img src="/assets/simplifica-perfil.svg" />Simplifica <span>Agenda</span></Link><span>Agendamento online</span></header>
+    <header className="public-topbar"><div className="public-brand"><img src="/assets/simplifica-perfil.svg" alt=""/>Simplifica <span>Agenda</span></div><span>Agendamento online</span></header>
     <section className="public-booking-card">
-      <div className="public-business"><img className="public-business-logo" src={data.business.logoUrl || "/assets/simplifica-perfil.svg"} alt="" />
-        <div><p className="eyebrow">AGENDE SEU HORÁRIO</p><h1>{data.business.businessName}</h1><p>{data.business.address}</p>
+      <div className="public-business"><img className="public-business-logo" src={data.business.logoUrl || "/assets/simplifica-perfil.svg"} alt={`Logo de ${data.business.businessName}`}/>
+        <div><p className="eyebrow">AGENDE SEU HORÁRIO</p><h1>{data.business.businessName}</h1>{data.business.address && <p>{data.business.address}</p>}
           {data.business.whatsapp && <a className="text-link" target="_blank" rel="noreferrer"
             href={whatsappUrl(data.business.whatsapp, "Olá! Gostaria de tirar uma dúvida sobre um agendamento.")}>
             <Phone size={14}/> WhatsApp do estabelecimento</a>}</div>
       </div>
-      {message ? <div className="booking-success"><span><Check size={25} /></span><h2>Horário solicitado!</h2><p>{message}</p><Button variant="secondary" onClick={() => setMessage("")}>Fazer outro agendamento</Button></div> :
+      {slug === "studio-bela-vista" && <p className="public-demo-notice"><Info size={16}/> Esta página é demonstrativa. Reservas reais permanecem desativadas.</p>}
+      {message ? <div className="booking-success" role="status"><span><Check size={25} /></span><h2>Horário solicitado!</h2><p>{message}</p><Button variant="secondary" onClick={() => setMessage("")}>Fazer outro agendamento</Button></div> :
         <form className="public-form" onSubmit={submit}>
-          <div className="booking-step"><span>1</span><b>Escolha seu serviço</b></div>
-          <div className="public-service-grid">{data.services.map((item) => <button key={item.id} type="button" onClick={() => { setServiceId(item.id); setProfessionalId(""); }}
+          <div className="booking-step"><span>1</span><b>Qual serviço você deseja?</b></div>
+          <div className="public-service-grid">{data.services.map((item) => <button key={item.id} type="button" aria-pressed={serviceId === item.id} onClick={() => { setServiceId(item.id); setProfessionalId(""); setTime(""); }}
             className={`public-service-card ${serviceId === item.id ? "public-service-selected" : ""}`}><span className="shortcut-icon blue"><Scissors size={18} /></span><span><b>{item.name}</b><small>{item.durationMinutes} min · {money(item.priceCents)}</small></span>{serviceId === item.id && <Check size={16} className="text-blue-600" />}</button>)}</div>
+          {!data.services.length && <p className="public-empty-note">Este estabelecimento ainda não possui serviços ativos cadastrados.</p>}
           <div className="booking-step"><span>2</span><b>Escolha profissional e data</b></div>
           <div className="form-grid">
-            <SelectField label="Profissional" required value={professionalId} onChange={(e) => setProfessionalId(e.target.value)}>
-              <option value="">Selecione</option>{professionals.map((person) => <option value={person.id} key={person.id}>{person.name}</option>)}
+            <SelectField label="Profissional" disabled={!serviceId} required value={professionalId} onChange={(e) => setProfessionalId(e.target.value)}>
+              <option value="">Selecione o profissional</option>{professionals.map((person) => <option value={person.id} key={person.id}>{person.name}</option>)}
             </SelectField>
             <Field label="Data" type="date" min={localDate()} required value={date} onChange={(e) => setDate(e.target.value)} />
           </div>
+          {!professionals.length && <p className="public-empty-note">Nenhum profissional ativo está disponível neste estabelecimento.</p>}
           <div className="booking-step"><span>3</span><b>Horários disponíveis</b></div>
-          {serviceId && professionalId ? <div className="slot-grid">{slots.length ? slots.map((slot) => <button type="button" className={`slot-button ${time === slot ? "slot-selected" : ""}`} onClick={() => setTime(slot)} key={slot}>{slot}</button>)
-            : <p className="text-sm text-slate-500">Não há horários disponíveis nesta data.</p>}</div> : <p className="text-sm text-slate-400">Selecione o serviço e o profissional para ver os horários.</p>}
-          <div className="booking-step"><span>4</span><b>Seus dados</b></div>
-          <div className="form-grid"><Field label="Seu nome" required value={client.name} onChange={(e) => setClient({ ...client, name: e.target.value })} />
-            <Field label="WhatsApp" type="tel" required value={client.phone} onChange={(e) => setClient({ ...client, phone: e.target.value })} /></div>
+          {serviceId && professionalId ? loadingSlots
+            ? <p className="public-empty-note" aria-live="polite">Consultando horários disponíveis...</p>
+            : <div className="slot-grid">{slots.length ? slots.map((slot) => <button type="button" aria-pressed={time === slot} className={`slot-button ${time === slot ? "slot-selected" : ""}`} onClick={() => setTime(slot)} key={slot}>{slot}</button>)
+            : <p className="public-empty-note">Não há horários disponíveis nesta data. Experimente outro dia.</p>}</div>
+            : <p className="public-empty-note">Selecione um serviço e um profissional para consultar horários.</p>}
+          <div className="booking-step"><span>4</span><b>Seus dados para confirmação</b></div>
+          <div className="form-grid"><Field label="Seu nome" required maxLength={120} autoComplete="name" value={client.name} onChange={(e) => setClient({ ...client, name: e.target.value })} />
+            <Field label="WhatsApp com DDD" type="tel" inputMode="tel" autoComplete="tel" maxLength={20} required placeholder="(85) 99999-9999" value={client.phone} onChange={(e) => setClient({ ...client, phone: e.target.value })} /></div>
+          {service && professional && time && <div className="public-booking-summary"><b>Confira seu pedido</b>
+            <span>{service.name} com {professional.name}</span><span>{dateLabel(date)} às {time} · {money(service.priceCents)}</span></div>}
           {error && <ErrorMessage>{error}</ErrorMessage>}
-          <Button className="w-full justify-center" disabled={loading || !time || !serviceId || !professionalId}>{loading ? "Solicitando..." : "Solicitar agendamento"}</Button>
-          <p className="public-privacy"><ShieldCheck size={14} /> Seus dados são usados somente para organizar seu atendimento.</p>
+          <Button className="public-submit" disabled={loading || loadingSlots || !time || !serviceId || !professionalId || !client.name.trim() || !client.phone.trim()}>{loading ? "Solicitando..." : "Solicitar agendamento"}</Button>
+          <p className="public-privacy"><ShieldCheck size={14} /> Seus dados são utilizados para organizar o atendimento e permitir contato do estabelecimento.</p>
         </form>}
     </section>
     <footer className="public-footer">Agendamento simples, do início ao fim. <span>Feito com carinho por Simplifica</span></footer>
