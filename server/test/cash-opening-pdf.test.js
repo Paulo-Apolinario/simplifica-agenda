@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
+import bcrypt from "bcryptjs";
 
 test("abertura, saldo inicial, fechamento e PDF imutável", async () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "cash-opening-"));
@@ -80,6 +81,15 @@ test("abertura, saldo inicial, fechamento e PDF imutável", async () => {
     assert.ok(bytes.toString("latin1").includes("Troco adicional"));
     assert.ok(bytes.toString("latin1").includes("Faltam 1 real"));
     assert.equal((await request("/cash/closings")).body.closings.length,1);
+    db.prepare("INSERT INTO users (id,tenant_id,name,email,password_hash,role) VALUES (?,?,?,?,?,'recepcao')")
+      .run("frontdesk-pdf",tenant,"Recepção","desk@pdf.local",await bcrypt.hash("Senha-Recepcao-123",12));
+    assert.equal((await request("/auth/login","POST",{
+      email:"desk@pdf.local",password:"Senha-Recepcao-123"})).status,200);
+    assert.equal((await request("/cash/closings")).status,403);
+    const forbidden = await fetch(base+url,{headers:{Cookie:cookie}});
+    assert.equal(forbidden.status,403);
+    assert.equal((await request("/cash/daily?date="+today)).status,200);
+    assert.equal((await request("/cash/daily?date=2020-01-01")).status,403);
     assert.equal((await request("/cash/movements","POST",{type:"sangria",amountCents:100,reason:"Retirada após fechar"})).status,409);
   } finally {
     await new Promise(resolve=>server.close(resolve));
