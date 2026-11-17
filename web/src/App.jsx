@@ -925,7 +925,8 @@ function ClientsPage({ user }) {
 function ServiceForm({ service, professionals, onClose, onSaved }) {
   const [values, setValues] = useState({
     name: service?.name ?? "", durationMinutes: service?.durationMinutes ?? 60,
-    priceCents: service?.priceCents ?? 0, houseSharePercent: service?.houseSharePercent ?? 0, professionalIds: service?.professionalIds ?? [],
+    priceCents: service?.priceCents ?? 0, houseSharePercent: service?.houseSharePercent ?? 0,
+    commissionMode: service?.commissionMode ?? "professional", serviceCommissionPercent: service?.serviceCommissionPercent ?? 0, professionalIds: service?.professionalIds ?? [],
   });
   const [error, setError] = useState("");
   const submit = async (event) => {
@@ -946,9 +947,18 @@ function ServiceForm({ service, professionals, onClose, onSaved }) {
         <Field label="Preço (R$)" type="number" min="0" step="0.01" value={service ? (Number(values.priceCents) / 100).toFixed(2) : values.priceCents}
           onChange={(e) => setValues({ ...values, priceCents: service ? Math.round(Number(e.target.value) * 100) : e.target.value })} />
       </div>
-      <Field label="Retenção do estabelecimento para materiais (%)" type="number" min="0" max="100" step="0.5"
+      <SelectField label="Como calcular a comissão deste serviço?" value={values.commissionMode}
+        onChange={e => setValues(v => ({ ...v, commissionMode: e.target.value }))}>
+        <option value="professional">Usar comissão padrão do profissional</option>
+        <option value="custom">Definir percentual próprio deste serviço</option>
+      </SelectField>
+      {values.commissionMode === "custom" && <Field label="Percentual bruto destinado ao profissional (%)" type="number" min="0" max="100" step="0.5"
+        value={values.serviceCommissionPercent} onChange={e => setValues(v => ({ ...v, serviceCommissionPercent: e.target.value }))}/>}
+      {values.commissionMode === "custom" && Number(values.serviceCommissionPercent) === 100 && Number(values.houseSharePercent) === 0 &&
+        <p className="panel-subtitle">Repasse integral: 100% do preço ao profissional, sem retenção.</p>}
+      <Field label="Retenção adicional do estabelecimento (% do preço)" type="number" min="0" max="100" step="0.5"
         value={values.houseSharePercent} onChange={e => setValues(v => ({...v,houseSharePercent:e.target.value}))}/>
-      <p className="panel-subtitle">Ex.: comissão padrão 40% e materiais 10% → profissional recebe 30% do preço do serviço. A regra será aplicada apenas a novos agendamentos.</p>
+      <p className="panel-subtitle">Ex.: serviço com repasse de 70% e retenção de materiais de 10 pontos → profissional recebe 60% do preço. Altere a comissão deste serviço sem modificar os serviços já agendados ou pagos.</p>
       <div className="field"><span className="field-label">Profissionais que realizam</span><div className="choice-list">
         {professionals.map((person) => <label key={person.id} className="choice-option"><input type="checkbox" checked={values.professionalIds.includes(person.id)}
           onChange={(event) => setValues({ ...values, professionalIds: event.target.checked ? [...values.professionalIds, person.id] : values.professionalIds.filter((id) => id !== person.id) })} />{person.name}</label>)}
@@ -1236,7 +1246,7 @@ function ServicesPage({ user, section = "services" }) {
     <div className="management-grid">
       {section === "services" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">SERVIÇOS OFERECIDOS</p><h2>Serviços</h2></div><span className="count-chip">{services.length}</span></div>
         {services.length ? <div className="management-list">{services.map((service) => <article className="service-row" key={service.id}>
-          <span className="service-row-icon"><Scissors size={18} /></span><div className="min-w-0 flex-1"><b>{service.name}</b><small>{service.durationMinutes} min · {service.professionalNames || "Sem profissional"}</small></div>
+          <span className="service-row-icon"><Scissors size={18} /></span><div className="min-w-0 flex-1"><b>{service.name}</b><small>{service.durationMinutes} min · {service.commissionMode === "custom" ? `Repasse ${service.serviceCommissionPercent}%` : "Comissão padrão da equipe"} · Retenção ${service.houseSharePercent || 0}%</small></div>
           <strong>{money(service.priceCents)}</strong>{user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="icon-button compact" onClick={() => setModal(service)} aria-label="Editar serviço"><MoreHorizontal size={18} /></button>}
         </article>)}</div> : <EmptyState icon={Scissors} title="Nenhum serviço cadastrado" description="Adicione seu primeiro serviço." />}</section>}
       {section === "team" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe</h2></div><span className="count-chip">{team.filter((person) => person.active).length} ativos</span></div>
