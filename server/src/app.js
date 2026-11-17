@@ -1244,6 +1244,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
   const client = clientId ? db.prepare("SELECT id FROM clients WHERE id = ? AND tenant_id = ?").get(clientId, tenant(req)) : null;
   if (!chosen || (clientId && !client)) return fail(res, 400, "Cliente, serviço ou profissional inválido.");
   const normalizedStart = startsAt.length === 16 ? `${startsAt}:00` : startsAt;
+  if (normalizedStart.slice(0,10) === cashDay(tenant(req)) && !requireOpenCash(req,res)) return;
   if (normalizedStart <= localNow(tenant(req))) return fail(res, 400, "Escolha um horário futuro.");
   const endsAt = addLocalMinutes(normalizedStart, chosen.duration);
   if (!withinWorkingHours(tenant(req), professionalId, normalizedStart, endsAt)) {
@@ -1697,6 +1698,7 @@ app.post("/api/cash/movements", requireAuth, allowRoles("dono", "recepcao"), (re
 app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const date = String(req.query.date ?? cashDay(tenant(req)));
   if (!validCashDate(date)) return fail(res, 400, "Data inválida.");
+  if (req.user.role === "recepcao" && date !== cashDay(tenant(req))) return fail(res, 403, "Somente o administrador consulta caixas de outros dias.");
   const summary = cashDaySummary(tenant(req), date);
   const closing = db.prepare(`SELECT id, cash_date AS cashDate, closed_by_name AS closedByName,
     closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
