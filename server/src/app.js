@@ -1669,14 +1669,38 @@ app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedul
   res.json({ ok:true, status:"agendado", startsAt:normalized, message:"Remarcação solicitada. Aguarde nova confirmação." });
 });
 
+// Assisted WhatsApp: opening a conversation never proves that a message was sent.
+function queueWhatsAppNotification(tenantId,appointmentId,status) {
+  db.prepare(`INSERT OR IGNORE INTO whatsapp_notifications
+    (id,tenant_id,appointment_id,status) VALUES (?,?,?,?)`)
+    .run(createId(),tenantId,appointmentId,status);
+}
+app.post("/api/requests/:id/whatsapp-opened", requireAuth, allowRoles("dono","recepcao"), (req,res)=>{
+  const status=String(req.body?.status||"");
+  if(!["confirmado","cancelado","agendado"].includes(status))
+    return fail(res,400,"Notificação inválida.");
+  const record=db.prepare(`SELECT id FROM appointments
+    WHERE id=? AND tenant_id=? AND booking_source='public' AND status=?`)
+    .get(req.params.id,tenant(req),status);
+  if(!record)return fail(res,409,"Solicitação ou status não encontrado.");
+  queueWhatsAppNotification(tenant(req),record.id,status);
+  db.prepare(`UPDATE whatsapp_notifications SET opened_at=datetime('now'),opened_by=?
+    WHERE tenant_id=? AND appointment_id=? AND status=?`)
+    .run(req.user.id,tenant(req),record.id,status);
+  res.json({ok:true,message:"Conversa aberta. O envio depende da confirmação no WhatsApp."});
+});
+
 // Reception and owner handle only public requests for their own business.
 app.get("/api/requests", requireAuth, allowRoles("dono","recepcao"), (req, res) => {
   const rows=db.prepare(`SELECT a.id, a.starts_at AS startsAt, a.status,
     c.name AS clientName, c.phone AS clientPhone, s.name AS serviceName,
+    b.business_name AS businessName, wn.opened_at AS whatsappOpenedAt,
     u.name AS professionalName
     FROM appointments a JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
     JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
     JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    JOIN business_settings b ON b.tenant_id=a.tenant_id
+    LEFT JOIN whatsapp_notifications wn ON wn.tenant_id=a.tenant_id AND wn.appointment_id=a.id AND wn.status=a.status
     WHERE a.tenant_id=? AND a.booking_source='public'
     ORDER BY CASE WHEN a.status='agendado' THEN 0 ELSE 1 END, a.starts_at DESC LIMIT 250`).all(tenant(req));
   res.setHeader("Cache-Control","no-store");
@@ -1690,7 +1714,8 @@ app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), (req,
     WHERE id=? AND tenant_id=? AND booking_source='public' AND status='agendado'`)
     .run(next,req.params.id,tenant(req));
   if (!changed.changes) return fail(res,409,"Solicitação não encontrada ou já analisada.");
-  res.json({ok:true,status:next});
+  queueWhatsAppNotification(tenant(req),req.params.id,next);
+  res.json({ok:true,status:next,whatsappMode:"manual",message:"Status registrado. Abra o WhatsApp e envie a confirmação manualmente."});
 });
 
 const webDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
