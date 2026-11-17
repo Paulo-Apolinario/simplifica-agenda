@@ -574,15 +574,15 @@ function AppointmentForm({ onClose, onSaved, initialDate, user }) {
       .then(([, svc, pro]) => {
         const activePros = pro.professionals.filter(item => item.active);
         setProfessionals(activePros);
-        setServices(svc.services.filter(item => item.active &&
-          (!isProfessional || activePros.some(p => p.id === user.id && p.serviceIds.includes(item.id)))));
+        // Every active service in this establishment is available for internal appointments.
+        // Service assignments are not required to book a professional's own calendar.
+        setServices(svc.services.filter(item => item.active));
       }).catch(reason => setError(reason.message));
   }, [reloadClients, isProfessional, user.id]);
 
   const selectedService = services.find(item => item.id === values.serviceId);
   const options = professionals.filter(person =>
-    (!isProfessional || person.id === user.id) &&
-    (!selectedService || person.serviceIds.includes(selectedService.id)));
+    !isProfessional || person.id === user.id);
   const submit = async event => {
     event.preventDefault();
     setSaving(true); setError("");
@@ -635,10 +635,10 @@ function AppointmentForm({ onClose, onSaved, initialDate, user }) {
           {options.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
         </SelectField>
       </div>
-      {isProfessional && !services.length &&
-        <p className="booking-share-notice">Nenhum serviço está vinculado ao seu perfil. Solicite ao administrador que configure seus serviços na aba Equipe e acessos.</p>}
-      {selectedService && !options.length &&
-        <p className="booking-share-notice">Não há profissional ativo vinculado a este serviço. Solicite ao administrador que ajuste as atribuições.</p>}
+      {!services.length &&
+        <p className="booking-share-notice">Não há serviços ativos cadastrados neste estabelecimento. Solicite ao administrador que cadastre ou ative um serviço.</p>}
+      {!options.length &&
+        <p className="booking-share-notice">Não há profissionais ativos disponíveis no estabelecimento. Solicite ao administrador que verifique a equipe.</p>}
       <Field label="Data e horário" type="datetime-local" required value={values.startsAt}
         onChange={event => setValues(v => ({ ...v, startsAt: event.target.value }))}/>
       <Field label="Observações" placeholder="Algum detalhe importante?" value={values.notes}
