@@ -1527,6 +1527,59 @@ app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao")
 });
 
 
+
+app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const date = String(req.query.date ?? cashDay(tenant(req)));
+  if (!validCashDate(date)) return fail(res, 400, "Data inválida.");
+  const summary = cashDaySummary(tenant(req), date);
+  const closing = db.prepare(`SELECT id, cash_date AS cashDate, closed_by_name AS closedByName,
+    closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
+    expected_cash_cents AS expectedCashCents, counted_cash_cents AS countedCashCents,
+    difference_cents AS differenceCents, receipt_count AS receiptCount, notes,
+    method_totals_json AS methodsJson
+    FROM daily_cash_closings WHERE tenant_id = ? AND cash_date = ?`).get(tenant(req), date);
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ ...summary, today: cashDay(tenant(req)), closing: closing ?
+    { ...closing, methods: JSON.parse(closing.methodsJson), methodsJson: undefined } : null });
+});
+
+app.get("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const rows = db.prepare(`SELECT id, cash_date AS cashDate, closed_by_name AS closedByName,
+    closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
+    expected_cash_cents AS expectedCashCents, counted_cash_cents AS countedCashCents,
+    difference_cents AS differenceCents, receipt_count AS receiptCount, notes
+    FROM daily_cash_closings WHERE tenant_id = ? ORDER BY cash_date DESC LIMIT 60`).all(tenant(req));
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ closings: rows });
+});
+
+app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const date = String(req.body?.date ?? "");
+  const counted = req.body?.countedCashCents;
+  const notes = String(req.body?.notes ?? "").trim();
+  if (!validCashDate(date) || date > cashDay(tenant(req)))
+    return fail(res, 400, "Selecione uma data válida que não seja futura.");
+  if (!Number.isSafeInteger(counted) || counted < 0 || counted > 100000000000)
+    return fail(res, 400, "Informe o valor em dinheiro contado, em centavos.");
+  if (notes.length > 500) return fail(res, 400, "Observação deve ter até 500 caracteres.");
+  const result = db.transaction(() => {
+    if (cashClosing(tenant(req), date)) return null;
+    const summary = cashDaySummary(tenant(req), date);
+    const difference = counted - summary.expectedCashCents;
+    const id = createId();
+    db.prepare(`INSERT INTO daily_cash_closings
+      (id, tenant_id, cash_date, closed_by, closed_by_name, expected_total_cents, expected_cash_cents,
+       counted_cash_cents, difference_cents, method_totals_json, receipt_count, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id, tenant(req), date, req.user.id, req.user.name || "Usuário",
+      summary.expectedTotalCents, summary.expectedCashCents, counted, difference,
+      JSON.stringify(summary.methods), summary.receiptCount, notes);
+    return { id, date, differenceCents: difference };
+  })();
+  if (!result) return fail(res, 409, "Esse dia já possui um fechamento de caixa.");
+  res.status(201).json({ closing: result });
+});
+
 app.get("/api/reports/appointment-audit", requireAuth, allowRoles("dono"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
