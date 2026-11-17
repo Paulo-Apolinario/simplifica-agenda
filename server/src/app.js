@@ -1029,6 +1029,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
     return fail(res, 400, "O horário está fora do expediente deste profissional.");
   }
   const id = createId();
+  const accessToken = crypto.randomBytes(32).toString("hex");
   const create = db.transaction(() => {
     if (scheduleConflict(res, { tenantId: tenant(req), professionalId, startsAt: normalizedStart, endsAt })) return false;
     // Anonymous internal appointments get their own unregistered-client record.
@@ -1347,6 +1348,33 @@ app.get("/api/export/backup", requireAuth, allowRoles("dono"), async (_req, res,
   }
 });
 
+function bookingPolicy(tenantId) {
+  return db.prepare(`SELECT booking_min_notice_minutes AS minNotice, booking_max_days AS maxDays,
+    booking_slot_interval_minutes AS interval, booking_cancellation_hours AS cancelHours,
+    booking_allow_cancellation AS allowCancellation FROM business_settings WHERE tenant_id = ?`).get(tenantId);
+}
+function publicStartAllowed(tenantId, startsAt) {
+  const policy = bookingPolicy(tenantId);
+  const now = localNow(tenantId);
+  return startsAt >= addLocalMinutes(now, policy.minNotice)
+    && startsAt <= addLocalMinutes(now, policy.maxDays * 1440);
+}
+function managementHash(value) { return crypto.createHash("sha256").update(value).digest("hex"); }
+function managedPublicAppointment(token) {
+  if (typeof token !== "string" || !/^[a-f0-9]{64}$/.test(token)) return null;
+  return db.prepare(`SELECT a.id, a.tenant_id AS tenantId, a.starts_at AS startsAt,
+    a.ends_at AS endsAt, a.status, a.professional_id AS professionalId,
+    a.service_id AS serviceId, a.price_cents AS priceCents, c.name AS clientName,
+    s.name AS serviceName, u.name AS professionalName, b.business_name AS businessName,
+    b.whatsapp, b.booking_allow_cancellation AS allowCancellation,
+    b.booking_cancellation_hours AS cancelHours
+    FROM appointments a JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
+    JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
+    JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    JOIN business_settings b ON b.tenant_id=a.tenant_id
+    WHERE a.management_token_hash=? AND a.booking_source='public'`).get(managementHash(token));
+}
+
 app.get("/api/public/:slug", (req, res) => {
   const business = db.prepare(`
     SELECT t.id AS tenantId, t.slug, b.business_name AS businessName, b.logo_url AS logoUrl,
@@ -1356,7 +1384,7 @@ app.get("/api/public/:slug", (req, res) => {
   if (!business) return fail(res, 404, "Negócio não encontrado.");
   const services = db.prepare(`
     SELECT id, name, duration_minutes AS durationMinutes, price_cents AS priceCents
-    FROM services WHERE tenant_id = ? AND active = 1 ORDER BY name
+    FROM services WHERE tenant_id = ? AND active = 1 AND public_enabled = 1 ORDER BY name
   `).all(business.tenantId);
   // The public directory includes only active professionals from this specific business.
   // Service assignments remain useful internally, but never hide a qualified team member.
@@ -1389,7 +1417,7 @@ app.get("/api/public/:slug/slots", (req, res) => {
     JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
     LEFT JOIN professional_hours ph ON ph.professional_id = u.id AND ph.weekday = ?
     LEFT JOIN business_hours bh ON bh.tenant_id = s.tenant_id AND bh.weekday = ?
-    WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
+    WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND s.public_enabled = 1 AND u.active = 1
   `).get(weekday, weekday, business.tenantId, serviceId, professionalId);
   if (!selected) return fail(res, 400, "Serviço ou profissional inválido.");
   if (!selected.businessOpens || !selected.businessCloses) return res.json({ slots: [] });
@@ -1403,14 +1431,15 @@ app.get("/api/public/:slug/slots", (req, res) => {
     : selected.businessCloses;
   if (!opens || !closes) return res.json({ slots: [] });
   const slots = [];
+  const policy = bookingPolicy(business.tenantId);
   const startMinute = Number(opens.slice(0, 2)) * 60 + Number(opens.slice(3, 5));
   const closeMinute = Number(closes.slice(0, 2)) * 60 + Number(closes.slice(3, 5));
   const nowLocal = localNow(business.tenantId).slice(0, 16);
-  for (let minute = startMinute; minute + selected.duration <= closeMinute; minute += 30) {
+  for (let minute = startMinute; minute + selected.duration <= closeMinute; minute += policy.interval) {
     const time = `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
     const startsAt = `${date}T${time}:00`;
     const endsAt = addLocalMinutes(startsAt, selected.duration);
-    if (`${date}T${time}` <= nowLocal) continue;
+    if (`${date}T${time}` <= nowLocal || !publicStartAllowed(business.tenantId, startsAt)) continue;
     if (!findScheduleConflict(db, { tenantId: business.tenantId, professionalId, startsAt, endsAt })) slots.push(time);
   }
   res.json({ slots });
@@ -1434,11 +1463,11 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
       CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END AS commission, s.house_share_percent AS houseShare
     FROM services s JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
-    WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
+    WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND s.public_enabled = 1 AND u.active = 1
   `).get(business.id, serviceId, professionalId);
   if (!selected) return fail(res, 400, "Serviço ou profissional inválido.");
   const normalizedStart = startsAt.length === 16 ? `${startsAt}:00` : startsAt;
-  if (normalizedStart <= localNow(business.id)) return fail(res, 400, "Escolha um horário futuro.");
+  if (!publicStartAllowed(business.id, normalizedStart)) return fail(res, 400, "Horário fora da antecedência ou janela de reservas permitida.");
   const endsAt = addLocalMinutes(normalizedStart, selected.duration);
   if (!withinWorkingHours(business.id, professionalId, normalizedStart, endsAt)) {
     return fail(res, 400, "O horário está fora do expediente deste profissional.");
@@ -1458,14 +1487,15 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
     }
     db.prepare(`
       INSERT INTO appointments
-        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent, house_share_percent)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent, house_share_percent, booking_source, management_token_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public', ?)
     `).run(id, business.id, client.id, professionalId, serviceId, normalizedStart, endsAt,
-      selected.price, selected.commission, selected.houseShare);
+      selected.price, selected.commission, selected.houseShare, managementHash(accessToken));
     return true;
   });
   if (!create()) return;
-  res.status(201).json({ id, message: "Seu horário foi solicitado. O negócio poderá confirmar pelo WhatsApp." });
+  res.setHeader("Cache-Control", "no-store");
+  res.status(201).json({ id, protocol: id.slice(0, 8).toUpperCase(), managementToken: accessToken, status: "agendado", message: "Solicitação recebida. O estabelecimento ainda precisa confirmar." });
 });
 
 const webDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
