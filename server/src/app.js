@@ -401,8 +401,12 @@ app.get("/api/clients", requireAuth, (req, res) => {
     FROM clients c
     LEFT JOIN appointments a ON a.client_id = c.id AND a.tenant_id = c.tenant_id
     WHERE c.tenant_id = ? AND (? = '%%' OR c.name LIKE ? OR c.phone LIKE ?)
+      AND (? != 'profissional' OR EXISTS (
+        SELECT 1 FROM appointments own
+        WHERE own.tenant_id = c.tenant_id AND own.client_id = c.id AND own.professional_id = ?
+      ))
     GROUP BY c.id ORDER BY c.name COLLATE NOCASE
-  `).all(tenant(req), search, search, search);
+  `).all(tenant(req), search, search, search, req.user.role, req.user.id);
   res.json({ clients });
 });
 
@@ -688,6 +692,44 @@ app.get("/api/schedule", requireAuth, (req, res) => {
   res.json({ appointments, blockedSlots });
 });
 
+// Each professional can see and complete only their own work, without editing finances.
+app.get("/api/professional/my-services", requireAuth, allowRoles("profissional"), (req, res) => {
+  const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
+  if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
+  const rows = appointmentRows(tenant(req),
+    "AND a.professional_id = ? AND substr(a.starts_at, 1, 7) = ?",
+    [req.user.id, month]);
+  const completed = rows.filter(row => row.status === "concluido");
+  res.json({
+    month, services: rows.reverse(),
+    totals: {
+      appointments: rows.length,
+      completed: completed.length,
+      serviceValueCents: completed.reduce((sum, row) => sum + row.priceCents, 0),
+    },
+  });
+});
+app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("profissional"), (req, res) => {
+  const appointment = db.prepare(`
+    SELECT id, status, starts_at AS startsAt FROM appointments
+    WHERE id = ? AND tenant_id = ? AND professional_id = ?
+  `).get(req.params.id, tenant(req), req.user.id);
+  if (!appointment) return fail(res, 404, "Atendimento não encontrado na sua agenda.");
+  if (!["agendado", "confirmado"].includes(appointment.status)) {
+    return fail(res, 409, "Este atendimento não pode ser concluído novamente.");
+  }
+  if (appointment.startsAt > localNow(tenant(req))) {
+    return fail(res, 400, "O serviço só pode ser concluído após o horário de início.");
+  }
+  const result = db.prepare(`
+    UPDATE appointments SET status = 'concluido'
+    WHERE id = ? AND tenant_id = ? AND professional_id = ?
+    AND status IN ('agendado', 'confirmado')
+  `).run(appointment.id, tenant(req), req.user.id);
+  if (!result.changes) return fail(res, 409, "Atendimento já atualizado.");
+  res.json({ ok: true });
+});
+
 app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "recepcao"), (req, res) => {
   const { clientId, professionalId, serviceId } = req.body ?? {};
   const startsAt = String(req.body?.startsAt ?? "");
@@ -739,6 +781,9 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   if (!appointment) return fail(res, 404, "Atendimento não encontrado.");
   if (req.user.role === "profissional" && appointment.professionalId !== req.user.id) {
     return fail(res, 403, "Este atendimento não pertence à sua agenda.");
+  }
+  if (req.user.role === "profissional") {
+    return fail(res, 403, "Para registrar um serviço, utilize a opção Concluir atendimento em Meus atendimentos.");
   }
   const status = req.body?.status ?? appointment.status;
   const method = req.body?.paymentMethod === undefined ? appointment.paymentMethod : req.body.paymentMethod;
