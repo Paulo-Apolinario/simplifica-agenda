@@ -1789,6 +1789,7 @@ function OnlineRequestsPage() {
   const [filter,setFilter]=useState("agendado");
   const [error,setError]=useState("");
   const [busy,setBusy]=useState("");
+  const [notice,setNotice]=useState(null);
   const refresh=useCallback(()=>api("/requests")
     .then(result=>{setItems(result.requests);setError("");})
     .catch(e=>setError(e.message)),[]);
@@ -1797,7 +1798,12 @@ function OnlineRequestsPage() {
     const description=action==="confirm"?"confirmar":"recusar";
     if(!window.confirm(`Deseja ${description} a solicitação de ${item.clientName}?`))return;
     setBusy(item.id);setError("");
-    try{await api(`/requests/${item.id}`,{method:"PATCH",body:{action}});await refresh();}
+    try{
+      const result=await api(`/requests/${item.id}`,{method:"PATCH",body:{action}});
+      await refresh();
+      if(result.whatsappState!=="submitted" && item.clientPhone)
+        setNotice({...item,status:result.status});
+    }
     catch(e){setError(e.message);}finally{setBusy("");}
   };
   const visible=items.filter(item=>filter==="all" || item.status===filter);
@@ -1841,6 +1847,25 @@ function OnlineRequestsPage() {
         <EmptyState icon={ClipboardCheck} title="Nenhuma solicitação nesta situação"
           description="Pedidos de clientes pelo link público aparecerão aqui." />}
     </section>
+    {notice && <Modal title="Avisar cliente pelo WhatsApp" onClose={()=>setNotice(null)}>
+      <div className="form-stack">
+        <p className="booking-share-notice"><Info size={16}/> O agendamento foi
+          {notice.status==="confirmado"?" confirmado":" recusado"} no sistema.
+          Para avisar o cliente sem API oficial configurada, é necessário enviar a mensagem no WhatsApp.</p>
+        <p className="panel-subtitle">Uma conversa aberta não significa que a mensagem foi enviada.</p>
+        <div className="modal-actions">
+          <Button variant="secondary" onClick={()=>setNotice(null)}>Avisar depois</Button>
+          <Button onClick={()=>{
+            const state=notice.status==="confirmado"?"CONFIRMADO ✅":"CANCELADO ❌";
+            const txt=`Olá, ${notice.clientName}! Aqui é ${notice.businessName}. Seu agendamento de ${notice.serviceName}, com ${notice.professionalName}, em ${dateTimeLabel(notice.startsAt)}, está: ${state}.`;
+            window.open(whatsappUrl(notice.clientPhone,txt),"_blank","noopener,noreferrer");
+            api(`/requests/${notice.id}/whatsapp-opened`,{method:"POST",body:{status:notice.status}})
+              .then(refresh).catch(e=>setError(e.message));
+            setNotice(null);
+          }}><Phone size={16}/> Abrir WhatsApp para enviar</Button>
+        </div>
+      </div>
+    </Modal>}
   </>;
 }
 function PublicRequestPage({ token }) {
