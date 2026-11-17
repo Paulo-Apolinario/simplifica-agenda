@@ -857,7 +857,7 @@ function ServicesPage({ user, section = "services" }) {
   const refresh = useCallback(() => Promise.all([
     api("/services"),
     api("/professionals"),
-    user.role === "dono" && section === "team" ? api("/team-members") : Promise.resolve(null),
+    user.role === "dono" && user.tenantId !== "tenant-salao-demo" && section === "team" ? api("/team-members") : Promise.resolve(null),
   ])
     .then(([s, p, people]) => { setServices(s.services); setProfessionals(p.professionals); setTeam(people?.team ?? p.professionals); })
     .catch((reason) => setError(reason.message)), []);
@@ -866,7 +866,7 @@ function ServicesPage({ user, section = "services" }) {
     <PageTitle eyebrow="GESTÃO DO ESTABELECIMENTO"
       title={section === "team" ? "Equipe e acessos" : "Serviços"}
       description={section === "team" ? "Cadastre funcionários, defina funções, serviços e horários." : "Organize os serviços, preços e duração dos atendimentos."}
-      actions={user.role === "dono" && (section === "team"
+      actions={user.role === "dono" && user.tenantId !== "tenant-salao-demo" && (section === "team"
         ? <Button onClick={() => setModal("team")}><UserRound size={16} /> Adicionar funcionário</Button>
         : <Button onClick={() => setModal("service")}><Plus size={16} /> Novo serviço</Button>)} />
     <ErrorMessage>{error}</ErrorMessage>
@@ -874,16 +874,16 @@ function ServicesPage({ user, section = "services" }) {
       {section === "services" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">SERVIÇOS OFERECIDOS</p><h2>Serviços</h2></div><span className="count-chip">{services.length}</span></div>
         {services.length ? <div className="management-list">{services.map((service) => <article className="service-row" key={service.id}>
           <span className="service-row-icon"><Scissors size={18} /></span><div className="min-w-0 flex-1"><b>{service.name}</b><small>{service.durationMinutes} min · {service.professionalNames || "Sem profissional"}</small></div>
-          <strong>{money(service.priceCents)}</strong>{user.role === "dono" && <button className="icon-button compact" onClick={() => setModal(service)} aria-label="Editar serviço"><MoreHorizontal size={18} /></button>}
+          <strong>{money(service.priceCents)}</strong>{user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="icon-button compact" onClick={() => setModal(service)} aria-label="Editar serviço"><MoreHorizontal size={18} /></button>}
         </article>)}</div> : <EmptyState icon={Scissors} title="Nenhum serviço cadastrado" description="Adicione seu primeiro serviço." />}</section>}
       {section === "team" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe</h2></div><span className="count-chip">{team.filter((person) => person.active).length} ativos</span></div>
         {team.length ? <div className="management-list">{team.map((person) => <article className="professional-row" key={person.id}>
           <span className="table-avatar">{person.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
           <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.email} · {person.role === "profissional" ? `Comissão ${person.commissionPercent}%` : "Recepção"}</small></div>
           {person.active ? <span className="status-badge bg-emerald-50 text-emerald-700">Ativa</span> : <span className="status-badge bg-slate-100 text-slate-500">Inativa</span>}
-          {user.role === "dono" && person.role === "profissional" && <button className="button button-quiet" onClick={() => setHoursFor(person)}>Horários</button>}
-          {user.role === "dono" && <button className="button button-quiet" onClick={() => { setPasswordFor(person); setResetPassword(""); }}>Redefinir senha</button>}
-          {user.role === "dono" && <button className="icon-button compact" onClick={async () => {
+          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && person.role === "profissional" && <button className="button button-quiet" onClick={() => setHoursFor(person)}>Horários</button>}
+          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="button button-quiet" onClick={() => { setPasswordFor(person); setResetPassword(""); }}>Redefinir senha</button>}
+          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="icon-button compact" onClick={async () => {
             try { await api(`/team-members/${person.id}`, { method: "PATCH", body: { name: person.name, phone: person.phone, commissionPercent: person.commissionPercent, active: !person.active } }); refresh(); }
             catch (reason) { setError(reason.message); }
           }} aria-label={person.active ? "Desativar pessoa da equipe" : "Ativar pessoa da equipe"}><ShieldCheck size={16} /></button>}
