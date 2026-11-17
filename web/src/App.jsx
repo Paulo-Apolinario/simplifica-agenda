@@ -255,7 +255,7 @@ function InstallationSetup({ onReady }) {
   );
 }
 
-function AccountPage({ user, onUserUpdated }) {
+function AccountPage({ user, onUserUpdated, embedded = false }) {
   const [values, setValues] = useState({ name: user.name, phone: user.phone || "", currentPassword: "", newPassword: "", confirmPassword: "" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -284,9 +284,9 @@ function AccountPage({ user, onUserUpdated }) {
     }
   };
   return <>
-    <PageTitle eyebrow="SEGURANÇA E PERFIL" title="Minha conta"
-      description="Atualize seus dados de acesso e proteja sua conta." />
-    <section className="panel management-panel" style={{ maxWidth: 620 }}>
+    {!embedded && <PageTitle eyebrow="SEGURANÇA E PERFIL" title="Minha conta"
+      description="Atualize seus dados de acesso e proteja sua conta." />}
+    <section className="panel management-panel" style={{ maxWidth: embedded ? undefined : 620 }}>
       <div className="panel-heading"><div><h2>Dados e segurança</h2><p className="panel-subtitle">Perfil: {user.role === "dono" ? "Proprietário" : user.role === "recepcao" ? "Recepção" : "Profissional"}</p></div></div>
       <form className="form-stack" onSubmit={submit} style={{ padding: 24 }}>
         <Field label="Nome" required maxLength={120} value={values.name}
@@ -318,13 +318,13 @@ const navItems = [
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços", icon: Scissors },
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
-  { to: "/configuracoes", label: "Configurações do estabelecimento", icon: Settings },
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
   { to: "/comissoes", label: "Comissões da equipe", icon: CircleDollarSign },
   { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
+  { to: "/configuracoes", label: "Configurações do estabelecimento", icon: Settings },
   { to: "/minha-conta", label: "Minha conta", icon: ShieldCheck },
 ];
 
@@ -334,6 +334,7 @@ function Shell({ user, onLogout, children }) {
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
   const isDemo = user.tenantId === "tenant-salao-demo";
   const visibleNavItems = navItems.filter((item) => {
+    if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
     if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes"].includes(item.to);
@@ -1471,7 +1472,7 @@ function FinancePage() {
 }
 
 const weekdays = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
-function SettingsPage() {
+function SettingsPage({ user, onUserUpdated }) {
   const [settings, setSettings] = useState(null);
   const [hours, setHours] = useState([]);
   const [message, setMessage] = useState("");
@@ -1518,6 +1519,14 @@ function SettingsPage() {
       </section>
       <div className="settings-save"><ErrorMessage>{error}</ErrorMessage><span className="success-message">{message}</span><Button><Check size={16} /> Salvar configurações</Button></div>
     </form>
+    <section className="settings-account-section" aria-label="Minha conta e segurança">
+      <div className="settings-section-intro">
+        <p className="eyebrow">ACESSO E SEGURANÇA</p>
+        <h2>Minha conta</h2>
+        <p className="panel-subtitle">Atualize seus dados pessoais e senha, sem sair das configurações do estabelecimento.</p>
+      </div>
+      <AccountPage user={user} onUserUpdated={onUserUpdated} embedded />
+    </section>
   </>;
 }
 
@@ -1632,8 +1641,10 @@ export default function App() {
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
       <Route path="/recebimentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
-      <Route path="/configuracoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettingsPage /> : <AccessDenied />} />
-      <Route path="/minha-conta" element={user.tenantId !== "tenant-salao-demo" ? <AccountPage user={user} onUserUpdated={setUser} /> : <AccessDenied />} />
+      <Route path="/configuracoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettingsPage user={user} onUserUpdated={setUser} /> : <AccessDenied />} />
+      <Route path="/minha-conta" element={user.tenantId === "tenant-salao-demo" ? <AccessDenied /> :
+        user.role === "dono" ? <Navigate to="/configuracoes" replace /> :
+        <AccountPage user={user} onUserUpdated={setUser} />} />
       <Route path="*" element={user.role === "recepcao" ? <ReceptionDashboard user={user}/> : <OverviewPage user={user} />} />
     </Routes>
   </Shell>;
