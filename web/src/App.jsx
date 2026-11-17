@@ -319,6 +319,8 @@ const navItems = [
   { to: "/servicos", label: "Serviços", icon: Scissors },
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
+  { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
+  { to: "/comissoes", label: "Comissões da equipe", icon: CircleDollarSign },
   { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
@@ -332,11 +334,11 @@ function Shell({ user, onLogout, children }) {
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
   const isDemo = user.tenantId === "tenant-salao-demo";
   const visibleNavItems = navItems.filter((item) => {
-    if (user.role === "profissional") return ["/", "/agenda", "/meus-atendimentos", "/minha-conta"].includes(item.to)
+    if (user.role === "profissional") return ["/", "/agenda", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
-    if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos"].includes(item.to);
-    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos"].includes(item.to)) return false;
-    return item.to !== "/meus-atendimentos";
+    if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes"].includes(item.to);
+    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos"].includes(item.to)) return false;
+    return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
   useEffect(() => {
     api("/settings").then(({ settings }) => settings?.businessName && setBusinessName(settings.businessName)).catch(() => {});
@@ -446,36 +448,48 @@ function OverviewPage({ user }) {
   const navigate = useNavigate();
   if (!data && !error) return <Loading />;
   return <>
-    <PageTitle eyebrow={`RESUMO DO NEGÓCIO · ${dateLabel(localDate(), { weekday: "long" }).toUpperCase()}`} title={`Olá, ${user.name.split(" ")[0]} 👋`}
-      description="Aqui está um resumo do seu negócio. Tenha um ótimo dia!"
+    <PageTitle eyebrow={`${user.role === "profissional" ? "MINHA ROTINA" : "RESUMO DO NEGÓCIO"} · ${dateLabel(localDate(), { weekday: "long" }).toUpperCase()}`} title={`Olá, ${user.name.split(" ")[0]} 👋`}
+      description={user.role === "profissional" ? "Seus horários, serviços concluídos e comissões em um só lugar." : "Aqui está um resumo do seu negócio. Tenha um ótimo dia!"}
       actions={<Button onClick={() => navigate(user.role === "profissional" ? "/meus-atendimentos" : "/agenda")}>
         <CalendarDays size={17} /> {user.role === "profissional" ? "Meus atendimentos" : "Ver agenda"}
       </Button>} />
     <ErrorMessage>{error}</ErrorMessage>
     <section className="stats-grid">
-      <StatCard title="Atendimentos hoje" value={data?.todayCount ?? "—"} note="Na agenda de hoje" icon={CalendarDays} />
-      <StatCard title={user.role === "dono" ? "Faturamento do mês" : "Agendamentos no mês"}
-        value={user.role === "dono" ? money(data?.monthRevenueCents) : data?.monthCount ?? "—"}
-        note={user.role === "dono" ? `${data?.monthCount ?? 0} atendimentos agendados` : "Na agenda do negócio"}
-        icon={CircleDollarSign} tone="green" />
-      <StatCard title="Clientes ativos" value={data?.activeClients ?? "—"} note="Com horário neste mês" icon={Users} tone="purple" />
-      <StatCard title="Próximo atendimento" value={data?.upcoming?.[0] ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(data.upcoming[0].startsAt)) : "Livre"}
-        note={data?.upcoming?.[0]?.clientName ?? "Sem próximos horários"} icon={Clock3} tone="orange" />
+      {user.role === "profissional" ? <>
+        <StatCard title="Atendimentos hoje" value={data?.todayCount ?? "—"} note="Na minha agenda" icon={CalendarDays} />
+        <StatCard title="Serviços concluídos hoje" value={data?.completedToday ?? "—"} note="Registrados como realizados" icon={ClipboardCheck} tone="purple" />
+        <StatCard title="Saldo de comissões a receber" value={money(data?.earningsDueCents ?? 0)} note="Todos os períodos, ainda não pago" icon={Wallet} tone="green" />
+        <StatCard title="Próximo atendimento" value={data?.upcoming?.[0] ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(data.upcoming[0].startsAt)) : "Livre"}
+          note={data?.upcoming?.[0]?.clientName ?? "Sem próximos horários"} icon={Clock3} tone="orange"/>
+      </> : <>
+        <StatCard title="Atendimentos hoje" value={data?.todayCount ?? "—"} note="Na agenda de hoje" icon={CalendarDays} />
+        <StatCard title={user.role === "dono" ? "Faturamento do mês" : "Agendamentos no mês"}
+          value={user.role === "dono" ? money(data?.monthRevenueCents) : data?.monthCount ?? "—"}
+          note={user.role === "dono" ? `${data?.monthCount ?? 0} atendimentos agendados` : "Na agenda do negócio"}
+          icon={CircleDollarSign} tone="green" />
+        <StatCard title="Clientes ativos" value={data?.activeClients ?? "—"} note="Com horário neste mês" icon={Users} tone="purple" />
+        <StatCard title="Próximo atendimento" value={data?.upcoming?.[0] ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(data.upcoming[0].startsAt)) : "Livre"}
+          note={data?.upcoming?.[0]?.clientName ?? "Sem próximos horários"} icon={Clock3} tone="orange" />
+      </>}
     </section>
     <section className="overview-grid">
       <div className="panel upcoming-panel">
         <div className="panel-heading"><div><p className="eyebrow">AGENDA DO DIA</p><h2>Próximos atendimentos</h2></div><Link to="/agenda" className="text-link">Ver agenda <ArrowRight size={14} /></Link></div>
         {data?.upcoming?.length ? <div className="appointments-list">{data.upcoming.slice(0, 5).map((appointment) =>
           <AppointmentCard key={appointment.id} appointment={appointment} compact onOpen={() => navigate("/agenda")} />)}</div>
-          : <EmptyState icon={CalendarDays} title="Sua agenda está livre" description="Aproveite para organizar seus próximos horários." action={<Button variant="secondary" onClick={() => navigate("/agenda")}><Plus size={15} /> Criar agendamento</Button>} />}
+          : <EmptyState icon={CalendarDays} title="Sua agenda está livre" description="Aproveite para organizar seus próximos horários." action={<Button variant="secondary" onClick={() => navigate("/agenda")}><CalendarDays size={15} /> Abrir agenda</Button>} />}
       </div>
       <div className="panel shortcut-panel">
         <div className="panel-heading"><div><p className="eyebrow">ACESSO RÁPIDO</p><h2>O que você precisa?</h2></div></div>
         <div className="shortcuts">
           <Link to="/agenda" className="shortcut-item"><span className="shortcut-icon blue"><CalendarDays size={18} /></span><span><b>Organizar agenda</b><small>Visualize sua semana</small></span><ArrowRight size={15} /></Link>
+          {user.role === "profissional" ? <>
+            <Link to="/meus-atendimentos" className="shortcut-item"><span className="shortcut-icon violet"><ClipboardCheck size={18}/></span><span><b>Registrar serviços</b><small>Concluir atendimentos realizados</small></span><ArrowRight size={15}/></Link>
+            <Link to="/meus-ganhos" className="shortcut-item"><span className="shortcut-icon green"><Wallet size={18}/></span><span><b>Meus ganhos</b><small>Comissões pagas e a receber</small></span><ArrowRight size={15}/></Link>
+          </> : <>
           <Link to="/clientes" className="shortcut-item"><span className="shortcut-icon green"><Users size={18} /></span><span><b>Cadastrar cliente</b><small>Guarde os detalhes</small></span><ArrowRight size={15} /></Link>
           <Link to="/servicos" className="shortcut-item"><span className="shortcut-icon violet"><Scissors size={18} /></span><span><b>Gerenciar serviços</b><small>Equipe, preços e duração</small></span><ArrowRight size={15} /></Link>
-          {user.role === "dono" && <Link to="/financeiro" className="shortcut-item"><span className="shortcut-icon amber"><Wallet size={18} /></span><span><b>Conferir resultados</b><small>Receitas e comissões</small></span><ArrowRight size={15} /></Link>}
+          {user.role === "dono" && <Link to="/financeiro" className="shortcut-item"><span className="shortcut-icon amber"><Wallet size={18} /></span><span><b>Conferir resultados</b><small>Receitas e comissões</small></span><ArrowRight size={15} /></Link>}</>}
         </div>
         <div className="quick-tip"><Sparkles size={17} /><span><b>Dica para o seu dia</b><small>Confirme seus atendimentos pelo WhatsApp e evite faltas.</small></span></div>
       </div>
@@ -514,8 +528,8 @@ function AppointmentForm({ onClose, onSaved, initialDate, user }) {
   };
   return <Modal title="Novo agendamento" onClose={onClose}>
     <form className="form-stack" onSubmit={submit}>
-      <SelectField label="Cliente" required value={values.clientId} onChange={(e) => setValues({ ...values, clientId: e.target.value })}>
-        <option value="">Selecione um cliente</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name} · {client.phone}</option>)}
+      <SelectField label="Cliente (opcional)" value={values.clientId} onChange={(e) => setValues({ ...values, clientId: e.target.value })}>
+        <option value="">Atendimento sem cliente cadastrado</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name} · {client.phone}</option>)}
       </SelectField>
       <div className="form-grid">
         <SelectField label="Serviço" required value={values.serviceId}         onChange={(e) => setValues({ ...values, serviceId: e.target.value, professionalId: user.role === "profissional" ? user.id : "" })}>
@@ -535,9 +549,9 @@ function AppointmentForm({ onClose, onSaved, initialDate, user }) {
   </Modal>;
 }
 
-function BlockForm({ onClose, onSaved, initialDate }) {
+function BlockForm({ onClose, onSaved, initialDate, user }) {
   const [professionals, setProfessionals] = useState([]);
-  const [values, setValues] = useState({ professionalId: "", startsAt: `${initialDate}T12:00`, endsAt: `${initialDate}T13:00`, reason: "" });
+  const [values, setValues] = useState({ professionalId: user.role === "profissional" ? user.id : "", startsAt: `${initialDate}T12:00`, endsAt: `${initialDate}T13:00`, reason: "" });
   const [error, setError] = useState("");
   useEffect(() => { api("/professionals").then(({ professionals: people }) => setProfessionals(people)); }, []);
   const submit = async (event) => {
@@ -547,12 +561,13 @@ function BlockForm({ onClose, onSaved, initialDate }) {
   };
   return <Modal title="Bloquear horário" onClose={onClose}>
     <form className="form-stack" onSubmit={submit}>
-      <SelectField label="Profissional" value={values.professionalId} onChange={(e) => setValues({ ...values, professionalId: e.target.value })}>
+      {user.role !== "profissional" && <SelectField label="Profissional" value={values.professionalId} onChange={(e) => setValues({ ...values, professionalId: e.target.value })}>
         <option value="">Toda a equipe</option>{professionals.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
-      </SelectField>
+      </SelectField>}
+      {user.role === "profissional" && <p className="booking-share-notice">Este bloqueio vale apenas para seus próprios horários.</p>}
       <Field label="Início" type="datetime-local" required value={values.startsAt} onChange={(e) => setValues({ ...values, startsAt: e.target.value })} />
       <Field label="Fim" type="datetime-local" required value={values.endsAt} onChange={(e) => setValues({ ...values, endsAt: e.target.value })} />
-      <Field label="Motivo" placeholder="Ex.: almoço, compromisso..." value={values.reason} onChange={(e) => setValues({ ...values, reason: e.target.value })} />
+      <Field label="Motivo / observação" placeholder="Ex.: almoço, saída para compromisso pessoal" value={values.reason} onChange={(e) => setValues({ ...values, reason: e.target.value })} />
       <ErrorMessage>{error}</ErrorMessage>
       <div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button>Bloquear horário</Button></div>
     </form>
@@ -622,7 +637,7 @@ function AgendaPage({ user }) {
   const move = (offset) => setDate(shiftDate(date, offset * (view === "semana" ? 7 : 1)));
   return <>
     <PageTitle eyebrow="SUA ROTINA EM UM SÓ LUGAR" title="Agenda" description={dateLabel(date)}
-      actions={<>{user.role !== "profissional" && user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.role !== "profissional" && user.tenantId !== "tenant-salao-demo" && <Button onClick={() => setModal("new")}><Plus size={17} /> Novo agendamento</Button>}</>} />
+      actions={<>{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => setModal("new")}><Plus size={17} /> Novo agendamento</Button>}</>} />
     <div className="agenda-toolbar">
       <div className="date-nav"><button className="icon-button" onClick={() => move(-1)} aria-label="Anterior"><ChevronLeft size={18} /></button>
         <button className="date-today" onClick={() => setDate(localDate())}>Hoje</button><button className="icon-button" onClick={() => move(1)} aria-label="Próximo"><ChevronRight size={18} /></button></div>
@@ -639,7 +654,7 @@ function AgendaPage({ user }) {
           const events = data.appointments.filter((item) => item.startsAt.slice(0, 10) === day);
           const blocks = data.blockedSlots.filter((item) => item.startsAt.slice(0, 10) === day);
           return <div className="calendar-day-column" key={day}>
-            {Array.from({ length: 12 }, (_, i) => <button key={i} className="calendar-hour" onClick={() => { setDate(day); setModal("new"); }} aria-label={`Novo agendamento às ${i + 8}:00`} />)}
+            {Array.from({ length: 12 }, (_, i) => <button key={i} className="calendar-hour" onClick={() => { if (user.tenantId !== "tenant-salao-demo") { setDate(day); setModal("new"); } }} aria-label={`Novo agendamento às ${i + 8}:00`} />)}
             {events.map((item) => {
               const start = new Date(item.startsAt);
               const mins = start.getHours() * 60 + start.getMinutes() - 8 * 60;
@@ -664,12 +679,12 @@ function AgendaPage({ user }) {
           {events.length ? events.map((appointment) => <AppointmentCard key={appointment.id} appointment={appointment} onOpen={setSelected} />)
             : <p className="day-empty">Nenhum atendimento neste dia.</p>}
           {blocks.map((block) => <div className="block-row" key={block.id}><CalendarX2 size={16} /> Bloqueado · {block.reason || "Horário indisponível"}
-            <span>{dateTimeLabel(block.startsAt)} — {dateTimeLabel(block.endsAt)}</span><button className="icon-button compact" onClick={() => api(`/blocked-slots/${block.id}`, { method: "DELETE" }).then(refresh)} aria-label="Remover bloqueio"><X size={15} /></button></div>)}
+            <span>{dateTimeLabel(block.startsAt)} — {dateTimeLabel(block.endsAt)}</span><button className="icon-button compact" onClick={() => api(`/blocked-slots/${block.id}`, { method: "DELETE" }).then(refresh).catch(reason => setError(reason.message))} aria-label="Remover bloqueio"><X size={15} /></button></div>)}
         </div>;
       })}
     </div>
     {modal === "new" && <AppointmentForm initialDate={date} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
-    {modal === "block" && <BlockForm initialDate={date} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
+    {modal === "block" && <BlockForm initialDate={date} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {selected && <AppointmentDetails appointment={selected} readOnly={user.role === "profissional" || user.tenantId === "tenant-salao-demo"} onClose={() => setSelected(null)} onUpdated={() => { setSelected(null); refresh(); }} />}
   </>;
 }
@@ -832,6 +847,98 @@ function TeamHours({ professional, onClose }) {
   </Modal>;
 }
 
+function ProfessionalEarningsPage() {
+  const [month, setMonth] = useState(localDate().slice(0, 7));
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    setData(null);
+    api(`/professional/earnings?month=${encodeURIComponent(month)}`)
+      .then(result => { setData(result); setError(""); })
+      .catch(reason => setError(reason.message));
+  }, [month]);
+  return <>
+    <PageTitle eyebrow="MINHAS COMISSÕES" title="Meus ganhos"
+      description="Confira suas comissões de serviços concluídos e os pagamentos registrados pelo comércio."/>
+    <div className="month-filter"><label htmlFor="earnings-month">Mês de referência</label>
+      <input id="earnings-month" className="input month-input" type="month" value={month} onChange={event => setMonth(event.target.value)}/></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    {!data ? !error && <Loading/> : <>
+      <section className="stats-grid finance-stats">
+        <StatCard title="Saldo total a receber" value={money(data.allTime.dueCents)} note="Comissões de todos os períodos não pagas" icon={Wallet} tone="green"/>
+        <StatCard title="Comissões deste mês" value={money(data.earnedCents)} note="Serviços concluídos no período" icon={ClipboardCheck} tone="blue"/>
+        <StatCard title="Pagamentos registrados" value={money(data.allTime.paidCents)} note="Histórico total de comissões pagas" icon={CheckCheck} tone="purple"/>
+      </section>
+      <section className="panel management-panel">
+        <div className="panel-heading"><div><p className="eyebrow">DETALHAMENTO</p><h2>Serviços prestados</h2>
+          <p className="panel-subtitle">Os valores abaixo são comissões, não o preço integral dos serviços. Somente o proprietário registra o pagamento.</p></div></div>
+        {data.services.length ? <div className="management-list">{data.services.map(item =>
+          <article className="service-row" key={item.id}>
+            <span className="service-row-icon"><Wallet size={18}/></span>
+            <div className="min-w-0 flex-1"><b>{item.serviceName} · {item.clientName}</b>
+              <small>{dateTimeLabel(item.startsAt)} · {item.commissionPercent}% de comissão</small></div>
+            <strong>{money(item.earnedCents)}</strong>
+            <span className={`status-badge ${item.paid ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+              {item.paid ? "Pago" : "A receber"}</span>
+          </article>)}</div> : <EmptyState icon={Wallet} title="Sem ganhos registrados neste mês"
+            description="A comissão aparece quando um serviço atribuído a você é concluído."/>}
+      </section>
+    </>}
+  </>;
+}
+
+function TeamCommissionsPage() {
+  const [month, setMonth] = useState(localDate().slice(0, 7));
+  const [items, setItems] = useState([]);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(null);
+  const refresh = useCallback(async () => {
+    try {
+      const result = await api(`/commissions?month=${encodeURIComponent(month)}`);
+      setItems(result.commissions); setError("");
+    } catch(reason) { setError(reason.message); }
+  }, [month]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const registerPayment = async item => {
+    if (!window.confirm(`Confirmar pagamento da comissão de ${item.professionalName} no valor de ${money(item.earnedCents)}? Essa operação será registrada como paga.`)) return;
+    setSaving(item.id);
+    try {
+      await api(`/commissions/${item.id}/pay`, { method: "POST" });
+      await refresh();
+    } catch (reason) { setError(reason.message); }
+    finally { setSaving(null); }
+  };
+  const unpaid = items.filter(item => !item.paid);
+  return <>
+    <PageTitle eyebrow="CONTROLE DA EQUIPE" title="Comissões da equipe"
+      description="Registre o pagamento de comissões pelos serviços concluídos; o saldo do profissional é atualizado automaticamente."/>
+    <div className="month-filter"><label htmlFor="commissions-month">Mês</label>
+      <input id="commissions-month" className="input month-input" type="month" value={month}
+        onChange={event => setMonth(event.target.value)}/></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <section className="stats-grid finance-stats">
+      <StatCard title="Pendente no mês" value={money(unpaid.reduce((sum,item)=>sum+item.earnedCents,0))}
+        note="Comissões de serviços concluídos" icon={Wallet} tone="orange"/>
+      <StatCard title="Pago no mês" value={money(items.filter(item=>item.paid).reduce((sum,item)=>sum+item.paidCents,0))}
+        note="Pagamentos registrados" icon={CheckCheck} tone="green"/>
+    </section>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><h2>Comissões por serviço</h2>
+        <p className="panel-subtitle">Registrar pagamento não transfere dinheiro. Confirme apenas após pagar o profissional.</p></div></div>
+      {items.length ? <div className="management-list">{items.map(item =>
+        <article className="service-row" key={item.id}>
+          <span className="service-row-icon"><CircleDollarSign size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{item.professionalName} · {item.serviceName}</b>
+            <small>{dateTimeLabel(item.startsAt)} · {item.commissionPercent}% de comissão</small></div>
+          <strong>{money(item.earnedCents)}</strong>
+          {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Pago</span> :
+            <Button disabled={saving === item.id} onClick={()=>registerPayment(item)}>{saving === item.id ? "Salvando..." : "Registrar pagamento"}</Button>}
+        </article>)}</div> : <EmptyState icon={Wallet} title="Sem comissões neste mês"
+          description="Conclua os atendimentos para registrar comissões."/>}
+    </section>
+  </>;
+}
+
 function ProfessionalWorkPage() {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [data, setData] = useState({ services: [], totals: { appointments: 0, completed: 0, serviceValueCents: 0 } });
@@ -867,7 +974,7 @@ function ProfessionalWorkPage() {
       <StatCard title="Meus agendamentos" value={data.totals.appointments} note="No período" icon={CalendarDays} />
       <StatCard title="Serviços realizados" value={data.totals.completed} note="Concluídos" icon={CheckCheck} tone="green"/>
       <StatCard title="Valor dos serviços realizados" value={money(data.totals.serviceValueCents)}
-        note="Valor dos serviços, não comissão ou pagamento" icon={Scissors} tone="blue"/>
+        note="Valor bruto; veja comissões em Meus ganhos" icon={Scissors} tone="blue"/>
     </section>
     <section className="panel management-panel">
       <div className="panel-heading"><div><p className="eyebrow">REGISTRO DE SERVIÇOS</p>
@@ -1286,6 +1393,8 @@ export default function App() {
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage /> : <AccessDenied />} />
+      <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>
+      <Route path="/comissoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <TeamCommissionsPage/> : <AccessDenied/>}/>
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
       <Route path="/recebimentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />

@@ -208,3 +208,22 @@ A ação **Sair** ficou visível no perfil lateral e no topo da aplicação. A d
 - Com `DEMO_MODE=true`, o login demonstrativo de administrador permanece ativo. Cada instalação comercial deve usar seu próprio banco/volume e segredos.
 - Faça backup do banco SQLite **antes** de atualizar o sistema em um computador com dados existentes. A migração adiciona colunas e atribui códigos, sem recriar as tabelas.
 
+
+## Painel do profissional: ganhos e bloqueios de agenda
+
+A visão geral do profissional apresenta **atendimentos hoje**, **serviços concluídos hoje**, **saldo total de comissões a receber** (todos os períodos) e **próximo atendimento**, removendo as métricas de clientes ativos e agendamentos mensais desse perfil. O administrador e a recepção mantêm os seus indicadores atuais.
+
+A aba **Meus ganhos** (`/meus-ganhos`) apresenta, para cada mês, serviços concluídos, percentual de comissão capturado quando o serviço foi agendado, valor da comissão, status **A receber/Pago**, e totais de comissões acumuladas, recebidas e pendentes. **Não use preço total do serviço como remuneração do profissional.** Os valores são calculados por serviço, arredondados em centavos.
+
+O proprietário possui a aba **Comissões da equipe** (`/comissoes`) para registrar, após realizar o pagamento, a quitação individual de uma comissão. O registro é persistido em `commission_payments`, não permite pagar duas vezes a mesma comissão e impede alterar atendimentos cuja comissão já foi marcada paga. A operação **não transfere recursos**; apenas registra o pagamento informado pelo proprietário. Para estornos e ajustes, será necessária uma futura rotina auditável; esta versão não faz pagamento parcial.
+
+Na **Agenda**, um profissional pode bloquear e desbloquear **somente seus próprios horários**, informando início, término e observação (por exemplo, almoço ou compromisso). Bloqueios que colidem com atendimentos ativos são recusados; outros funcionários e o calendário da empresa não podem ser bloqueados por esse perfil.
+
+No **agendamento interno**, selecionar cliente é opcional. Se não for selecionado, o sistema cria um registro individual `Cliente não informado` para preservar o relacionamento do banco e não perder o agendamento. A página de reserva pública ainda solicita nome e WhatsApp, como antes.
+
+### Validações antes de usar comercialmente
+
+- Confira com cada profissional se a comissão contratada e os serviços atribuídos estão corretos.
+- Teste data/hora, bloqueios e desbloqueios, agendamentos sem cliente e registro administrativo de comissão paga.
+- Faça backup do arquivo SQLite antes de atualizar. Esta versão cria a tabela adicional `commission_payments` sem descartar registros existentes.
+- O fluxo não calcula salários fixos, adiantamentos, descontos, impostos, folhas de pagamento ou conciliação bancária; esses itens exigem regras próprias.
