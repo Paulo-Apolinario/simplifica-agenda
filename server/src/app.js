@@ -852,6 +852,38 @@ app.patch("/api/professionals/:id", requireAuth, allowRoles("dono"), (req, res) 
   res.json({ ok: true });
 });
 
+app.get("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
+  const rules=db.prepare(`SELECT psc.professional_id AS professionalId,psc.service_id AS serviceId,
+    psc.commission_percent AS commissionPercent,psc.house_share_percent AS houseSharePercent,
+    u.name AS professionalName,s.name AS serviceName FROM professional_service_commissions psc
+    JOIN users u ON u.id=psc.professional_id AND u.tenant_id=psc.tenant_id
+    JOIN services s ON s.id=psc.service_id AND s.tenant_id=psc.tenant_id
+    WHERE psc.tenant_id=? ORDER BY u.name,s.name`).all(tenant(req));
+  res.json({rules});
+});
+app.put("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
+  const pro=String(req.body?.professionalId||""), svc=String(req.body?.serviceId||"");
+  const percent=Number(req.body?.commissionPercent),house=Number(req.body?.houseSharePercent??0);
+  if(![percent,house].every(v=>Number.isFinite(v)&&v>=0&&v<=100)||house>percent)
+    return fail(res,400,"Repasse e retenção inválidos.");
+  if(!db.prepare("SELECT 1 FROM users WHERE id=? AND tenant_id=? AND role='profissional'").get(pro,tenant(req)) ||
+     !db.prepare("SELECT 1 FROM services WHERE id=? AND tenant_id=?").get(svc,tenant(req)))
+    return fail(res,404,"Serviço ou profissional não encontrado neste estabelecimento.");
+  db.prepare(`INSERT INTO professional_service_commissions
+    (tenant_id,professional_id,service_id,commission_percent,house_share_percent) VALUES (?,?,?,?,?)
+    ON CONFLICT(tenant_id,professional_id,service_id) DO UPDATE SET
+    commission_percent=excluded.commission_percent,house_share_percent=excluded.house_share_percent`)
+    .run(tenant(req),pro,svc,percent,house);
+  res.json({ok:true});
+});
+app.delete("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
+  const changed=db.prepare(`DELETE FROM professional_service_commissions
+    WHERE tenant_id=? AND professional_id=? AND service_id=?`)
+    .run(tenant(req),req.body?.professionalId,req.body?.serviceId);
+  if(!changed.changes)return fail(res,404,"Regra não encontrada.");
+  res.json({ok:true});
+});
+
 app.get("/api/schedule", requireAuth, (req, res) => {
   const from = String(req.query.from ?? "");
   const to = String(req.query.to ?? "");
@@ -1015,9 +1047,11 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
   }
   const chosen = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END AS commission, s.house_share_percent AS houseShare
+      COALESCE(psc.commission_percent, CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END) AS commission,
+      COALESCE(psc.house_share_percent,s.house_share_percent) AS houseShare
     FROM services s
     JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
+    LEFT JOIN professional_service_commissions psc ON psc.tenant_id=s.tenant_id AND psc.service_id=s.id AND psc.professional_id=u.id
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
   `).get(tenant(req), serviceId, professionalId);
   const client = clientId ? db.prepare("SELECT id FROM clients WHERE id = ? AND tenant_id = ?").get(clientId, tenant(req)) : null;
@@ -1477,8 +1511,10 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
   if (!validDateTime(startsAt) || !serviceId || !professionalId) return fail(res, 400, "Escolha serviço, profissional e horário.");
   const selected = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END AS commission, s.house_share_percent AS houseShare
+      COALESCE(psc.commission_percent, CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END) AS commission,
+      COALESCE(psc.house_share_percent,s.house_share_percent) AS houseShare
     FROM services s JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
+    LEFT JOIN professional_service_commissions psc ON psc.tenant_id=s.tenant_id AND psc.service_id=s.id AND psc.professional_id=u.id
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND s.public_enabled = 1 AND u.active = 1
   `).get(business.id, serviceId, professionalId);
   if (!selected) return fail(res, 400, "Serviço ou profissional inválido.");
