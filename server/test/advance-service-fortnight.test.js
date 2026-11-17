@@ -47,6 +47,7 @@ test("atendimento antecipado entra no caixa da empresa e gera saldo quinzenal se
     db.prepare("INSERT INTO clients(id,tenant_id,name) VALUES(?,?,?)")
       .run("client-1",tenant,"Cliente");
     const current = (await request("/cash/daily")).body.today;
+    assert.equal((await request("/cash/openings","POST",{date:current,openingCashCents:0})).status,201);
     const tomorrowDate = new Date(current + "T12:00:00Z");
     tomorrowDate.setUTCDate(tomorrowDate.getUTCDate()+1);
     const tomorrow = tomorrowDate.toISOString().slice(0,10);
