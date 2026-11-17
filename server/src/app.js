@@ -1013,7 +1013,7 @@ function professionalEarnings(tenantId, professionalId, month = null) {
   const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, s.name AS serviceName,
     c.name AS clientName, a.price_cents AS priceCents,
     a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent,
-    cp.amount_cents AS paidCents, cp.paid_at AS paidAt
+    CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents, cp.paid_at AS paidAt
     FROM appointments a
     JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
     JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
@@ -1040,7 +1040,7 @@ app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
   const rows = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
     a.starts_at AS startsAt, a.price_cents AS priceCents,
     a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent, s.name AS serviceName,
-    cp.amount_cents AS paidCents, cp.paid_at AS paidAt
+    CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents, cp.paid_at AS paidAt
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
     JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
     LEFT JOIN commission_payments cp ON cp.appointment_id = a.id AND cp.tenant_id = a.tenant_id
@@ -1079,22 +1079,8 @@ app.patch("/api/commissions/:id", requireAuth, allowRoles("dono"), (req, res) =>
   }) });
 });
 
-app.post("/api/commissions/:id/pay", requireAuth, allowRoles("dono"), (req, res) => {
-  const row = db.prepare(`SELECT id, professional_id AS professionalId,
-    price_cents AS priceCents, commission_percent AS commissionPercent,
-    house_share_percent AS houseSharePercent
-    FROM appointments WHERE id = ? AND tenant_id = ? AND status = 'concluido'`)
-    .get(req.params.id, tenant(req));
-  if (!row) return fail(res, 404, "Serviço concluído não encontrado.");
-  const amount = commissionCents(row);
-  try {
-    db.prepare(`INSERT INTO commission_payments (appointment_id, tenant_id, professional_id, amount_cents)
-      VALUES (?, ?, ?, ?)`).run(row.id, tenant(req), row.professionalId, amount);
-  } catch (error) {
-    if (error.code?.startsWith("SQLITE_CONSTRAINT")) return fail(res, 409, "Comissão já registrada como paga.");
-    throw error;
-  }
-  res.json({ ok: true, amountCents: amount });
+app.post("/api/commissions/:id/pay", requireAuth, allowRoles("dono"), (_req, res) => {
+  return fail(res, 409, "Repasses individuais foram desativados. Confirme os pagamentos na apuração quinzenal.");
 });
 
 // Each professional can see and complete only their own work, without editing finances.
@@ -1105,7 +1091,7 @@ app.get("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
   const items=db.prepare(`SELECT a.id,a.professional_id AS professionalId,u.name AS professionalName,
     a.price_cents AS priceCents,a.commission_percent AS commissionPercent,
     a.house_share_percent AS houseSharePercent,a.starts_at AS startsAt,
-    cp.amount_cents AS paidCents,cp.batch_id AS batchId
+    CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents,cp.batch_id AS batchId
     FROM appointments a JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
     LEFT JOIN commission_payments cp ON cp.appointment_id=a.id AND cp.tenant_id=a.tenant_id
     WHERE a.tenant_id=? AND a.status='concluido' AND substr(a.starts_at,1,7)=?
@@ -1133,7 +1119,7 @@ app.get("/api/settlements/export.csv", requireAuth, allowRoles("dono"), (req,res
   if(!validMonth(month))return fail(res,400,"Mês inválido.");
   const rows=db.prepare(`SELECT a.starts_at AS startsAt,u.name AS professionalName,
     s.name AS serviceName,a.price_cents AS priceCents,a.commission_percent AS commissionPercent,
-    a.house_share_percent AS houseSharePercent, cp.amount_cents AS paidCents,
+    a.house_share_percent AS houseSharePercent, CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents,
     cp.batch_id AS batchId,cp.paid_at AS paidAt
     FROM appointments a JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
     JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
