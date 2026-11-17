@@ -298,8 +298,11 @@ function Shell({ user, onLogout, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
-  const visibleNavItems = navItems.filter((item) =>
-    user.role === "dono" || !["/financeiro", "/recebimentos", "/configuracoes"].includes(item.to));
+  const isDemo = user.tenantId === "tenant-salao-demo";
+  const visibleNavItems = navItems.filter((item) => {
+    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta"].includes(item.to)) return false;
+    return user.role === "dono" || !["/financeiro", "/recebimentos", "/configuracoes"].includes(item.to);
+  });
   useEffect(() => {
     api("/settings").then(({ settings }) => settings?.businessName && setBusinessName(settings.businessName)).catch(() => {});
   }, [location.pathname]);
@@ -1153,9 +1156,9 @@ export default function App() {
       <Route path="/servicos" element={<ServicesPage user={user} />} />
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
-      <Route path="/recebimentos" element={user.role === "dono" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
-      <Route path="/configuracoes" element={user.role === "dono" ? <SettingsPage /> : <AccessDenied />} />
-      <Route path="/minha-conta" element={<AccountPage user={user} onUserUpdated={setUser} />} />
+      <Route path="/recebimentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
+      <Route path="/configuracoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettingsPage /> : <AccessDenied />} />
+      <Route path="/minha-conta" element={user.tenantId !== "tenant-salao-demo" ? <AccountPage user={user} onUserUpdated={setUser} /> : <AccessDenied />} />
       <Route path="*" element={<OverviewPage user={user} />} />
     </Routes>
   </Shell>;
