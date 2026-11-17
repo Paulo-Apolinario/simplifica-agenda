@@ -177,6 +177,8 @@ ensureColumn("business_settings", "whatsapp", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("users", "job_title", "TEXT NOT NULL DEFAULT ''");
 ensureColumn("users", "login_code", "TEXT");
 ensureColumn("services", "house_share_percent", "REAL NOT NULL DEFAULT 0 CHECK (house_share_percent BETWEEN 0 AND 100)");
+ensureColumn("services", "commission_mode", "TEXT NOT NULL DEFAULT 'professional'");
+ensureColumn("services", "service_commission_percent", "REAL NOT NULL DEFAULT 0");
 ensureColumn("appointments", "house_share_percent", "REAL NOT NULL DEFAULT 0 CHECK (house_share_percent BETWEEN 0 AND 100)");
 ensureColumn("blocked_slots", "created_by_user_id", "TEXT");
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS global_staff_login_code_idx ON users(login_code) WHERE login_code IS NOT NULL");
