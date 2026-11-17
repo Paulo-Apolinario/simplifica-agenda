@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, CircleDollarSign, Clock3, Download, ExternalLink, LayoutDashboard,
   LogOut, Menu, Moon, MoreHorizontal, Plus, Search, Settings, ShieldCheck, Sun, Users,
   Wallet, X, Scissors, UserRound, CalendarClock, CalendarX2, Phone, Mail, Sparkles,
-  Copy, QrCode, Share2, Link2, Smartphone, Info,
+  Copy, QrCode, Share2, Link2, Smartphone, Info, ClipboardCheck, UserRoundCheck,
 } from "lucide-react";
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
@@ -286,7 +286,9 @@ const navItems = [
   { to: "/", label: "Visão geral", icon: LayoutDashboard, end: true },
   { to: "/agenda", label: "Agenda", icon: CalendarDays },
   { to: "/clientes", label: "Clientes", icon: Users },
-  { to: "/servicos", label: "Serviços e equipe", icon: Scissors },
+  { to: "/servicos", label: "Serviços", icon: Scissors },
+  { to: "/equipe", label: "Equipe e acessos", icon: Users },
+  { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
@@ -300,8 +302,11 @@ function Shell({ user, onLogout, children }) {
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
   const isDemo = user.tenantId === "tenant-salao-demo";
   const visibleNavItems = navItems.filter((item) => {
-    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta"].includes(item.to)) return false;
-    return user.role === "dono" || !["/financeiro", "/recebimentos", "/configuracoes"].includes(item.to);
+    if (user.role === "profissional") return ["/", "/agenda", "/meus-atendimentos", "/minha-conta"].includes(item.to)
+      && !(isDemo && item.to === "/minha-conta");
+    if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos"].includes(item.to);
+    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos"].includes(item.to)) return false;
+    return item.to !== "/meus-atendimentos";
   });
   useEffect(() => {
     api("/settings").then(({ settings }) => settings?.businessName && setBusinessName(settings.businessName)).catch(() => {});
@@ -333,7 +338,9 @@ function Shell({ user, onLogout, children }) {
           <div className="profile-card">
             <span className="profile-avatar">{user.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
             <div className="min-w-0 flex-1"><b>{user.name}</b><small>{user.role === "dono" ? "Proprietária" : user.role === "recepcao" ? "Recepção" : "Profissional"}</small></div>
-            <button className="icon-button compact" onClick={onLogout} aria-label="Sair"><LogOut size={17} /></button>
+            <button type="button" className="button button-secondary logout-button" onClick={onLogout} aria-label="Sair da conta">
+              <LogOut size={16} /> Sair
+            </button>
           </div>
         </div>
       </aside>
@@ -348,6 +355,7 @@ function Shell({ user, onLogout, children }) {
           <div className="topbar-right">
             <span className="today-pill"><span /> Sistema funcionando</span>
             <span className="topbar-date">{dateLabel(localDate(), { weekday: "short", day: "2-digit", month: "short" })}</span>
+            <button type="button" className="topbar-logout" onClick={onLogout} title="Sair da conta" aria-label="Sair da conta"><LogOut size={17}/></button>
             <span className="topbar-avatar">{user.name[0]}</span>
           </div>
         </header>
@@ -778,7 +786,63 @@ function TeamHours({ professional, onClose }) {
   </Modal>;
 }
 
-function ServicesPage({ user }) {
+function ProfessionalWorkPage() {
+  const [month, setMonth] = useState(localDate().slice(0, 7));
+  const [data, setData] = useState({ services: [], totals: { appointments: 0, completed: 0, serviceValueCents: 0 } });
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(null);
+  const refresh = useCallback(async () => {
+    try {
+      const result = await api(`/professional/my-services?month=${encodeURIComponent(month)}`);
+      setData(result); setError("");
+    } catch (reason) { setError(reason.message); }
+  }, [month]);
+  useEffect(() => { refresh(); }, [refresh]);
+  const complete = async (id) => {
+    if (!window.confirm("Confirmar que este serviço foi realizado?")) return;
+    setSaving(id);
+    try {
+      await api(`/professional/my-services/${encodeURIComponent(id)}/complete`, { method: "POST" });
+      await refresh();
+    } catch (reason) { setError(reason.message); }
+    finally { setSaving(null); }
+  };
+  const canComplete = (item) => ["agendado", "confirmado"].includes(item.status) && item.startsAt <=
+    new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date()).replace(" ", "T");
+  return <>
+    <PageTitle eyebrow="ÁREA DO PROFISSIONAL" title="Meus atendimentos"
+      description="Visualize seus serviços e registre os que foram efetivamente realizados." />
+    <div className="month-filter"><label htmlFor="professional-month">Mês</label>
+      <input id="professional-month" className="input month-input" type="month" value={month}
+        onChange={e => setMonth(e.target.value)}/></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <section className="stats-grid finance-stats">
+      <StatCard title="Meus agendamentos" value={data.totals.appointments} note="No período" icon={CalendarDays} />
+      <StatCard title="Serviços realizados" value={data.totals.completed} note="Concluídos" icon={CheckCheck} tone="green"/>
+      <StatCard title="Valor dos serviços realizados" value={money(data.totals.serviceValueCents)}
+        note="Valor dos serviços, não comissão ou pagamento" icon={Scissors} tone="blue"/>
+    </section>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><p className="eyebrow">REGISTRO DE SERVIÇOS</p>
+        <h2>Atendimentos atribuídos a mim</h2></div></div>
+      {data.services.length ? <div className="management-list">
+        {data.services.map(item => <article className="service-row" key={item.id}>
+          <span className="service-row-icon"><ClipboardCheck size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
+            <small>{dateTimeLabel(item.startsAt)} · {statusNames[item.status]}</small></div>
+          <span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span>
+          {canComplete(item) && <Button disabled={saving === item.id} onClick={() => complete(item.id)}>
+            {saving === item.id ? "Salvando..." : "Concluir serviço"}
+          </Button>}
+        </article>)}
+      </div> : <EmptyState icon={CalendarDays} title="Nenhum serviço neste mês"
+        description="Seus atendimentos agendados aparecerão aqui."/>}
+    </section>
+  </>;
+}
+
+function ServicesPage({ user, section = "services" }) {
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
   const [team, setTeam] = useState([]);
@@ -790,22 +854,26 @@ function ServicesPage({ user }) {
   const refresh = useCallback(() => Promise.all([
     api("/services"),
     api("/professionals"),
-    user.role === "dono" ? api("/team-members") : Promise.resolve(null),
+    user.role === "dono" && section === "team" ? api("/team-members") : Promise.resolve(null),
   ])
     .then(([s, p, people]) => { setServices(s.services); setProfessionals(p.professionals); setTeam(people?.team ?? p.professionals); })
     .catch((reason) => setError(reason.message)), []);
   useEffect(() => { refresh(); }, [refresh]);
   return <>
-    <PageTitle eyebrow="SEU NEGÓCIO, DO SEU JEITO" title="Serviços e equipe" description="Organize o que você oferece e quem faz acontecer."
-      actions={user.role === "dono" && <><Button variant="secondary" onClick={() => setModal("team")}><UserRound size={16} /> Adicionar à equipe</Button><Button onClick={() => setModal("service")}><Plus size={16} /> Novo serviço</Button></>} />
+    <PageTitle eyebrow="GESTÃO DO ESTABELECIMENTO"
+      title={section === "team" ? "Equipe e acessos" : "Serviços"}
+      description={section === "team" ? "Cadastre funcionários, defina funções, serviços e horários." : "Organize os serviços, preços e duração dos atendimentos."}
+      actions={user.role === "dono" && (section === "team"
+        ? <Button onClick={() => setModal("team")}><UserRound size={16} /> Adicionar funcionário</Button>
+        : <Button onClick={() => setModal("service")}><Plus size={16} /> Novo serviço</Button>)} />
     <ErrorMessage>{error}</ErrorMessage>
     <div className="management-grid">
-      <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">CARDÁPIO DE CUIDADOS</p><h2>Serviços</h2></div><span className="count-chip">{services.length}</span></div>
+      {section === "services" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">SERVIÇOS OFERECIDOS</p><h2>Serviços</h2></div><span className="count-chip">{services.length}</span></div>
         {services.length ? <div className="management-list">{services.map((service) => <article className="service-row" key={service.id}>
           <span className="service-row-icon"><Scissors size={18} /></span><div className="min-w-0 flex-1"><b>{service.name}</b><small>{service.durationMinutes} min · {service.professionalNames || "Sem profissional"}</small></div>
           <strong>{money(service.priceCents)}</strong>{user.role === "dono" && <button className="icon-button compact" onClick={() => setModal(service)} aria-label="Editar serviço"><MoreHorizontal size={18} /></button>}
-        </article>)}</div> : <EmptyState icon={Scissors} title="Nenhum serviço cadastrado" description="Adicione seu primeiro serviço." />}</section>
-      <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe</h2></div><span className="count-chip">{team.filter((person) => person.active).length} ativos</span></div>
+        </article>)}</div> : <EmptyState icon={Scissors} title="Nenhum serviço cadastrado" description="Adicione seu primeiro serviço." />}</section>}
+      {section === "team" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe</h2></div><span className="count-chip">{team.filter((person) => person.active).length} ativos</span></div>
         {team.length ? <div className="management-list">{team.map((person) => <article className="professional-row" key={person.id}>
           <span className="table-avatar">{person.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
           <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.email} · {person.role === "profissional" ? `Comissão ${person.commissionPercent}%` : "Recepção"}</small></div>
@@ -816,7 +884,7 @@ function ServicesPage({ user }) {
             try { await api(`/team-members/${person.id}`, { method: "PATCH", body: { name: person.name, phone: person.phone, commissionPercent: person.commissionPercent, active: !person.active } }); refresh(); }
             catch (reason) { setError(reason.message); }
           }} aria-label={person.active ? "Desativar pessoa da equipe" : "Ativar pessoa da equipe"}><ShieldCheck size={16} /></button>}
-        </article>)}</div> : <EmptyState icon={UserRound} title="Só você por enquanto" description="Adicione profissionais para compartilhar a agenda." />}</section>
+        </article>)}</div> : <EmptyState icon={UserRound} title="Só você por enquanto" description="Adicione profissionais para compartilhar a agenda." />}</section>}
     </div>
     {modal === "team" && <TeamMemberForm services={services} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {(modal === "service" || modal?.id) && <ServiceForm service={modal?.id ? modal : null} professionals={professionals} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
@@ -1147,13 +1215,15 @@ export default function App() {
   if (loading) return <div className="app-loading"><img src="/assets/simplifica-perfil.svg" alt="" /><Loading /></div>;
   if (installation?.needsSetup) return <InstallationSetup onReady={() => { setInstallation({ needsSetup: false, demoEnabled: false }); setUser(null); }} />;
   if (!user) return <Login key={String(installation?.demoEnabled)} onLogin={setUser} demoEnabled={installation?.demoEnabled} />;
-  const logout = async () => { await api("/auth/logout", { method: "POST" }); setUser(null); };
+  const logout = async () => { try { await api("/auth/logout", { method: "POST" }); } finally { setUser(null); } };
   return <Shell user={user} onLogout={logout}>
     <Routes>
       <Route path="/" element={<OverviewPage user={user} />} />
       <Route path="/agenda" element={<AgendaPage user={user} />} />
       <Route path="/clientes" element={<ClientsPage user={user} />} />
-      <Route path="/servicos" element={<ServicesPage user={user} />} />
+      <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
+      <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
+      <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage /> : <AccessDenied />} />
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
       <Route path="/recebimentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
