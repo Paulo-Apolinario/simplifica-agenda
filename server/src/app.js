@@ -1268,11 +1268,16 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     if (!validDateTime(req.body.startsAt)) return fail(res, 400, "Novo horário inválido.");
     const service = db.prepare("SELECT duration_minutes FROM services WHERE id = ? AND tenant_id = ?")
       .get(appointment.serviceId, tenant(req));
-    startsAt = req.body.startsAt.length === 16 ? `${req.body.startsAt}:00` : req.body.startsAt;
-    endsAt = addLocalMinutes(startsAt, service.duration_minutes);
-    if (startsAt <= localNow(tenant(req))) return fail(res, 400, "Escolha um horário futuro.");
-    if (!withinWorkingHours(tenant(req), appointment.professionalId, startsAt, endsAt)) {
-      return fail(res, 400, "O horário está fora do expediente deste profissional.");
+    const requestedStart = req.body.startsAt.length === 16 ? `${req.body.startsAt}:00` : req.body.startsAt;
+    // Saving a completed service or its payment must never trigger a new scheduling
+    // validation just because the form sent back the original date/time.
+    if (requestedStart !== appointment.startsAt) {
+      startsAt = requestedStart;
+      endsAt = addLocalMinutes(startsAt, service.duration_minutes);
+      if (startsAt <= localNow(tenant(req))) return fail(res, 400, "Escolha um horário futuro.");
+      if (!withinWorkingHours(tenant(req), appointment.professionalId, startsAt, endsAt)) {
+        return fail(res, 400, "O horário está fora do expediente deste profissional.");
+      }
     }
   }
   const update = db.transaction(() => {
