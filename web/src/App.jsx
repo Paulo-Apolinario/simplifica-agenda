@@ -1672,6 +1672,7 @@ function PublicBooking({ slug }) {
   const [time, setTime] = useState("");
   const [client, setClient] = useState({ name: "", phone: "" });
   const [message, setMessage] = useState("");
+  const [managementToken,setManagementToken] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingSlots, setLoadingSlots] = useState(false);
@@ -1708,6 +1709,7 @@ function PublicBooking({ slug }) {
         ...client, serviceId, professionalId, startsAt: `${date}T${time}:00`,
       } });
       setMessage(result.message);
+      setManagementToken(result.managementToken || "");
       setTime("");
       setClient({ name: "", phone: "" });
     } catch (reason) { setTime(""); setError(reason.message); } finally { setLoading(false); }
@@ -1724,7 +1726,12 @@ function PublicBooking({ slug }) {
             <Phone size={14}/> WhatsApp do estabelecimento</a>}</div>
       </div>
       {slug === "studio-bela-vista" && <p className="public-demo-notice"><Info size={16}/> Esta página é demonstrativa. Reservas reais permanecem desativadas.</p>}
-      {message ? <div className="booking-success" role="status"><span><Check size={25} /></span><h2>Horário solicitado!</h2><p>{message}</p><Button variant="secondary" onClick={() => setMessage("")}>Fazer outro agendamento</Button></div> :
+      {message ? <div className="booking-success" role="status"><span><Check size={25} /></span><h2>Horário solicitado!</h2><p>{message}</p>
+          {managementToken && <><p>Guarde seu comprovante para consultar, remarcar ou cancelar dentro das regras do estabelecimento.</p>
+            <Link to={`/acompanhar/${managementToken}`} className="button button-primary">Ver meu comprovante</Link>
+            <Button variant="secondary" onClick={()=>navigator.clipboard.writeText(window.location.origin+`/acompanhar/${managementToken}`)}>Copiar link do comprovante</Button>
+          </>}
+          <Button variant="secondary" onClick={() => {setMessage("");setManagementToken("");}}>Fazer outro agendamento</Button></div> :
         <form className="public-form" onSubmit={submit}>
           <div className="booking-step"><span>1</span><b>Qual serviço você deseja?</b></div>
           <div className="public-service-grid">{data.services.map((item) => <button key={item.id} type="button" aria-pressed={serviceId === item.id} onClick={() => { setServiceId(item.id); setProfessionalId(""); setTime(""); }}
@@ -1758,6 +1765,123 @@ function PublicBooking({ slug }) {
   </main>;
 }
 
+function OnlineRequestsPage() {
+  const [items,setItems]=useState([]);
+  const [filter,setFilter]=useState("agendado");
+  const [error,setError]=useState("");
+  const [busy,setBusy]=useState("");
+  const refresh=useCallback(()=>api("/requests")
+    .then(result=>{setItems(result.requests);setError("");})
+    .catch(e=>setError(e.message)),[]);
+  useEffect(()=>{refresh();},[refresh]);
+  const act=async(item,action)=>{
+    const description=action==="confirm"?"confirmar":"recusar";
+    if(!window.confirm(`Deseja ${description} a solicitação de ${item.clientName}?`))return;
+    setBusy(item.id);setError("");
+    try{await api(`/requests/${item.id}`,{method:"PATCH",body:{action}});await refresh();}
+    catch(e){setError(e.message);}finally{setBusy("");}
+  };
+  const visible=items.filter(item=>filter==="all" || item.status===filter);
+  return <>
+    <PageTitle eyebrow="CENTRAL DE AGENDAMENTOS" title="Solicitações online"
+      description="Confirme ou recuse os pedidos feitos pelo link e QR Code do seu estabelecimento." />
+    <div className="booking-queue-tools">
+      <SelectField label="Situação" value={filter} onChange={e=>setFilter(e.target.value)}>
+        <option value="agendado">Aguardando confirmação</option><option value="confirmado">Confirmados</option>
+        <option value="cancelado">Cancelados ou recusados</option><option value="all">Todos</option>
+      </SelectField>
+      <Button type="button" variant="secondary" onClick={refresh}><Search size={15}/> Atualizar lista</Button>
+    </div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><p className="eyebrow">PEDIDOS RECEBIDOS</p>
+        <h2>{filter==="agendado"?"Aguardando confirmação":"Histórico de solicitações"}</h2></div>
+        <span className="count-chip">{visible.length}</span></div>
+      {visible.length? <div className="management-list">{visible.map(item=>
+        <article className="service-row request-item" key={item.id}>
+          <span className="service-row-icon"><CalendarDays size={19}/></span>
+          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
+            <small>{dateTimeLabel(item.startsAt)} · {item.professionalName}</small>
+            <small>WhatsApp: {item.clientPhone} · {statusNames[item.status]||item.status}</small>
+          </div>
+          {item.status==="agendado"&&<>
+            <Button disabled={busy===item.id} onClick={()=>act(item,"confirm")}>Confirmar</Button>
+            <Button variant="secondary" disabled={busy===item.id} onClick={()=>act(item,"reject")}>Recusar</Button>
+          </>}
+          {item.clientPhone && <a className="button button-secondary" href={whatsappUrl(item.clientPhone,
+            `Olá, ${item.clientName}! Sobre seu agendamento de ${item.serviceName} em ${dateTimeLabel(item.startsAt)}.`)}
+            rel="noreferrer" target="_blank"><Phone size={16}/> WhatsApp</a>}
+        </article>)}</div>:
+        <EmptyState icon={ClipboardCheck} title="Nenhuma solicitação nesta situação"
+          description="Pedidos de clientes pelo link público aparecerão aqui." />}
+    </section>
+  </>;
+}
+function PublicRequestPage({ token }) {
+  const [info,setInfo]=useState(null);
+  const [error,setError]=useState("");
+  const [busy,setBusy]=useState(false);
+  const [date,setDate]=useState(shiftDate(localDate(),1));
+  const [slots,setSlots]=useState([]);
+  const [slot,setSlot]=useState("");
+  const [loadingSlots,setLoadingSlots]=useState(false);
+  const refresh=useCallback(()=>api(`/public/manage/${encodeURIComponent(token)}`)
+    .then(result=>{setInfo(result.appointment);setError("");}).catch(e=>setError(e.message)),[token]);
+  useEffect(()=>{refresh();},[refresh]);
+  useEffect(()=>{
+    if(!info?.canManage)return;
+    let active=true;setLoadingSlots(true);setSlot("");
+    api(`/public/${encodeURIComponent(info.slug)}/slots?serviceId=${encodeURIComponent(info.serviceId)}&professionalId=${encodeURIComponent(info.professionalId)}&date=${date}`)
+      .then(result=>{if(active)setSlots(result.slots||[]);})
+      .catch(e=>{if(active)setError(e.message);})
+      .finally(()=>{if(active)setLoadingSlots(false);});
+    return()=>{active=false;};
+  },[info?.slug,info?.serviceId,info?.professionalId,info?.canManage,date]);
+  const perform=async(action)=>{
+    if(action==="cancel"&&!window.confirm("Confirma que deseja cancelar este horário?"))return;
+    if(action==="reschedule"&&!slot)return;
+    setBusy(true);setError("");
+    try {
+      await api(`/public/manage/${encodeURIComponent(token)}/${action}`,{
+        method:"POST",body:action==="reschedule"?{startsAt:`${date}T${slot}:00`}:{},
+      });
+      await refresh();
+    } catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  return <main className="public-page"><header className="public-topbar"><div className="public-brand">
+    <img src="/assets/simplifica-perfil.svg" alt=""/>Simplifica <span>Agenda</span></div><span>Meu agendamento</span></header>
+    <section className="public-booking-card public-manage">
+      {!info ? <ErrorMessage>{error||"Consultando agendamento..."}</ErrorMessage> : <>
+        <div className="booking-success public-receipt" role="status">
+          <span><ClipboardCheck size={26}/></span><p className="eyebrow">COMPROVANTE DIGITAL DE SOLICITAÇÃO</p>
+          <h2>{info.businessName}</h2><p>Protocolo: <strong>{info.protocol}</strong></p>
+          <div className="public-booking-summary">
+            <b>{statusNames[info.status]||info.status}</b>
+            <span>Cliente: {info.clientName}</span>
+            <span>{info.serviceName} · {info.professionalName}</span>
+            <span>{dateTimeLabel(info.startsAt)} · {money(info.priceCents)}</span>
+          </div>
+          <p>{info.status==="agendado"?"Sua solicitação ainda aguarda confirmação do estabelecimento.":info.status==="confirmado"?"Seu horário foi confirmado pelo estabelecimento.":info.status==="cancelado"?"Esta solicitação foi cancelada.":"Consulte o estabelecimento em caso de dúvidas."}</p>
+          <Button variant="secondary" onClick={()=>window.print()}><Download size={15}/> Imprimir / salvar comprovante</Button>
+        </div>
+        {info.canManage && <div className="public-reschedule">
+          <h3>Remarcar atendimento</h3><p>Escolha uma nova data e um dos horários livres.</p>
+          <Field label="Nova data" type="date" min={localDate()} value={date} onChange={e=>setDate(e.target.value)}/>
+          <div className="slot-grid">{loadingSlots?<p>Consultando horários...</p>:slots.length?slots.map(t=>
+            <button type="button" key={t} aria-pressed={slot===t}
+              className={`slot-button ${slot===t?"slot-selected":""}`} onClick={()=>setSlot(t)}>{t}</button>)
+            :<p>Nenhum horário livre para esta data.</p>}</div>
+          <div className="booking-share-actions">
+            <Button disabled={busy||!slot} onClick={()=>perform("reschedule")}>Solicitar remarcação</Button>
+            <Button variant="secondary" disabled={busy} onClick={()=>perform("cancel")}>Cancelar atendimento</Button>
+          </div>
+        </div>}
+        <ErrorMessage>{error}</ErrorMessage>
+      </>}
+    </section>
+  </main>;
+}
+
 function AccessDenied() {
   return <div className="panel"><EmptyState icon={ShieldCheck} title="Acesso restrito"
     description="Esta área está disponível apenas para o perfil de dono." /></div>;
@@ -1769,7 +1893,7 @@ export default function App() {
   const [installation, setInstallation] = useState(null);
   const location = useLocation();
   useEffect(() => {
-    if (location.pathname.startsWith("/agendar/")) { setLoading(false); return; }
+    if (location.pathname.startsWith("/agendar/") || location.pathname.startsWith("/acompanhar/")) { setLoading(false); return; }
     Promise.all([
       api("/installation/status"),
       api("/auth/me").then(({ user: current }) => current).catch(() => null),
@@ -1779,6 +1903,10 @@ export default function App() {
   useEffect(() => {
     api("/settings").then(({ settings }) => document.documentElement.classList.toggle("dark", settings?.theme === "escuro")).catch(() => {});
   }, [user]);
+  if (location.pathname.startsWith("/acompanhar/")) {
+    const token=decodeURIComponent(location.pathname.slice("/acompanhar/".length).split("/")[0]);
+    return <PublicRequestPage token={token}/>;
+  }
   if (location.pathname.startsWith("/agendar/")) {
     const slug = decodeURIComponent(location.pathname.slice("/agendar/".length).split("/")[0]);
     return <PublicBooking slug={slug} />;
@@ -1791,6 +1919,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={user.role === "recepcao" ? <ReceptionDashboard user={user}/> : <OverviewPage user={user} />} />
       <Route path="/agenda" element={<AgendaPage user={user} />} />
+      <Route path="/solicitacoes" element={user.role!=="profissional" ? <OnlineRequestsPage/> : <AccessDenied/>}/>
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
