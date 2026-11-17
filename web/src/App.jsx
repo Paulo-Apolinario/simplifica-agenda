@@ -1684,6 +1684,7 @@ function PublicBooking({ slug }) {
   const [slots, setSlots] = useState([]);
   const [time, setTime] = useState("");
   const [client, setClient] = useState({ name: "", phone: "" });
+  const [whatsappOptIn,setWhatsappOptIn] = useState(false);
   const [message, setMessage] = useState("");
   const [managementToken,setManagementToken] = useState("");
   const [error, setError] = useState("");
@@ -1719,12 +1720,13 @@ function PublicBooking({ slug }) {
     setLoading(true);
     try {
       const result = await api(`/public/${slug}/appointments`, { method: "POST", body: {
-        ...client, serviceId, professionalId, startsAt: `${date}T${time}:00`,
+        ...client, serviceId, professionalId, whatsappOptIn, startsAt: `${date}T${time}:00`,
       } });
       setMessage(result.message);
       setManagementToken(result.managementToken || "");
       setTime("");
       setClient({ name: "", phone: "" });
+      setWhatsappOptIn(false);
     } catch (reason) { setTime(""); setError(reason.message); } finally { setLoading(false); }
   };
   if (!data && !error) return <div className="public-page"><Loading /></div>;
@@ -1771,6 +1773,10 @@ function PublicBooking({ slug }) {
             <span>{service.name} com {professional.name}</span><span>{dateLabel(date)} às {time} · {money(service.priceCents)}</span></div>}
           {error && <ErrorMessage>{error}</ErrorMessage>}
           <Button className="public-submit" disabled={loading || loadingSlots || !time || !serviceId || !professionalId || !client.name.trim() || !client.phone.trim()}>{loading ? "Solicitando..." : "Solicitar agendamento"}</Button>
+          <label className="choice-option"><input type="checkbox" checked={whatsappOptIn}
+            onChange={e=>setWhatsappOptIn(e.target.checked)}/>
+            Aceito receber avisos desta reserva por WhatsApp. O agendamento funciona mesmo sem esta autorização.
+          </label>
           <p className="public-privacy"><ShieldCheck size={14} /> Seus dados são utilizados para organizar o atendimento e permitir contato do estabelecimento.</p>
         </form>}
     </section>
@@ -1828,7 +1834,9 @@ function OnlineRequestsPage() {
             api(`/requests/${item.id}/whatsapp-opened`,{method:"POST",body:{status:item.status}})
               .then(refresh).catch(e=>setError(e.message));
           }}><Phone size={16}/> Abrir WhatsApp ({item.status==="confirmado"?"confirmação":item.status==="cancelado"?"cancelamento":"solicitação"})</button>}
-          {item.whatsappOpenedAt && <small>Conversa aberta anteriormente — envio não verificado</small>}
+          {item.whatsappDeliveryState==="submitted" && <small>Enviado à API do WhatsApp — entrega ainda não verificada</small>}
+          {item.whatsappDeliveryState==="failed" && <small>Envio automático não concluído — envie manualmente</small>}
+          {item.whatsappOpenedAt && <small>Conversa aberta anteriormente — envio manual não verificado</small>}
         </article>)}</div>:
         <EmptyState icon={ClipboardCheck} title="Nenhuma solicitação nesta situação"
           description="Pedidos de clientes pelo link público aparecerão aqui." />}
