@@ -1668,10 +1668,10 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
     }
     db.prepare(`
       INSERT INTO appointments
-        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent, house_share_percent, booking_source, management_token_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public', ?)
+        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent, house_share_percent, booking_source, management_token_hash, whatsapp_opt_in)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public', ?, ?)
     `).run(id, business.id, client.id, professionalId, serviceId, normalizedStart, endsAt,
-      selected.price, selected.commission, selected.houseShare, managementHash(accessToken));
+      selected.price, selected.commission, selected.houseShare, managementHash(accessToken), req.body?.whatsappOptIn === true ? 1 : 0);
     return true;
   });
   if (!create()) return;
@@ -1740,6 +1740,52 @@ app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedul
   res.json({ ok:true, status:"agendado", startsAt:normalized, message:"Remarcação solicitada. Aguarde nova confirmação." });
 });
 
+// Meta WhatsApp Cloud API is opt-in and requires an approved utility template per status.
+// Configured server-side only: WHATSAPP_CLOUD_CONFIG_JSON maps business slug to credentials.
+function whatsAppCloudConfig(slug) {
+  if (!process.env.WHATSAPP_CLOUD_CONFIG_JSON) return null;
+  try {
+    const entries=JSON.parse(process.env.WHATSAPP_CLOUD_CONFIG_JSON);
+    const c=entries?.[slug];
+    if(!c?.accessToken || !c?.phoneNumberId || !c?.confirmedTemplate)return null;
+    return c;
+  } catch (e) { console.error("WhatsApp Cloud API: configuração JSON inválida"); return null; }
+}
+async function notifyConfirmedWhatsApp(tenantId,appointmentId) {
+  const row=db.prepare(`SELECT a.id,a.status,a.whatsapp_opt_in AS whatsappOptIn,
+    a.starts_at AS startsAt,t.slug,c.name AS clientName,c.phone,s.name AS serviceName,
+    u.name AS professionalName,b.business_name AS businessName
+    FROM appointments a JOIN tenants t ON t.id=a.tenant_id
+    JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
+    JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
+    JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    JOIN business_settings b ON b.tenant_id=a.tenant_id
+    WHERE a.id=? AND a.tenant_id=?`).get(appointmentId,tenantId);
+  if(!row || row.status!=="confirmado")return "not-applicable";
+  const config=whatsAppCloudConfig(row.slug);
+  if(!row.whatsappOptIn || !config)return row.whatsappOptIn?"not-configured":"no-consent";
+  const raw=row.phone.replace(/\D/g,"");
+  const number=raw.startsWith("55")?raw:"55"+raw;
+  if(!/^55\d{10,11}$/.test(number))return "invalid-phone";
+  const template=String(config.confirmedTemplate);
+  if(!/^[a-z0-9_]+$/.test(template))return "invalid-template";
+  const graphVersion=/^v\d+\.\d+$/.test(config.graphVersion||"")?config.graphVersion:"v23.0";
+  const fields=[row.clientName,row.serviceName,row.startsAt.slice(0,16).replace("T"," às "),row.businessName];
+  const payload={messaging_product:"whatsapp",to:number,type:"template",template:{
+    name:template,language:{code:config.language||"pt_BR"},components:[{
+      type:"body",parameters:fields.map(text=>({type:"text",text}))
+    }]
+  }};
+  try{
+    const result=await fetch(`https://graph.facebook.com/${graphVersion}/${encodeURIComponent(config.phoneNumberId)}/messages`,{
+      method:"POST",headers:{"Authorization":`Bearer ${config.accessToken}`,"Content-Type":"application/json"},
+      body:JSON.stringify(payload),signal:AbortSignal.timeout(8000),
+    });
+    if(!result.ok){console.error("WhatsApp Cloud API falhou com HTTP",result.status);return "failed";}
+    return "submitted"; // Submission is not proof of delivery; webhook integration is separate.
+  }catch(e){console.error("WhatsApp Cloud API indisponível:",e.message);return "failed";}
+}
+
 // Assisted WhatsApp: opening a conversation never proves that a message was sent.
 function queueWhatsAppNotification(tenantId,appointmentId,status) {
   db.prepare(`INSERT OR IGNORE INTO whatsapp_notifications
@@ -1765,7 +1811,7 @@ app.post("/api/requests/:id/whatsapp-opened", requireAuth, allowRoles("dono","re
 app.get("/api/requests", requireAuth, allowRoles("dono","recepcao"), (req, res) => {
   const rows=db.prepare(`SELECT a.id, a.starts_at AS startsAt, a.status,
     c.name AS clientName, c.phone AS clientPhone, s.name AS serviceName,
-    b.business_name AS businessName, wn.opened_at AS whatsappOpenedAt,
+    b.business_name AS businessName, wn.opened_at AS whatsappOpenedAt, wn.delivery_state AS whatsappDeliveryState,
     u.name AS professionalName
     FROM appointments a JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
     JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
@@ -1777,7 +1823,7 @@ app.get("/api/requests", requireAuth, allowRoles("dono","recepcao"), (req, res) 
   res.setHeader("Cache-Control","no-store");
   res.json({ requests:rows });
 });
-app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), (req,res) => {
+app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), async(req,res) => {
   const action=String(req.body?.action ?? "");
   if (!["confirm","reject"].includes(action)) return fail(res,400,"Ação inválida.");
   const next=action==="confirm"?"confirmado":"cancelado";
@@ -1786,7 +1832,16 @@ app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), (req,
     .run(next,req.params.id,tenant(req));
   if (!changed.changes) return fail(res,409,"Solicitação não encontrada ou já analisada.");
   queueWhatsAppNotification(tenant(req),req.params.id,next);
-  res.json({ok:true,status:next,whatsappMode:"manual",message:"Status registrado. Abra o WhatsApp e envie a confirmação manualmente."});
+  let whatsappState="manual";
+  if(next==="confirmado"){
+    whatsappState=await notifyConfirmedWhatsApp(tenant(req),req.params.id);
+    db.prepare(`UPDATE whatsapp_notifications SET delivery_state=?
+      WHERE tenant_id=? AND appointment_id=? AND status=?`)
+      .run(whatsappState,tenant(req),req.params.id,next);
+  }
+  res.json({ok:true,status:next,whatsappState,message:whatsappState==="submitted"
+    ?"Confirmação encaminhada à Meta; entrega ainda não verificada."
+    :"Status registrado. Use o botão WhatsApp para enviar o aviso manualmente."});
 });
 
 const webDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
