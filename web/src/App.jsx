@@ -1096,7 +1096,6 @@ function TeamCommissionsPage() {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
-  const [saving, setSaving] = useState(null);
   const [adjusting, setAdjusting] = useState(null);
   const refresh = useCallback(async () => {
     try {
@@ -1105,19 +1104,10 @@ function TeamCommissionsPage() {
     } catch(reason) { setError(reason.message); }
   }, [month]);
   useEffect(() => { refresh(); }, [refresh]);
-  const registerPayment = async item => {
-    if (!window.confirm(`Confirmar pagamento da comissão de ${item.professionalName} no valor de ${money(item.earnedCents)}? Essa operação será registrada como paga.`)) return;
-    setSaving(item.id);
-    try {
-      await api(`/commissions/${item.id}/pay`, { method: "POST" });
-      await refresh();
-    } catch (reason) { setError(reason.message); }
-    finally { setSaving(null); }
-  };
   const unpaid = items.filter(item => !item.paid);
   return <>
     <PageTitle eyebrow="CONTROLE DA EQUIPE" title="Comissões da equipe"
-      description="Registre o pagamento de comissões pelos serviços concluídos; o saldo do profissional é atualizado automaticamente."/>
+      description="Consulte as comissões acumuladas. O pagamento ao profissional é confirmado somente em Fechamentos quinzenais."/>
     <div className="month-filter"><label htmlFor="commissions-month">Mês</label>
       <input id="commissions-month" className="input month-input" type="month" value={month}
         onChange={event => setMonth(event.target.value)}/></div>
@@ -1130,7 +1120,7 @@ function TeamCommissionsPage() {
     </section>
     <section className="panel management-panel">
       <div className="panel-heading"><div><h2>Comissões por serviço</h2>
-        <p className="panel-subtitle">Registrar pagamento não transfere dinheiro. Confirme apenas após pagar o profissional.</p></div></div>
+        <p className="panel-subtitle">Valores a receber pelos profissionais. A confirmação do repasse acontece exclusivamente na aba Fechamentos quinzenais.</p></div></div>
       {items.length ? <div className="management-list">{items.map(item =>
         <article className="service-row" key={item.id}>
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
@@ -1139,7 +1129,6 @@ function TeamCommissionsPage() {
           <strong>{money(item.earnedCents)}</strong>
           {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Pago</span> : <>
             <Button variant="secondary" onClick={()=>setAdjusting({...item, reason:""})}>Ajustar comissão</Button>
-            <Button disabled={saving === item.id} onClick={()=>registerPayment(item)}>{saving === item.id ? "Salvando..." : "Registrar pagamento"}</Button>
           </>}
         </article>)}</div> : <EmptyState icon={Wallet} title="Sem comissões neste mês"
           description="Conclua os atendimentos para registrar comissões."/>}
