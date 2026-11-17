@@ -176,3 +176,21 @@ No perfil de demonstração, o menu oculta as áreas de edição exclusiva de co
 ### Aba do navegador e cache
 
 A interface agora declara explicitamente o ícone `simplifica-perfil.svg` como favicon. Ao testar em `localhost:3000` (servidor de build), execute `npm run build` antes de iniciar `npm start`, ou use o Vite `http://localhost:5173` com `npm run dev`. Caso uma versão anterior do PWA ainda apareça, limpe os dados/cache da origem e remova o service worker antigo pelas ferramentas do navegador. Use uma porta/domínio distinto para outros projetos que compartilhem `localhost`.
+
+## Equipe, serviços e registro do profissional
+
+As áreas **Serviços** (`/servicos`) e **Equipe e acessos** (`/equipe`) são separadas no menu. O proprietário gerencia equipe, senhas, horários e vínculos de serviços; o acesso de recepção mantém as permissões já previstas; o profissional tem um menu próprio com **Meus atendimentos** (`/meus-atendimentos`).
+
+Na área do profissional são exibidos apenas os atendimentos atribuídos à própria conta, com filtros por mês, total realizado e valor bruto dos serviços. O profissional pode marcar um atendimento agendado ou confirmado como **concluído** após o início previsto, usando uma API específica; não pode editar preço, pagamento nem serviços de outros profissionais. O caixa continua sob gestão administrativa. O valor bruto exibido **não representa valor recebido nem comissão**.
+
+O formulário administrativo de equipe já cadastra funcionários com e-mail, senha inicial, função, comissão e serviços atribuídos. Cada profissional deve fazer login com suas próprias credenciais. A senha deve ser alterada em **Minha conta**, e o proprietário pode redefini-la em **Equipe e acessos**.
+
+A ação **Sair** ficou visível no perfil lateral e no topo da aplicação. A demonstração mantém seu bloqueio de gravações e oculta ações de edição nas telas de serviços.
+
+### Próximas etapas propostas
+
+1. **Solicitações e notificações:** central para distinguir novos pedidos públicos, confirmações, remarcações e cancelamentos, com estados bem definidos.
+2. **Histórico de execução:** observações do serviço, data real, responsável, trilha de auditoria e retificação administrativa.
+3. **Financeiro:** recebimentos parciais, estornos auditáveis, fechamento diário e relatórios por funcionário, sem atribuir falsamente pagamentos.
+4. **Operação comercial:** backup/restauração ensaiados, instalação por comércio, HTTPS, privacidade de dados e testes em dispositivos reais.
+
