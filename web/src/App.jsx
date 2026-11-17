@@ -1396,6 +1396,45 @@ function BookingSharePage({ user }) {
 }
 
 
+
+function UnreconciledCash({ user, onChange }) {
+  const [receipts, setReceipts] = useState([]);
+  const [date, setDate] = useState(localDate().slice(0, 10));
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const fetchReceipts = useCallback(() => api("/cash/unreconciled")
+    .then(result => setReceipts(result.receipts)).catch(err => setError(err.message)), []);
+  useEffect(() => { fetchReceipts(); }, [fetchReceipts]);
+  const reconcile = async receipt => {
+    if (!window.confirm(`Confirma que o pagamento de ${money(receipt.priceCents)} foi recebido em ${date}? A conciliação ficará registrada no histórico.`)) return;
+    setBusy(receipt.id); setError("");
+    try {
+      await api(`/cash/reconcile/${encodeURIComponent(receipt.id)}`, {method:"POST", body:{date}});
+      await fetchReceipts();
+      onChange();
+    } catch (err) { setError(err.message); }
+    finally { setBusy(""); }
+  };
+  if (!receipts.length) return null;
+  return <section className="panel management-panel">
+    <div className="panel-heading"><div><p className="eyebrow">CONCILIAÇÃO</p><h2>Recebimentos anteriores sem data</h2>
+      <p className="panel-subtitle">Estes pagamentos pertencem à empresa, mas ainda não possuem uma data de recebimento comprovada. Não serão duplicados.</p></div>
+      {user.role === "dono" && <input type="date" className="input" aria-label="Data real do pagamento"
+        value={date} max={localDate().slice(0, 10)} onChange={e => setDate(e.target.value)}/>}
+    </div>
+    <ErrorMessage>{error}</ErrorMessage>
+    <div className="management-list">{receipts.map(receipt => <article className="service-row" key={receipt.id}>
+      <span className="service-row-icon"><Clock3 size={18}/></span>
+      <div className="min-w-0 flex-1"><b>{receipt.clientName} · {receipt.professionalName}</b>
+        <small>Atendimento: {dateTimeLabel(receipt.startsAt)} · {paymentNames[receipt.paymentMethod] || receipt.paymentMethod}</small></div>
+      <strong>{money(receipt.priceCents)}</strong>
+      {user.role === "dono" && <Button disabled={busy === receipt.id || !date}
+        onClick={() => reconcile(receipt)}>{busy === receipt.id ? "Salvando..." : "Conciliar"}</Button>}
+    </article>)}</div>
+    {user.role === "recepcao" && <p className="panel-subtitle">Somente o administrador pode confirmar as datas históricas destes pagamentos.</p>}
+  </section>;
+}
+
 function DailyCashClosing({ revision }) {
   const [date, setDate] = useState(localDate().slice(0, 10));
   const [summary, setSummary] = useState(null);
@@ -1555,6 +1594,7 @@ function ReceivablesPage({ user }) {
           <strong>{money(item.priceCents)}</strong>
         </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
     </section>
+    <UnreconciledCash user={user} onChange={() => setCashRevision(n => n + 1)}/>
     <DailyCashClosing revision={cashRevision}/>
   </>;
 }
