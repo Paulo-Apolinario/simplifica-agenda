@@ -254,6 +254,10 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.ok(publicCatalog.body.services.some(item => item.id === "unassigned-service"));
     assert.ok(publicCatalog.body.professionals.some(item => item.id === staffId));
     assert.equal(publicCatalog.body.professionals.some(item => "serviceIds" in item), false);
+    // This legacy test uses a fixed future date beyond the normal 60-day limit.
+    // Override the policy in the fixture only, while checking normal policy rules separately.
+    db.prepare("UPDATE business_settings SET booking_max_days = 5000 WHERE tenant_id = ?")
+      .run(login.body.user.tenantId);
     const publicSlots = await request("/public/comercio-teste/slots?serviceId=unassigned-service&professionalId=" + staffId + "&date=2030-01-08");
     assert.equal(publicSlots.status, 200);
     assert.ok(publicSlots.body.slots.includes("16:30"));
