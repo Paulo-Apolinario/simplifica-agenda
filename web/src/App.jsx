@@ -161,15 +161,15 @@ function Login({ onLogin, demoEnabled = false }) {
         <form className="space-y-4" onSubmit={submit}>
           {mode === "email" && <Field label="E-mail" type="email" autoComplete="username" required value={values.email}
             onChange={(e) => setValues({ ...values, email: e.target.value })} />}
-          {mode === "staff" && <Field label="Código do profissional (ex.: 001)" inputMode="numeric" pattern="[0-9]{3}" maxLength={3} required value={values.staffCode} onChange={(e) => setValues({ ...values, staffCode: e.target.value.replace(/\D/g, "").slice(0, 3) })}/>}
+          {mode === "staff" && <Field label="Código de acesso do profissional (ex.: 001)" inputMode="numeric" pattern="[0-9]{3}" maxLength={3} required value={values.staffCode} onChange={(e) => setValues({ ...values, staffCode: e.target.value.replace(/\D/g, "").slice(0, 3) })}/>}
           <Field label={activation ? "Escolha sua senha (6 a 8 letras e números)" : "Senha"} type="password" autoComplete="current-password" required value={values.password}
             onChange={(e) => setValues({ ...values, password: e.target.value })} minLength={mode === "staff" && activation ? 6 : undefined} maxLength={mode === "staff" && activation ? 8 : undefined} />
           {mode === "staff" && activation && <>
             <Field label="Repita a senha" type="password" required minLength={6} maxLength={8} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}/>
             <Field label="Código de ativação fornecido pelo administrador" required value={activationToken} onChange={e => setActivationToken(e.target.value)}/>
           </>}
-          <Field label={mode === "staff" ? "Identificador do comércio (obrigatório)" : "Identificador do negócio (opcional)"} placeholder="Ex.: studio-bela-vista"
-            required={mode === "staff"} value={values.slug} onChange={(e) => setValues({ ...values, slug: e.target.value })} />
+          {mode === "email" && <Field label="Identificador do negócio (opcional)" placeholder="Ex.: studio-bela-vista"
+            value={values.slug} onChange={(e) => setValues({ ...values, slug: e.target.value })} />}
           <ErrorMessage>{error}</ErrorMessage>
           {success && <p className="success-message" role="status">{success}</p>}
           <Button className="w-full justify-center" type="submit" disabled={loading}>
@@ -440,6 +440,56 @@ function AppointmentCard({ appointment, onOpen, compact = false }) {
   );
 }
 
+function ReceptionDashboard({ user }) {
+  const [overview, setOverview] = useState(null);
+  const [schedule, setSchedule] = useState({ appointments: [], blockedSlots: [] });
+  const [error, setError] = useState("");
+  const today = localDate();
+  useEffect(() => {
+    Promise.all([
+      api("/overview"),
+      api(`/schedule?from=${today}T00:00:00&to=${shiftDate(today,1)}T00:00:00`),
+    ]).then(([o, s]) => { setOverview(o); setSchedule(s); setError(""); })
+      .catch(e => setError(e.message));
+  }, [today]);
+  const waiting = schedule.appointments.filter(item => item.status === "agendado");
+  const confirmed = schedule.appointments.filter(item => item.status === "confirmado");
+  return <>
+    <PageTitle eyebrow="CENTRAL DE ATENDIMENTO" title={`Bom trabalho, ${user.name.split(" ")[0]} 👋`}
+      description="Acompanhe os horários, confirme solicitações e organize o atendimento ao cliente."
+      actions={<Link className="button button-primary" to="/agenda"><CalendarDays size={16}/> Abrir agenda</Link>}/>
+    <ErrorMessage>{error}</ErrorMessage>
+    <section className="stats-grid">
+      <StatCard title="Atendimentos hoje" value={overview?.todayCount ?? "—"} icon={CalendarDays}
+        note="Agenda do estabelecimento"/>
+      <StatCard title="Aguardando confirmação" value={waiting.length} icon={Clock3}
+        tone="orange" note="Horários ainda agendados"/>
+      <StatCard title="Confirmados hoje" value={confirmed.length} icon={CheckCheck}
+        tone="green" note="Atendimentos confirmados"/>
+      <StatCard title="Bloqueios hoje" value={schedule.blockedSlots.length} icon={CalendarX2}
+        tone="purple" note="Horários indisponíveis"/>
+    </section>
+    <div className="overview-grid">
+      <section className="panel upcoming-panel">
+        <div className="panel-heading"><div><p className="eyebrow">PRIORIDADES DO DIA</p><h2>Agendamentos para conferir</h2></div>
+          <Link to="/agenda" className="text-link">Abrir agenda <ArrowRight size={14}/></Link></div>
+        {waiting.length ? <div className="appointments-list">{waiting.slice(0,6).map(item =>
+          <AppointmentCard key={item.id} appointment={item} compact onOpen={() => { window.location.href="/agenda"; }}/>)}</div> :
+          <EmptyState icon={CheckCheck} title="Nenhuma confirmação pendente hoje"
+            description="Novos horários e solicitações aparecerão aqui quando estiverem agendados."/>}
+      </section>
+      <section className="panel shortcut-panel">
+        <div className="panel-heading"><div><p className="eyebrow">ATENDIMENTO RÁPIDO</p><h2>O que você precisa fazer?</h2></div></div>
+        <div className="shortcuts">
+          <Link className="shortcut-item" to="/agenda"><span className="shortcut-icon blue"><CalendarDays size={18}/></span><span><b>Organizar agenda</b><small>Registrar, confirmar ou remarcar</small></span><ArrowRight size={15}/></Link>
+          <Link className="shortcut-item" to="/clientes"><span className="shortcut-icon green"><Users size={18}/></span><span><b>Clientes</b><small>Buscar e cadastrar clientes</small></span><ArrowRight size={15}/></Link>
+          <Link className="shortcut-item" to="/compartilhar"><span className="shortcut-icon violet"><QrCode size={18}/></span><span><b>Agendamento público</b><small>Compartilhar link com o cliente</small></span><ArrowRight size={15}/></Link>
+        </div>
+      </section>
+    </div>
+  </>;
+}
+
 function OverviewPage({ user }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -458,7 +508,7 @@ function OverviewPage({ user }) {
       {user.role === "profissional" ? <>
         <StatCard title="Atendimentos hoje" value={data?.todayCount ?? "—"} note="Na minha agenda" icon={CalendarDays} />
         <StatCard title="Serviços concluídos hoje" value={data?.completedToday ?? "—"} note="Registrados como realizados" icon={ClipboardCheck} tone="purple" />
-        <StatCard title="Saldo de comissões a receber" value={money(data?.earningsDueCents ?? 0)} note="Todos os períodos, ainda não pago" icon={Wallet} tone="green" />
+        <StatCard title="Bloqueios hoje" value={data?.blockedToday ?? 0} note="Almoço, pausas e compromissos" icon={CalendarX2} tone="green" />
         <StatCard title="Próximo atendimento" value={data?.upcoming?.[0] ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(data.upcoming[0].startsAt)) : "Livre"}
           note={data?.upcoming?.[0]?.clientName ?? "Sem próximos horários"} icon={Clock3} tone="orange"/>
       </> : <>
@@ -719,7 +769,7 @@ function AgendaPage({ user }) {
                 <b>{item.clientName}</b><span>{dateTimeLabel(item.startsAt).split(" ")[1]} · {item.serviceName}</span>
               </button>;
             })}
-            {blocks.map((block) => <div key={block.id} className="calendar-block" style={{ top: `${((new Date(block.startsAt).getHours() - 8) * 60 + new Date(block.startsAt).getMinutes()) / 60 * 64 + 4}px` }}>Bloqueado · {block.reason}</div>)}
+            {blocks.map((block) => <div key={block.id} className="calendar-block" style={{ top: `${((new Date(block.startsAt).getHours() - 8) * 60 + new Date(block.startsAt).getMinutes()) / 60 * 64 + 4}px` }}>{block.professionalName || "Equipe"} · {block.reason || "Indisponível"} · por {block.createdByName || "Não identificado"}</div>)}
           </div>;
         })}</div>
       </div>
@@ -733,7 +783,7 @@ function AgendaPage({ user }) {
           {view === "semana" && <h3>{dateLabel(day, { weekday: "long", day: "2-digit", month: "long" })}</h3>}
           {events.length ? events.map((appointment) => <AppointmentCard key={appointment.id} appointment={appointment} onOpen={setSelected} />)
             : <p className="day-empty">Nenhum atendimento neste dia.</p>}
-          {blocks.map((block) => <div className="block-row" key={block.id}><CalendarX2 size={16} /> Bloqueado · {block.reason || "Horário indisponível"}
+          {blocks.map((block) => <div className="block-row" key={block.id}><CalendarX2 size={16} /> {block.professionalName || "Equipe"} · {block.reason || "Horário indisponível"} · Bloqueado por {block.createdByName || "Não identificado"}
             <span>{dateTimeLabel(block.startsAt)} — {dateTimeLabel(block.endsAt)}</span><button className="icon-button compact" onClick={() => api(`/blocked-slots/${block.id}`, { method: "DELETE" }).then(refresh).catch(reason => setError(reason.message))} aria-label="Remover bloqueio"><X size={15} /></button></div>)}
         </div>;
       })}
@@ -834,7 +884,7 @@ function ClientsPage({ user }) {
 function ServiceForm({ service, professionals, onClose, onSaved }) {
   const [values, setValues] = useState({
     name: service?.name ?? "", durationMinutes: service?.durationMinutes ?? 60,
-    priceCents: service?.priceCents ?? 0, professionalIds: service?.professionalIds ?? [],
+    priceCents: service?.priceCents ?? 0, houseSharePercent: service?.houseSharePercent ?? 0, professionalIds: service?.professionalIds ?? [],
   });
   const [error, setError] = useState("");
   const submit = async (event) => {
@@ -855,6 +905,9 @@ function ServiceForm({ service, professionals, onClose, onSaved }) {
         <Field label="Preço (R$)" type="number" min="0" step="0.01" value={service ? (Number(values.priceCents) / 100).toFixed(2) : values.priceCents}
           onChange={(e) => setValues({ ...values, priceCents: service ? Math.round(Number(e.target.value) * 100) : e.target.value })} />
       </div>
+      <Field label="Retenção do estabelecimento para materiais (%)" type="number" min="0" max="100" step="0.5"
+        value={values.houseSharePercent} onChange={e => setValues(v => ({...v,houseSharePercent:e.target.value}))}/>
+      <p className="panel-subtitle">Ex.: comissão padrão 40% e materiais 10% → profissional recebe 30% do preço do serviço. A regra será aplicada apenas a novos agendamentos.</p>
       <div className="field"><span className="field-label">Profissionais que realizam</span><div className="choice-list">
         {professionals.map((person) => <label key={person.id} className="choice-option"><input type="checkbox" checked={values.professionalIds.includes(person.id)}
           onChange={(event) => setValues({ ...values, professionalIds: event.target.checked ? [...values.professionalIds, person.id] : values.professionalIds.filter((id) => id !== person.id) })} />{person.name}</label>)}
@@ -865,14 +918,14 @@ function ServiceForm({ service, professionals, onClose, onSaved }) {
 }
 
 function TeamMemberForm({ services, businessSlug, onClose, onSaved }) {
-  const [values, setValues] = useState({ name: "", email: "", password: "", phone: "", role: "profissional", commissionPercent: 40, serviceIds: [] });
+  const [values, setValues] = useState({ name: "", email: "", password: "", phone: "", role: "profissional", jobTitle: "", commissionPercent: 40, serviceIds: [] });
   const [error, setError] = useState("");
   const [issued, setIssued] = useState(null);
   const submit = async (event) => {
     event.preventDefault(); setError("");
     try {
       const result = await api("/team-members", { method: "POST", body: { ...values, commissionPercent: Number(values.commissionPercent) } });
-      if (result.staffCode && result.activationToken) setIssued(result);
+      if (result.loginCode && result.activationToken) setIssued(result);
       else onSaved();
     }
     catch (reason) { setError(reason.message); }
@@ -880,25 +933,28 @@ function TeamMemberForm({ services, businessSlug, onClose, onSaved }) {
   return <Modal title="Adicionar à equipe" onClose={onClose}>
     {issued ? <div className="form-stack">
       <p className="success-message">Profissional cadastrado. Copie os dados de ativação agora; o código temporário não poderá ser consultado depois.</p>
-      <Field label="Código profissional" readOnly value={issued.staffCode}/>
-      <Field label="Identificador do comércio" readOnly value={businessSlug}/><Field label="Código de ativação (válido por 24h)" readOnly value={issued.activationToken}/>
-      <Button type="button" onClick={() => navigator.clipboard.writeText(`Comércio: ${businessSlug} | Código: ${issued.staffCode} | Ativação: ${issued.activationToken}`)}>Copiar informações</Button>
+      <Field label="Código de acesso único" readOnly value={issued.loginCode}/>
+      <Field label="Código de ativação (válido por 24h)" readOnly value={issued.activationToken}/>
+      <Button type="button" onClick={() => navigator.clipboard.writeText(`Código de acesso: ${issued.loginCode} | Ativação: ${issued.activationToken}`)}>Copiar informações</Button>
       <Button type="button" variant="secondary" onClick={onSaved}>Concluir</Button>
     </div> : <form className="form-stack" onSubmit={submit}>
       <Field label="Nome" required value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
       {values.role === "recepcao" ? <>
         <Field label="E-mail de acesso" type="email" required value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} />
         <Field label="Senha inicial" type="password" minLength="12" required value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} />
-      </> : <p className="booking-share-notice"><Info size={16}/> O sistema atribuirá o próximo código (001, 002...) e permitirá que o profissional escolha sua senha com um código de ativação de uso único.</p>}
+      </> : values.role === "profissional" ? <p className="booking-share-notice"><Info size={16}/> Um código único de acesso será gerado automaticamente. O profissional escolherá a senha no primeiro acesso, sem precisar informar o estabelecimento.</p> :
+      <p className="booking-share-notice"><Info size={16}/> Cadastro administrativo sem login. Ideal para serviços gerais, apoio, copa e outras funções sem acesso ao painel.</p>}
       <SelectField label="Perfil de acesso" value={values.role} onChange={(e) => setValues({ ...values, role: e.target.value })}>
-        <option value="profissional">Profissional</option><option value="recepcao">Recepção</option>
+        <option value="profissional">Profissional de atendimento</option><option value="recepcao">Recepção</option><option value="sem_acesso">Funcionário sem acesso ao sistema</option>
       </SelectField>
+      <Field label="Cargo / função (livre)" required maxLength={80} placeholder="Ex.: Cabeleireiro, Manicure, Depiladora, Copeira" value={values.jobTitle}
+        onChange={event => setValues({ ...values, jobTitle: event.target.value })}/>
       <div className="form-grid"><Field label="Telefone / WhatsApp" type="tel" value={values.phone} onChange={(e) => setValues({ ...values, phone: e.target.value })} />
         {values.role === "profissional" && <Field label="Comissão (%)" type="number" min="0" max="100" value={values.commissionPercent} onChange={(e) => setValues({ ...values, commissionPercent: e.target.value })} />}</div>
       {values.role === "profissional" && <div className="field"><span className="field-label">Serviços realizados</span><div className="choice-list">{services.map((service) =>
         <label key={service.id} className="choice-option"><input type="checkbox" checked={values.serviceIds.includes(service.id)}
           onChange={(event) => setValues({ ...values, serviceIds: event.target.checked ? [...values.serviceIds, service.id] : values.serviceIds.filter((id) => id !== service.id) })} />{service.name}</label>)}</div></div>}
-      <ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button>Cadastrar {values.role === "recepcao" ? "pessoa da recepção" : "profissional"}</Button></div>
+      <ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button>Cadastrar funcionário</Button></div>
     </form>}
   </Modal>;
 }
@@ -958,7 +1014,7 @@ function ProfessionalEarningsPage() {
           <article className="service-row" key={item.id}>
             <span className="service-row-icon"><Wallet size={18}/></span>
             <div className="min-w-0 flex-1"><b>{item.serviceName} · {item.clientName}</b>
-              <small>{dateTimeLabel(item.startsAt)} · {item.commissionPercent}% de comissão</small></div>
+              <small>{dateTimeLabel(item.startsAt)} · {Math.max(0,item.commissionPercent - (item.houseSharePercent || 0))}% líquido de comissão</small></div>
             <strong>{money(item.earnedCents)}</strong>
             <span className={`status-badge ${item.paid ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
               {item.paid ? "Pago" : "A receber"}</span>
@@ -974,6 +1030,7 @@ function TeamCommissionsPage() {
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(null);
+  const [adjusting, setAdjusting] = useState(null);
   const refresh = useCallback(async () => {
     try {
       const result = await api(`/commissions?month=${encodeURIComponent(month)}`);
@@ -1013,11 +1070,37 @@ function TeamCommissionsPage() {
           <div className="min-w-0 flex-1"><b>{item.professionalName} · {item.serviceName}</b>
             <small>{dateTimeLabel(item.startsAt)} · {item.commissionPercent}% de comissão</small></div>
           <strong>{money(item.earnedCents)}</strong>
-          {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Pago</span> :
-            <Button disabled={saving === item.id} onClick={()=>registerPayment(item)}>{saving === item.id ? "Salvando..." : "Registrar pagamento"}</Button>}
+          {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Pago</span> : <>
+            <Button variant="secondary" onClick={()=>setAdjusting({...item, reason:""})}>Ajustar comissão</Button>
+            <Button disabled={saving === item.id} onClick={()=>registerPayment(item)}>{saving === item.id ? "Salvando..." : "Registrar pagamento"}</Button>
+          </>}
         </article>)}</div> : <EmptyState icon={Wallet} title="Sem comissões neste mês"
           description="Conclua os atendimentos para registrar comissões."/>}
     </section>
+    {adjusting && <Modal title="Ajustar comissão do serviço" onClose={()=>setAdjusting(null)}>
+      <form className="form-stack" onSubmit={async event=>{
+        event.preventDefault(); setError("");
+        try {
+          await api(`/commissions/${adjusting.id}`, {method:"PATCH",body:{
+            commissionPercent:Number(adjusting.commissionPercent),
+            houseSharePercent:Number(adjusting.houseSharePercent || 0),
+            reason:adjusting.reason,
+          }});
+          setAdjusting(null); await refresh();
+        } catch(e){setError(e.message);}
+      }}>
+        <p className="panel-subtitle">Altera somente este serviço, com registro do motivo. Pagamentos já efetuados não podem ser editados diretamente.</p>
+        <Field label="Comissão do profissional (%)" type="number" min="0" max="100" step="0.5" value={adjusting.commissionPercent}
+          onChange={e=>setAdjusting(v=>({...v,commissionPercent:e.target.value}))}/>
+        <Field label="Retenção do estabelecimento / materiais (%)" type="number" min="0" max="100" step="0.5"
+          value={adjusting.houseSharePercent ?? 0} onChange={e=>setAdjusting(v=>({...v,houseSharePercent:e.target.value}))}/>
+        <Field label="Motivo do ajuste" required minLength={5} maxLength={250}
+          value={adjusting.reason} onChange={e=>setAdjusting(v=>({...v,reason:e.target.value}))}/>
+        <p className="booking-share-notice">Comissão efetiva: {Math.max(0,Number(adjusting.commissionPercent)-Number(adjusting.houseSharePercent||0))}% do serviço.</p>
+        <ErrorMessage>{error}</ErrorMessage>
+        <div className="modal-actions"><Button type="button" variant="secondary" onClick={()=>setAdjusting(null)}>Cancelar</Button><Button>Salvar ajuste</Button></div>
+      </form>
+    </Modal>}
   </>;
 }
 
@@ -1086,6 +1169,7 @@ function ServicesPage({ user, section = "services" }) {
   const [passwordFor, setPasswordFor] = useState(null);
   const [resetPassword, setResetPassword] = useState("");
   const [activationIssued, setActivationIssued] = useState(null);
+  const [editPerson, setEditPerson] = useState(null);
   const [error, setError] = useState("");
   const refresh = useCallback(() => Promise.all([
     api("/services"),
@@ -1112,8 +1196,9 @@ function ServicesPage({ user, section = "services" }) {
       {section === "team" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe</h2></div><span className="count-chip">{team.filter((person) => person.active).length} ativos</span></div>
         {team.length ? <div className="management-list">{team.map((person) => <article className="professional-row" key={person.id}>
           <span className="table-avatar">{person.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
-          <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.role === "profissional" ? `Código ${person.staffCode || "—"} · Comissão ${person.commissionPercent}%` : `${person.email} · Recepção`}</small></div>
+          <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.jobTitle || (person.role === "recepcao" ? "Recepção" : person.role === "sem_acesso" ? "Apoio" : "Profissional")}</small><small>{person.role === "profissional" ? `Acesso ${person.loginCode || person.staffCode || "—"} · Comissão padrão ${person.commissionPercent}%` : person.role === "recepcao" ? `${person.email} · Recepção` : "Sem login"}</small></div>
           {person.active ? <span className="status-badge bg-emerald-50 text-emerald-700">Ativa</span> : <span className="status-badge bg-slate-100 text-slate-500">Inativa</span>}
+          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="button button-quiet" onClick={() => setEditPerson({...person})}>Editar</button>}
           {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && person.role === "profissional" && <button className="button button-quiet" onClick={() => setHoursFor(person)}>Horários</button>}
           {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && person.role === "profissional" && <button className="button button-quiet" onClick={async () => {
             try {
@@ -1130,13 +1215,35 @@ function ServicesPage({ user, section = "services" }) {
     </div>
     {modal === "team" && <TeamMemberForm services={services} businessSlug={user.slug} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {(modal === "service" || modal?.id) && <ServiceForm service={modal?.id ? modal : null} professionals={professionals} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
+    {editPerson && <Modal title={`Editar funcionário · ${editPerson.name}`} onClose={() => setEditPerson(null)}>
+      <form className="form-stack" onSubmit={async event => {
+        event.preventDefault(); setError("");
+        try {
+          await api(`/team-members/${editPerson.id}`, { method:"PATCH", body:{
+            name:editPerson.name, phone:editPerson.phone, jobTitle:editPerson.jobTitle,
+            commissionPercent:Number(editPerson.commissionPercent), active:Boolean(editPerson.active),
+          } });
+          setEditPerson(null); refresh();
+        } catch(e) { setError(e.message); }
+      }}>
+        <Field label="Nome" required value={editPerson.name} onChange={e=>setEditPerson(v=>({...v,name:e.target.value}))}/>
+        <Field label="Cargo ou função" maxLength={80} required value={editPerson.jobTitle || ""}
+          onChange={e=>setEditPerson(v=>({...v,jobTitle:e.target.value}))}/>
+        <Field label="Telefone" value={editPerson.phone || ""} onChange={e=>setEditPerson(v=>({...v,phone:e.target.value}))}/>
+        {editPerson.role === "profissional" && <Field label="Comissão padrão (%)" type="number" min="0" max="100" step="0.5"
+          value={editPerson.commissionPercent} onChange={e=>setEditPerson(v=>({...v,commissionPercent:e.target.value}))}/>}
+        <p className="panel-subtitle">A comissão padrão será aplicada apenas a novos agendamentos. Para corrigir um serviço já concluído, use Comissões da equipe.</p>
+        <ErrorMessage>{error}</ErrorMessage>
+        <div className="modal-actions"><Button type="button" variant="secondary" onClick={()=>setEditPerson(null)}>Cancelar</Button><Button>Salvar alterações</Button></div>
+      </form>
+    </Modal>}
     {hoursFor && <TeamHours professional={hoursFor} onClose={() => { setHoursFor(null); refresh(); }} />}
     {activationIssued && <Modal title={`Ativação de ${activationIssued.name}`} onClose={() => setActivationIssued(null)}>
       <div className="form-stack">
         <p className="booking-share-notice"><Info size={16}/> Entregue o código de ativação diretamente ao profissional. Validade de 24 horas. A senha anterior deixa de funcionar após a nova ativação; as sessões já foram encerradas.</p>
-        <Field label="Código profissional" value={activationIssued.staffCode} readOnly/>
+        <Field label="Código único de acesso" value={activationIssued.loginCode} readOnly/>
         <Field label="Código temporário de ativação" value={activationIssued.activationToken} readOnly/>
-        <Button type="button" onClick={() => navigator.clipboard.writeText(`Comércio: ${user.slug} | Código: ${activationIssued.staffCode} | Ativação: ${activationIssued.activationToken}`)}>Copiar código de ativação</Button>
+        <Button type="button" onClick={() => navigator.clipboard.writeText(`Código de acesso: ${activationIssued.loginCode} | Ativação: ${activationIssued.activationToken}`)}>Copiar código de ativação</Button>
         <Button type="button" variant="secondary" onClick={() => setActivationIssued(null)}>Fechar</Button>
       </div>
     </Modal>}
@@ -1469,7 +1576,7 @@ export default function App() {
   const logout = async () => { try { await api("/auth/logout", { method: "POST" }); } finally { setUser(null); } };
   return <Shell user={user} onLogout={logout}>
     <Routes>
-      <Route path="/" element={<OverviewPage user={user} />} />
+      <Route path="/" element={user.role === "recepcao" ? <ReceptionDashboard user={user}/> : <OverviewPage user={user} />} />
       <Route path="/agenda" element={<AgendaPage user={user} />} />
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
@@ -1482,7 +1589,7 @@ export default function App() {
       <Route path="/recebimentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
       <Route path="/configuracoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettingsPage /> : <AccessDenied />} />
       <Route path="/minha-conta" element={user.tenantId !== "tenant-salao-demo" ? <AccountPage user={user} onUserUpdated={setUser} /> : <AccessDenied />} />
-      <Route path="*" element={<OverviewPage user={user} />} />
+      <Route path="*" element={user.role === "recepcao" ? <ReceptionDashboard user={user}/> : <OverviewPage user={user} />} />
     </Routes>
   </Shell>;
 }
