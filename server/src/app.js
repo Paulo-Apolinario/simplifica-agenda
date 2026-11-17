@@ -1190,10 +1190,10 @@ app.get("/api/public/:slug/logo", (req, res) => {
 });
 
 app.get("/api/settings", requireAuth, (req, res) => {
-  const settings = db.prepare("SELECT business_name AS businessName, logo_url AS logoUrl, address, phone, whatsapp, timezone, theme,
+  const settings = db.prepare(`SELECT business_name AS businessName, logo_url AS logoUrl, address, phone, whatsapp, timezone, theme,
     booking_min_notice_minutes AS bookingMinNoticeMinutes, booking_max_days AS bookingMaxDays,
     booking_slot_interval_minutes AS bookingSlotIntervalMinutes, booking_cancellation_hours AS bookingCancellationHours,
-    booking_allow_cancellation AS bookingAllowCancellation FROM business_settings WHERE tenant_id = ?")
+    booking_allow_cancellation AS bookingAllowCancellation FROM business_settings WHERE tenant_id = ?`)
     .get(tenant(req));
   const hours = db.prepare("SELECT weekday, opens_at AS opensAt, closes_at AS closesAt FROM business_hours WHERE tenant_id = ? ORDER BY weekday")
     .all(tenant(req));
