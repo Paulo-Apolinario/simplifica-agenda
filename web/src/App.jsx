@@ -321,10 +321,7 @@ const navItems = [
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
-  { to: "/comissoes", label: "Comissões da equipe", icon: CircleDollarSign },
-  { to: "/regras-comissao", label: "Regras de comissão", icon: Settings },
-  { to: "/fechamentos", label: "Fechamentos", icon: Wallet },
-  { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
+  { to: "/recebimentos", label: "Gestão financeira", icon: Wallet },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
   { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/configuracoes", label: "Configurações do estabelecimento", icon: Settings },
@@ -353,7 +350,7 @@ function Shell({ user, onLogout, children }) {
     if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
-    if (user.role === "recepcao") return !["/financeiro", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes", "/regras-comissao", "/fechamentos"].includes(item.to);
+    if (user.role === "recepcao") return !["/financeiro", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos"].includes(item.to);
     if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
     return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
@@ -368,7 +365,9 @@ function Shell({ user, onLogout, children }) {
     window.addEventListener("simplifica:logo-updated", onLogoChange);
     return () => window.removeEventListener("simplifica:logo-updated", onLogoChange);
   }, []);
-  const pageName = visibleNavItems.find((item) => item.to === location.pathname)?.label ?? "Simplifica Agenda";
+  const pageName = location.pathname === "/recebimentos" && user.role === "recepcao"
+    ? "Caixa e recebimentos"
+    : (visibleNavItems.find((item) => item.to === location.pathname)?.label ?? "Simplifica Agenda");
   return (
     <div className="app-shell">
       {mobileOpen && <button className="sidebar-scrim" onClick={() => setMobileOpen(false)} aria-label="Fechar menu" />}
@@ -387,7 +386,7 @@ function Shell({ user, onLogout, children }) {
           {visibleNavItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} onClick={() => setMobileOpen(false)}
               className={({ isActive }) => `nav-link ${isActive ? "nav-link-active" : ""}`}>
-              <Icon size={18} strokeWidth={1.8} /><span>{label}</span>
+              <Icon size={18} strokeWidth={1.8} /><span>{to === "/recebimentos" && user.role === "recepcao" ? "Caixa e recebimentos" : label}</span>
               {to==="/solicitacoes" && pendingOnline>0 && <span className="nav-request-count" aria-label={`${pendingOnline} solicitações pendentes`}>{pendingOnline>99?"99+":pendingOnline}</span>}
             </NavLink>
           ))}
@@ -1628,6 +1627,37 @@ function DailyCashClosing({ revision, user }) {
   </section>;
 }
 
+function FinancialHubPage({ user }) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const requestedTab = new URLSearchParams(location.search).get("aba") || "caixa";
+  const available = ["caixa", "comissoes", "regras", "fechamentos"];
+  const tab = user.role === "dono" && available.includes(requestedTab) ? requestedTab : "caixa";
+  const tabs = [
+    {id:"caixa",title:"Caixa e recebimentos",icon:Wallet},
+    {id:"comissoes",title:"Comissões da equipe",icon:CircleDollarSign},
+    {id:"regras",title:"Regras de comissão",icon:Settings},
+    {id:"fechamentos",title:"Fechamentos quinzenais",icon:CalendarDays},
+  ];
+  return <>
+    {user.role === "dono" && <>
+      <PageTitle eyebrow="CENTRAL FINANCEIRA" title="Gestão financeira"
+        description="Caixa, comissões, regras e fechamentos em um único lugar." />
+      <div className="settings-tab-bar" role="tablist" aria-label="Seções da gestão financeira">
+        {tabs.map(item => <button key={item.id} type="button" role="tab"
+          aria-selected={tab === item.id} className={tab === item.id ? "active" : ""}
+          onClick={() => navigate(`/recebimentos?aba=${item.id}`)}>
+          <item.icon size={16}/> {item.title}
+        </button>)}
+      </div>
+    </>}
+    {tab === "caixa" && <ReceivablesPage user={user}/>}
+    {tab === "comissoes" && user.role === "dono" && <TeamCommissionsPage/>}
+    {tab === "regras" && user.role === "dono" && <CommissionPoliciesPage/>}
+    {tab === "fechamentos" && user.role === "dono" && <SettlementsPage/>}
+  </>;
+}
+
 function ReceivablesPage({ user }) {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [items, setItems] = useState([]);
@@ -2530,12 +2560,12 @@ export default function App() {
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage /> : <AccessDenied />} />
       <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>
-      <Route path="/comissoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <TeamCommissionsPage/> : <AccessDenied/>}/>
-      <Route path="/regras-comissao" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <CommissionPoliciesPage/> : <AccessDenied/>}/>
-      <Route path="/fechamentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettlementsPage/> : <AccessDenied/>}/>
+      <Route path="/comissoes" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=comissoes" replace/> : <AccessDenied/>}/>
+      <Route path="/regras-comissao" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=regras" replace/> : <AccessDenied/>}/>
+      <Route path="/fechamentos" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=fechamentos" replace/> : <AccessDenied/>}/>
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
-      <Route path="/recebimentos" element={["dono", "recepcao"].includes(user.role) && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
+      <Route path="/recebimentos" element={["dono", "recepcao"].includes(user.role) && user.tenantId !== "tenant-salao-demo" ? <FinancialHubPage user={user} /> : <AccessDenied />} />
       <Route path="/configuracoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettingsPage user={user} onUserUpdated={setUser} /> : <AccessDenied />} />
       <Route path="/minha-conta" element={user.tenantId === "tenant-salao-demo" ? <AccessDenied /> :
         user.role === "dono" ? <Navigate to="/configuracoes" replace /> :
