@@ -340,6 +340,16 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(fullShare.commissionMode, "custom");
     const unchangedHistorical = db.prepare("SELECT commission_percent AS commission FROM appointments WHERE id = ?").get("a-prof-test");
     assert.equal(unchangedHistorical.commission, 40);
+    const integralBooking = await request("/appointments", "POST", {
+      clientId, professionalId: staffId, serviceId,
+      startsAt: "2030-01-08T17:30:00",
+    });
+    assert.equal(integralBooking.status, 201);
+    const integralSnapshot = db.prepare(`SELECT commission_percent AS percent, house_share_percent AS housePercent
+      FROM appointments WHERE id = ?`).get(integralBooking.body.id);
+    assert.equal(integralSnapshot.percent, 100);
+    assert.equal(integralSnapshot.housePercent, 0);
+
     // Hide one service from the public link without disabling it for internal staff.
     assert.equal((await request("/services/unassigned-service", "PATCH", {
       name:"Coloração sem vínculo", durationMinutes:30, priceCents:12000,
