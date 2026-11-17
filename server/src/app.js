@@ -1071,6 +1071,7 @@ app.patch("/api/commissions/:id", requireAuth, allowRoles("dono"), (req, res) =>
       .run(createId(), tenant(req), appointment.id, req.user.id,
         appointment.commissionPercent, percentage, appointment.houseSharePercent, house, reason);
   })();
+  recordAppointmentAudit(tenant(req), appointment.id, "comissao", req.user, appointment);
   res.json({ ok: true, earnedCents: commissionCents({
     priceCents: db.prepare("SELECT price_cents FROM appointments WHERE id = ?").get(appointment.id).price_cents,
     commissionPercent: percentage, houseSharePercent: house,
@@ -1762,6 +1763,7 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
     return true;
   });
   if (!create()) return;
+  recordAppointmentAudit(business.id, id, "criacao", null);
   res.setHeader("Cache-Control", "no-store");
   res.status(201).json({ id, protocol: id.slice(0, 8).toUpperCase(), managementToken: accessToken, status: "agendado", message: "Solicitação recebida. O estabelecimento ainda precisa confirmar." });
 });
@@ -1792,6 +1794,7 @@ app.post("/api/public/manage/:token/cancel", limitAttempts("manage-cancel", 15, 
   const changed = db.prepare("UPDATE appointments SET status='cancelado' WHERE id=? AND tenant_id=? AND status IN ('agendado','confirmado')")
     .run(row.id, row.tenantId);
   if (!changed.changes) return fail(res, 409, "O atendimento foi atualizado. Recarregue a página.");
+  recordAppointmentAudit(row.tenantId, row.id, "cancelamento", {role:"cliente"});
   queueWhatsAppNotification(row.tenantId,row.id,"cancelado");
   const whatsappState=await notifyStatusWhatsApp(row.tenantId,row.id,"cancelado");
   db.prepare(`UPDATE whatsapp_notifications SET delivery_state=? WHERE tenant_id=? AND appointment_id=? AND status='cancelado'`)
@@ -1828,6 +1831,7 @@ app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedul
       .run(normalized, endsAt, row.id, row.tenantId).changes > 0;
   })();
   if (!changed) return fail(res, 409, "Horário ocupado ou solicitação alterada. Escolha outro horário.");
+  recordAppointmentAudit(row.tenantId, row.id, "remarcacao", {role:"cliente"});
   res.json({ ok:true, status:"agendado", startsAt:normalized, message:"Remarcação solicitada. Aguarde nova confirmação." });
 });
 
