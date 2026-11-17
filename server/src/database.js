@@ -125,6 +125,27 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS commission_payments_professional_idx
     ON commission_payments(tenant_id, professional_id);
+  CREATE TABLE IF NOT EXISTS support_employees (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    job_title TEXT NOT NULL,
+    phone TEXT NOT NULL DEFAULT '',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS commission_adjustments (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    appointment_id TEXT NOT NULL REFERENCES appointments(id) ON DELETE CASCADE,
+    changed_by TEXT NOT NULL REFERENCES users(id),
+    old_percent REAL NOT NULL,
+    new_percent REAL NOT NULL,
+    old_house_percent REAL NOT NULL,
+    new_house_percent REAL NOT NULL,
+    reason TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
   CREATE TABLE IF NOT EXISTS sessions (
     sid TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -141,6 +162,35 @@ const userColumns = db.prepare("PRAGMA table_info(users)").all().map(column => c
 if (!userColumns.includes("staff_code")) db.exec("ALTER TABLE users ADD COLUMN staff_code TEXT");
 if (!userColumns.includes("activation_hash")) db.exec("ALTER TABLE users ADD COLUMN activation_hash TEXT");
 if (!userColumns.includes("activation_expires_at")) db.exec("ALTER TABLE users ADD COLUMN activation_expires_at INTEGER");
+// Additive migrations: neither recreate user accounts nor rewrite paid appointments.
+function ensureColumn(table, name, declaration) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
+  if (!columns.includes(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${declaration}`);
+}
+ensureColumn("users", "job_title", "TEXT NOT NULL DEFAULT ''");
+ensureColumn("users", "login_code", "TEXT");
+ensureColumn("services", "house_share_percent", "REAL NOT NULL DEFAULT 0 CHECK (house_share_percent BETWEEN 0 AND 100)");
+ensureColumn("appointments", "house_share_percent", "REAL NOT NULL DEFAULT 0 CHECK (house_share_percent BETWEEN 0 AND 100)");
+ensureColumn("blocked_slots", "created_by_user_id", "TEXT");
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS global_staff_login_code_idx ON users(login_code) WHERE login_code IS NOT NULL");
+db.transaction(() => {
+  const members = db.prepare(`SELECT id, staff_code FROM users WHERE role = 'profissional'
+    AND login_code IS NULL ORDER BY created_at, tenant_id, id`).all();
+  const getMax = db.prepare("SELECT COALESCE(MAX(CAST(login_code AS INTEGER)), 0) AS n FROM users");
+  const assign = db.prepare("UPDATE users SET login_code = ? WHERE id = ?");
+  for (const member of members) {
+    const next = getMax.get().n + 1;
+    if (next > 999) throw new Error("Limite de 999 acessos de profissionais por instalação.");
+    assign.run(String(next).padStart(3, "0"), member.id);
+  }
+})();
+
+export function allocateLoginCode() {
+  const n = db.prepare("SELECT COALESCE(MAX(CAST(login_code AS INTEGER)), 0) AS n FROM users").get().n + 1;
+  if (n > 999) throw new Error("Limite de 999 acessos de profissionais por instalação.");
+  return String(n).padStart(3, "0");
+}
+
 db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS staff_code_by_tenant_idx
   ON users(tenant_id, staff_code) WHERE staff_code IS NOT NULL`);
 db.transaction(() => {
