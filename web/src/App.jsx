@@ -315,6 +315,7 @@ function CalendarCheckDecoration() {
 const navItems = [
   { to: "/", label: "Visão geral", icon: LayoutDashboard, end: true },
   { to: "/agenda", label: "Agenda", icon: CalendarDays },
+  { to: "/solicitacoes", label: "Solicitações online", icon: ClipboardCheck },
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços", icon: Scissors },
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
@@ -926,7 +927,7 @@ function ServiceForm({ service, professionals, onClose, onSaved }) {
   const [values, setValues] = useState({
     name: service?.name ?? "", durationMinutes: service?.durationMinutes ?? 60,
     priceCents: service?.priceCents ?? 0, houseSharePercent: service?.houseSharePercent ?? 0,
-    commissionMode: service?.commissionMode ?? "professional", serviceCommissionPercent: service?.serviceCommissionPercent ?? 0, professionalIds: service?.professionalIds ?? [],
+    commissionMode: service?.commissionMode ?? "professional", serviceCommissionPercent: service?.serviceCommissionPercent ?? 0, publicEnabled: service?.publicEnabled !== 0, professionalIds: service?.professionalIds ?? [],
   });
   const [error, setError] = useState("");
   const submit = async (event) => {
@@ -959,6 +960,8 @@ function ServiceForm({ service, professionals, onClose, onSaved }) {
       <Field label="Retenção adicional do estabelecimento (% do preço)" type="number" min="0" max="100" step="0.5"
         value={values.houseSharePercent} onChange={e => setValues(v => ({...v,houseSharePercent:e.target.value}))}/>
       <p className="panel-subtitle">Ex.: serviço com repasse de 70% e retenção de materiais de 10 pontos → profissional recebe 60% do preço. Altere a comissão deste serviço sem modificar os serviços já agendados ou pagos.</p>
+      <label className="choice-option"><input type="checkbox" checked={Boolean(values.publicEnabled)}
+        onChange={e=>setValues(v=>({...v,publicEnabled:e.target.checked}))}/> Disponível para reserva pelo link ou QR Code</label>
       <div className="field"><span className="field-label">Profissionais que realizam</span><div className="choice-list">
         {professionals.map((person) => <label key={person.id} className="choice-option"><input type="checkbox" checked={values.professionalIds.includes(person.id)}
           onChange={(event) => setValues({ ...values, professionalIds: event.target.checked ? [...values.professionalIds, person.id] : values.professionalIds.filter((id) => id !== person.id) })} />{person.name}</label>)}
@@ -1495,6 +1498,7 @@ function SettingsPage({ user, onUserUpdated }) {
   const [settings, setSettings] = useState(null);
   const [hours, setHours] = useState([]);
   const [tab, setTab] = useState("business");
+  const [booking, setBooking] = useState(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1504,6 +1508,7 @@ function SettingsPage({ user, onUserUpdated }) {
     api("/settings").then(data => {
       setSettings(data.settings);
       setHours(data.hours);
+      setBooking({ ...data.settings, bookingAllowCancellation: Boolean(data.settings.bookingAllowCancellation) });
     }).catch(reason => setError(reason.message));
   }, []);
   const updateHour = (weekday, key, value) =>
@@ -1562,6 +1567,8 @@ function SettingsPage({ user, onUserUpdated }) {
         onClick={() => { setTab("business"); setError(""); setMessage(""); }}><Settings size={16}/> Estabelecimento</button>
       <button type="button" role="tab" aria-selected={tab === "hours"} className={tab === "hours" ? "active" : ""}
         onClick={() => { setTab("hours"); setError(""); setMessage(""); }}><Clock3 size={16}/> Horários</button>
+      <button type="button" role="tab" aria-selected={tab === "booking"} className={tab === "booking" ? "active" : ""}
+        onClick={() => { setTab("booking"); setError(""); setMessage(""); }}><CalendarClock size={16}/> Agendamento online</button>
       <button type="button" role="tab" aria-selected={tab === "account"} className={tab === "account" ? "active" : ""}
         onClick={() => { setTab("account"); setError(""); setMessage(""); }}><ShieldCheck size={16}/> Minha conta</button>
     </div>
@@ -1624,6 +1631,32 @@ function SettingsPage({ user, onUserUpdated }) {
       </section>
       <div className="settings-save"><ErrorMessage>{error}</ErrorMessage>{message && <span className="success-message">{message}</span>}
         <Button disabled={saving}><Check size={16}/> {saving ? "Salvando..." : "Salvar horários"}</Button></div>
+    </form>}
+    {tab === "booking" && booking && <form className="settings-single-section" onSubmit={async e => {
+      e.preventDefault(); setSaving(true); setError(""); setMessage("");
+      try { await api("/settings/booking", {method:"PATCH",body:booking}); setMessage("Regras de agendamento atualizadas."); }
+      catch(e) { setError(e.message); } finally {setSaving(false);}
+    }}>
+      <section className="panel settings-panel"><div className="panel-heading"><div><p className="eyebrow">RESERVAS PELO LINK OU QR CODE</p>
+        <h2>Regras do agendamento online</h2><p className="panel-subtitle">Essas regras se aplicam apenas às novas reservas públicas deste estabelecimento.</p></div></div>
+        <div className="form-stack">
+          <Field label="Antecedência mínima para reservar (minutos)" type="number" min="0" max="10080" step="15" required
+            value={booking.bookingMinNoticeMinutes} onChange={e=>setBooking(v=>({...v,bookingMinNoticeMinutes:Number(e.target.value)}))}/>
+          <Field label="Até quantos dias à frente aceitar reservas" type="number" min="1" max="365" required
+            value={booking.bookingMaxDays} onChange={e=>setBooking(v=>({...v,bookingMaxDays:Number(e.target.value)}))}/>
+          <SelectField label="Intervalos para início dos horários" value={booking.bookingSlotIntervalMinutes}
+            onChange={e=>setBooking(v=>({...v,bookingSlotIntervalMinutes:Number(e.target.value)}))}>
+            <option value={15}>15 minutos</option><option value={30}>30 minutos</option><option value={60}>60 minutos</option>
+          </SelectField>
+          <label className="choice-option"><input type="checkbox" checked={Boolean(booking.bookingAllowCancellation)}
+            onChange={e=>setBooking(v=>({...v,bookingAllowCancellation:e.target.checked}))}/> Permitir cancelamento e remarcação pelo link do cliente</label>
+          {booking.bookingAllowCancellation && <Field label="Limite para cancelar ou remarcar (horas antes)" type="number" min="0" max="168" required
+            value={booking.bookingCancellationHours} onChange={e=>setBooking(v=>({...v,bookingCancellationHours:Number(e.target.value)}))}/>}
+          <p className="panel-subtitle">Disponibilidade pública de cada serviço pode ser ligada ou desligada em Serviços. Reservas já feitas continuam registradas.</p>
+        </div>
+      </section>
+      <div className="settings-save"><ErrorMessage>{error}</ErrorMessage>{message && <span className="success-message">{message}</span>}
+        <Button disabled={saving}>{saving ? "Salvando..." : "Salvar regras"}</Button></div>
     </form>}
     {tab === "account" && <div className="settings-single-section">
       <AccountPage user={user} onUserUpdated={onUserUpdated} embedded/>
