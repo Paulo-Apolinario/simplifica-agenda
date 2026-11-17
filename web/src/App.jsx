@@ -418,7 +418,9 @@ function OverviewPage({ user }) {
   return <>
     <PageTitle eyebrow={`RESUMO DO NEGÓCIO · ${dateLabel(localDate(), { weekday: "long" }).toUpperCase()}`} title={`Olá, ${user.name.split(" ")[0]} 👋`}
       description="Aqui está um resumo do seu negócio. Tenha um ótimo dia!"
-      actions={<Button onClick={() => navigate("/agenda")}><Plus size={17} /> Novo agendamento</Button>} />
+      actions={<Button onClick={() => navigate(user.role === "profissional" ? "/meus-atendimentos" : "/agenda")}>
+        <CalendarDays size={17} /> {user.role === "profissional" ? "Meus atendimentos" : "Ver agenda"}
+      </Button>} />
     <ErrorMessage>{error}</ErrorMessage>
     <section className="stats-grid">
       <StatCard title="Atendimentos hoje" value={data?.todayCount ?? "—"} note="Na agenda de hoje" icon={CalendarDays} />
@@ -527,7 +529,7 @@ function BlockForm({ onClose, onSaved, initialDate }) {
   </Modal>;
 }
 
-function AppointmentDetails({ appointment, onClose, onUpdated }) {
+function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false }) {
   const [status, setStatus] = useState(appointment.status);
   const [method, setMethod] = useState(appointment.paymentMethod ?? "");
   const [price, setPrice] = useState(appointment.priceCents);
@@ -547,7 +549,8 @@ function AppointmentDetails({ appointment, onClose, onUpdated }) {
       <div><span>Serviço</span><b>{appointment.serviceName}</b></div>
       <div><span>Profissional</span><b>{appointment.professionalName}</b></div>
     </div>
-    <div className="form-stack mt-5">
+    {readOnly && <p className="booking-share-notice"><Info size={17}/> Para concluir um serviço, acesse Meus atendimentos. Alterações de valores, pagamentos e remarcações ficam com a administração.</p>}
+    {!readOnly && <div className="form-stack mt-5">
       <Field label="Remarcar para" type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
       <div className="form-grid">
         <SelectField label="Status" value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -564,7 +567,7 @@ function AppointmentDetails({ appointment, onClose, onUpdated }) {
         {whatsApp && <a href={whatsApp} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={16} /> WhatsApp</a>}
         <Button disabled={saving} onClick={() => save({ status, paymentMethod: method, priceCents: price, startsAt })}>{saving ? "Salvando..." : "Salvar alterações"}</Button>
       </div>
-    </div>
+    </div>}
   </Modal>;
 }
 
@@ -589,7 +592,7 @@ function AgendaPage({ user }) {
   const move = (offset) => setDate(shiftDate(date, offset * (view === "semana" ? 7 : 1)));
   return <>
     <PageTitle eyebrow="SUA ROTINA EM UM SÓ LUGAR" title="Agenda" description={dateLabel(date)}
-      actions={<>{user.role !== "profissional" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}<Button onClick={() => setModal("new")}><Plus size={17} /> Novo agendamento</Button></>} />
+      actions={<>{user.role !== "profissional" && user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.role !== "profissional" && user.tenantId !== "tenant-salao-demo" && <Button onClick={() => setModal("new")}><Plus size={17} /> Novo agendamento</Button>}</>} />
     <div className="agenda-toolbar">
       <div className="date-nav"><button className="icon-button" onClick={() => move(-1)} aria-label="Anterior"><ChevronLeft size={18} /></button>
         <button className="date-today" onClick={() => setDate(localDate())}>Hoje</button><button className="icon-button" onClick={() => move(1)} aria-label="Próximo"><ChevronRight size={18} /></button></div>
@@ -637,7 +640,7 @@ function AgendaPage({ user }) {
     </div>
     {modal === "new" && <AppointmentForm initialDate={date} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {modal === "block" && <BlockForm initialDate={date} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
-    {selected && <AppointmentDetails appointment={selected} onClose={() => setSelected(null)} onUpdated={() => { setSelected(null); refresh(); }} />}
+    {selected && <AppointmentDetails appointment={selected} readOnly={user.role === "profissional" || user.tenantId === "tenant-salao-demo"} onClose={() => setSelected(null)} onUpdated={() => { setSelected(null); refresh(); }} />}
   </>;
 }
 
