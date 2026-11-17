@@ -1590,7 +1590,7 @@ function ReceivablesPage({ user }) {
         <article className="service-row" key={item.id}>
           <span className="service-row-icon"><Check size={18}/></span>
           <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
-            <small>{dateTimeLabel(item.startsAt)} · {paymentNames[item.paymentMethod] || item.paymentMethod}</small></div>
+            <small>Atendimento: {dateTimeLabel(item.startsAt)} · Recebido em: {item.paidOn ? item.paidOn.split("-").reverse().join("/") : "data a conciliar"} · {paymentNames[item.paymentMethod] || item.paymentMethod}</small></div>
           <strong>{money(item.priceCents)}</strong>
         </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
     </section>
@@ -1612,13 +1612,13 @@ function AppointmentAuditReport({ month }) {
     return () => { alive = false; };
   }, [month, action]);
   const labels = { criacao: "Criado", confirmacao: "Confirmado", cancelamento: "Cancelado",
-    remarcacao: "Remarcado", conclusao: "Concluído", pagamento: "Pagamento", status: "Status alterado",
+    remarcacao: "Remarcado", conclusao: "Concluído", pagamento: "Pagamento", conciliacao: "Data do pagamento conciliada", status: "Status alterado",
     edicao: "Editado", comissao: "Comissão ajustada" };
   const detail = event => {
     const before = event.before || {}, after = event.after || {};
     const changes = [
       ["Status", "status"], ["Horário", "startsAt"], ["Valor", "priceCents"],
-      ["Pagamento", "paymentMethod"], ["Comissão (%)", "commissionPercent"], ["Taxa estabelecimento (%)", "houseSharePercent"]
+      ["Pagamento", "paymentMethod"], ["Recebido em", "paidOn"], ["Concluído em", "completedOn"], ["Comissão (%)", "commissionPercent"], ["Taxa estabelecimento (%)", "houseSharePercent"]
     ].filter(([, key]) => after[key] !== undefined && before[key] !== after[key])
       .map(([label, key]) => `${label}: ${before[key] === undefined ? "—" : before[key]} → ${after[key]}`);
     return changes.join(" · ") || "Ação registrada";
