@@ -1321,7 +1321,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   });
   if (!update()) return;
   const updated = auditSnapshot(tenant(req), appointment.id);
-  if (JSON.stringify(updated) !== JSON.stringify(auditSnapshotFromOriginal(appointment))) {
+  if (JSON.stringify(updated) !== JSON.stringify(auditSnapshotFromOriginal(appointment)) || (req.body?.notes !== undefined && String(req.body.notes) !== appointment.notes)) {
     recordAppointmentAudit(tenant(req), appointment.id, appointment.startsAt !== updated.startsAt ? "remarcacao" : appointment.status !== updated.status ? "status" : appointment.paymentMethod !== updated.paymentMethod ? "pagamento" : "edicao", req.user, appointment);
   }
   res.json({ ok: true });
