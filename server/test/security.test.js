@@ -246,6 +246,30 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(booked.priceCents, 12000);
     assert.equal(booked.houseSharePercent, 10);
     assert.equal(booked.professionalId, staffId);
+    // A client's public link lists only the chosen commerce's active staff,
+    // including professionals without service assignments.
+    const publicCatalog = await request("/public/comercio-teste");
+    assert.equal(publicCatalog.status, 200);
+    assert.equal(publicCatalog.body.business.slug, "comercio-teste");
+    assert.ok(publicCatalog.body.services.some(item => item.id === "unassigned-service"));
+    assert.ok(publicCatalog.body.professionals.some(item => item.id === staffId));
+    assert.equal(publicCatalog.body.professionals.some(item => "serviceIds" in item), false);
+    const publicSlots = await request("/public/comercio-teste/slots?serviceId=unassigned-service&professionalId=" + staffId + "&date=2030-01-08");
+    assert.equal(publicSlots.status, 200);
+    assert.ok(publicSlots.body.slots.includes("16:30"));
+    const publicBooking = await request("/public/comercio-teste/appointments", "POST", {
+      name: "Cliente do QR", phone: "85977776666",
+      serviceId: "unassigned-service", professionalId: staffId, startsAt: "2030-01-08T16:30:00",
+    });
+    assert.equal(publicBooking.status, 201);
+    const savedPublic = db.prepare("SELECT tenant_id AS tenantId, professional_id AS professionalId FROM appointments WHERE id = ?").get(publicBooking.body.id);
+    assert.equal(savedPublic.tenantId, login.body.user.tenantId);
+    assert.equal(savedPublic.professionalId, staffId);
+    assert.equal((await request("/public/comercio-teste/appointments", "POST", {
+      name: "Outro cliente", phone: "85977776665",
+      serviceId: "unassigned-service", professionalId: staffId, startsAt: "2030-01-08T16:30:00",
+    })).status, 409);
+
 
     const anonymous = db.prepare("SELECT c.name FROM appointments a JOIN clients c ON c.id = a.client_id WHERE a.id = ?")
       .get(anonymousAppointment.body.id);
