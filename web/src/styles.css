@@ -615,3 +615,6 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
  .public-page .button, .public-footer { display: none!important; }
  .public-page .public-booking-card { box-shadow: none; border: 0; width: 100%; margin: 0; padding: 0; }
 }
+
+.nav-request-count { display: inline-grid; min-width: 23px; height: 22px; place-items: center; padding: 0 5px;
+ margin-left: auto; border-radius: 12px; font-size: 11px; color: #1d4ed8; font-weight: 700; background: #dbeafe; }
