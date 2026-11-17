@@ -1462,7 +1462,7 @@ function DailyCashClosing({ revision }) {
   }, [date, updated, revision]);
   const parseCash = (value) => {
     const text = String(value).trim().replace(",", ".");
-    if (!/^\\d+(?:\\.\\d{1,2})?$/.test(text)) return null;
+    if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null;
     const cents = Math.round(Number(text) * 100);
     return Number.isSafeInteger(cents) ? cents : null;
   };
