@@ -224,6 +224,59 @@ function InstallationSetup({ onReady }) {
   );
 }
 
+function AccountPage({ user, onUserUpdated }) {
+  const [values, setValues] = useState({ name: user.name, phone: user.phone || "", currentPassword: "", newPassword: "", confirmPassword: "" });
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const submit = async (event) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    if (values.newPassword !== values.confirmPassword) {
+      setError("As novas senhas não coincidem.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const { user: updated } = await api("/account", { method: "PATCH", body: {
+        name: values.name, phone: values.phone,
+        currentPassword: values.currentPassword, newPassword: values.newPassword,
+      } });
+      onUserUpdated(updated);
+      setValues({ ...values, currentPassword: "", newPassword: "", confirmPassword: "" });
+      setMessage("Sua conta foi atualizada. Outras sessões foram encerradas se a senha mudou.");
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+  return <>
+    <PageTitle eyebrow="SEGURANÇA E PERFIL" title="Minha conta"
+      description="Atualize seus dados de acesso e proteja sua conta." />
+    <section className="panel management-panel" style={{ maxWidth: 620 }}>
+      <div className="panel-heading"><div><h2>Dados e segurança</h2><p className="panel-subtitle">Perfil: {user.role === "dono" ? "Proprietário" : user.role === "recepcao" ? "Recepção" : "Profissional"}</p></div></div>
+      <form className="form-stack" onSubmit={submit} style={{ padding: 24 }}>
+        <Field label="Nome" required maxLength={120} value={values.name}
+          onChange={(e) => setValues({ ...values, name: e.target.value })}/>
+        <Field label="E-mail de acesso" type="email" disabled value={user.email}/>
+        <Field label="Telefone" type="tel" maxLength={40} value={values.phone}
+          onChange={(e) => setValues({ ...values, phone: e.target.value })}/>
+        <Field label="Senha atual (necessária para salvar)" type="password" required autoComplete="current-password"
+          value={values.currentPassword} onChange={(e) => setValues({ ...values, currentPassword: e.target.value })}/>
+        <Field label="Nova senha (opcional, mínimo 12 caracteres)" type="password" minLength={12} autoComplete="new-password"
+          value={values.newPassword} onChange={(e) => setValues({ ...values, newPassword: e.target.value })}/>
+        <Field label="Confirmar nova senha" type="password" autoComplete="new-password"
+          value={values.confirmPassword} onChange={(e) => setValues({ ...values, confirmPassword: e.target.value })}/>
+        <ErrorMessage>{error}</ErrorMessage>
+        {message && <p className="success-message" role="status">{message}</p>}
+        <Button disabled={saving}>{saving ? "Salvando..." : "Salvar minha conta"}</Button>
+      </form>
+    </section>
+  </>;
+}
+
 function CalendarCheckDecoration() {
   return <span className="deco-calendar"><CalendarDays size={23} /><Check size={12} /></span>;
 }
@@ -235,6 +288,7 @@ const navItems = [
   { to: "/servicos", label: "Serviços e equipe", icon: Scissors },
   { to: "/financeiro", label: "Financeiro e relatórios", icon: Wallet },
   { to: "/configuracoes", label: "Configurações", icon: Settings },
+  { to: "/minha-conta", label: "Minha conta", icon: ShieldCheck },
 ];
 
 function Shell({ user, onLogout, children }) {
@@ -678,7 +732,7 @@ function TeamMemberForm({ services, onClose, onSaved }) {
     <form className="form-stack" onSubmit={submit}>
       <Field label="Nome" required value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
       <Field label="E-mail de acesso" type="email" required value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} />
-      <Field label="Senha inicial" type="password" minLength="8" required value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} />
+      <Field label="Senha inicial" type="password" minLength="12" required value={values.password} onChange={(e) => setValues({ ...values, password: e.target.value })} />
       <SelectField label="Perfil de acesso" value={values.role} onChange={(e) => setValues({ ...values, role: e.target.value })}>
         <option value="profissional">Profissional</option><option value="recepcao">Recepção</option>
       </SelectField>
@@ -724,6 +778,8 @@ function ServicesPage({ user }) {
   const [team, setTeam] = useState([]);
   const [modal, setModal] = useState("");
   const [hoursFor, setHoursFor] = useState(null);
+  const [passwordFor, setPasswordFor] = useState(null);
+  const [resetPassword, setResetPassword] = useState("");
   const [error, setError] = useState("");
   const refresh = useCallback(() => Promise.all([
     api("/services"),
@@ -749,6 +805,7 @@ function ServicesPage({ user }) {
           <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.email} · {person.role === "profissional" ? `Comissão ${person.commissionPercent}%` : "Recepção"}</small></div>
           {person.active ? <span className="status-badge bg-emerald-50 text-emerald-700">Ativa</span> : <span className="status-badge bg-slate-100 text-slate-500">Inativa</span>}
           {user.role === "dono" && person.role === "profissional" && <button className="button button-quiet" onClick={() => setHoursFor(person)}>Horários</button>}
+          {user.role === "dono" && <button className="button button-quiet" onClick={() => { setPasswordFor(person); setResetPassword(""); }}>Redefinir senha</button>}
           {user.role === "dono" && <button className="icon-button compact" onClick={async () => {
             try { await api(`/team-members/${person.id}`, { method: "PATCH", body: { name: person.name, phone: person.phone, commissionPercent: person.commissionPercent, active: !person.active } }); refresh(); }
             catch (reason) { setError(reason.message); }
@@ -758,6 +815,20 @@ function ServicesPage({ user }) {
     {modal === "team" && <TeamMemberForm services={services} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {(modal === "service" || modal?.id) && <ServiceForm service={modal?.id ? modal : null} professionals={professionals} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {hoursFor && <TeamHours professional={hoursFor} onClose={() => { setHoursFor(null); refresh(); }} />}
+    {passwordFor && <Modal title={`Redefinir senha de ${passwordFor.name}`} onClose={() => setPasswordFor(null)}>
+      <form className="form-stack" onSubmit={async (event) => {
+        event.preventDefault();
+        try {
+          await api(`/team-members/${passwordFor.id}/reset-password`, { method: "POST", body: { password: resetPassword } });
+          setPasswordFor(null); setResetPassword(""); setError("");
+        } catch (reason) { setError(reason.message); }
+      }}>
+        <p className="panel-subtitle">Ao salvar, as sessões atuais deste funcionário serão encerradas. Informe a nova senha em um canal seguro.</p>
+        <Field label="Nova senha (mínimo 12 caracteres)" type="password" minLength={12} required
+          value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} />
+        <Button>Redefinir senha</Button>
+      </form>
+    </Modal>}
   </>;
 }
 
@@ -954,6 +1025,7 @@ export default function App() {
       <Route path="/servicos" element={<ServicesPage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
       <Route path="/configuracoes" element={user.role === "dono" ? <SettingsPage /> : <AccessDenied />} />
+      <Route path="/minha-conta" element={<AccountPage user={user} onUserUpdated={setUser} />} />
       <Route path="*" element={<OverviewPage user={user} />} />
     </Routes>
   </Shell>;
