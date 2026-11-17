@@ -987,7 +987,7 @@ app.get("/api/schedule", requireAuth, (req, res) => {
   if (!validDateTime(from) || !validDateTime(to) || from >= to) return fail(res, 400, "Período da agenda inválido.");
   const appointmentFilter = req.user.role === "profissional" ? "AND a.professional_id = ?" : "";
   const appointments = appointmentRows(tenant(req),
-    `AND a.starts_at < ? AND a.ends_at > ? ${appointmentFilter}`,
+    `AND a.starts_at < ? AND a.ends_at > ? AND NOT (a.status = 'concluido' AND a.completed_on IS NOT NULL AND a.completed_on < substr(a.starts_at,1,10)) ${appointmentFilter}`,
     req.user.role === "profissional" ? [to, from, req.user.id] : [to, from]);
   const blockedSlots = db.prepare(`
     SELECT b.id, b.professional_id AS professionalId, b.starts_at AS startsAt,
@@ -1201,6 +1201,7 @@ app.get("/api/professional/my-services", requireAuth, allowRoles("profissional")
   });
 });
 app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("profissional"), (req, res) => {
+  if (!requireOpenCash(req, res)) return;
   const appointment = db.prepare(`
     SELECT id, status, starts_at AS startsAt FROM appointments
     WHERE id = ? AND tenant_id = ? AND professional_id = ?
@@ -1294,6 +1295,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   if (!statuses.includes(status)) return fail(res, 400, "Status inválido.");
   if (method && !paymentMethods.includes(method)) return fail(res, 400, "Forma de pagamento inválida.");
   if (!Number.isInteger(priceCents) || priceCents < 0) return fail(res, 400, "Valor inválido.");
+  if (((status === "concluido" && appointment.status !== "concluido") || (!appointment.paymentMethod && Boolean(method))) && !requireOpenCash(req, res)) return;
   if (appointment.paidOn && cashClosing(tenant(req), appointment.paidOn)
       && (method !== appointment.paymentMethod || priceCents !== appointment.priceCents || status !== appointment.status))
     return fail(res, 409, "Pagamento de caixa já fechado não pode ser alterado.");
@@ -1508,6 +1510,29 @@ function validCashDate(value) {
   return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
 
+
+function cashState(tenantId) {
+  const date = cashDay(tenantId);
+  if (cashClosing(tenantId, date)) return {date,state:"closed"};
+  if (cashOpening(tenantId, date)) return {date,state:"open"};
+  return {date,state:"unopened"};
+}
+function requireOpenCash(req, res) {
+  const state = cashState(tenant(req));
+  if (state.state === "open") return true;
+  fail(res, 409, state.state === "closed"
+    ? "O caixa de hoje já está fechado."
+    : "Abra o caixa em Caixa e recebimentos antes de concluir serviços ou registrar pagamentos.");
+  return false;
+}
+function cashMovements(tenantId, date) {
+  const rows = db.prepare(`SELECT id, movement_type AS type, amount_cents AS amountCents,
+    reason, created_by_name AS createdByName, created_at AS createdAt
+    FROM daily_cash_movements WHERE tenant_id=? AND cash_date=? ORDER BY created_at,id`).all(tenantId,date);
+  return {rows,
+    supplyCents: rows.filter(r=>r.type==="suprimento").reduce((s,r)=>s+r.amountCents,0),
+    withdrawalCents: rows.filter(r=>r.type==="sangria").reduce((s,r)=>s+r.amountCents,0)};
+}
 function cashOpening(tenantId, date) {
   return db.prepare(`SELECT id, cash_date AS cashDate, opening_cash_cents AS openingCashCents,
     opened_by_name AS openedByName, opened_at AS openedAt, notes
@@ -1538,6 +1563,7 @@ app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, r
 
 
 app.post("/api/receivables/:id/pay", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  if (!requireOpenCash(req, res)) return;
   const method = String(req.body?.paymentMethod ?? "");
   if (!paymentMethods.includes(method)) return fail(res, 400, "Informe a forma de pagamento.");
   const before = auditSnapshot(tenant(req), req.params.id);
@@ -1613,7 +1639,7 @@ app.post("/api/cash/openings", requireAuth, allowRoles("dono", "recepcao"), (req
   res.status(201).json({ opening: outcome });
 });
 
-app.get("/api/cash/closings/:id/pdf", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+app.get("/api/cash/closings/:id/pdf", requireAuth, allowRoles("dono"), (req, res) => {
   const closing = db.prepare(`SELECT id, cash_date AS cashDate, closed_by_name AS closedByName,
     closed_at AS closedAt, opening_cash_cents AS openingCashCents,
     expected_total_cents AS expectedTotalCents, expected_cash_cents AS expectedCashCents,
@@ -1654,7 +1680,7 @@ app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, re
     { ...closing, methods: JSON.parse(closing.methodsJson), methodsJson: undefined } : null });
 });
 
-app.get("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+app.get("/api/cash/closings", requireAuth, allowRoles("dono"), (req, res) => {
   const rows = db.prepare(`SELECT id, cash_date AS cashDate, closed_by_name AS closedByName,
     closed_at AS closedAt, expected_total_cents AS expectedTotalCents,
     expected_cash_cents AS expectedCashCents, counted_cash_cents AS countedCashCents,
