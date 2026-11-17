@@ -534,6 +534,33 @@ function AppointmentCard({ appointment, onOpen, compact = false }) {
   );
 }
 
+
+function CashStatusBanner({ user }) {
+  const [state, setState] = useState(null);
+  useEffect(() => {
+    if (!["dono", "recepcao"].includes(user.role) || user.tenantId === "tenant-salao-demo") return;
+    let active = true;
+    api("/cash/daily").then(data => {if (active) setState(data.cashState);}).catch(() => {});
+    return () => {active = false;};
+  }, [user.role, user.tenantId]);
+  if (!state || state === "open") return null;
+  return <section className="panel" role="status" style={{marginBottom:20,padding:"18px 20px",borderLeft:"4px solid #d97706"}}>
+    <div className="row items-center gap-3" style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}>
+      <div>
+        <strong>{state === "closed" ? "Caixa do dia encerrado" : "Caixa ainda não aberto"}</strong>
+        <p className="panel-subtitle" style={{marginTop:5}}>
+          {state === "closed"
+            ? "O caixa deste dia já foi fechado. Novas movimentações serão liberadas somente após a abertura do próximo dia."
+            : "Para concluir serviços e receber pagamentos, registre primeiro a abertura do caixa de hoje."}
+        </p>
+      </div>
+      <Link className="button button-primary" to="/recebimentos">
+        <Wallet size={16}/> {state === "closed" ? "Consultar caixa" : "Abrir caixa"}
+      </Link>
+    </div>
+  </section>;
+}
+
 function ReceptionDashboard({ user }) {
   const [overview, setOverview] = useState(null);
   const [schedule, setSchedule] = useState({ appointments: [], blockedSlots: [] });
@@ -553,6 +580,7 @@ function ReceptionDashboard({ user }) {
       description="Acompanhe os horários, confirme solicitações e organize o atendimento ao cliente."
       actions={<Link className="button button-primary" to="/agenda"><CalendarDays size={16}/> Abrir agenda</Link>}/>
     <ErrorMessage>{error}</ErrorMessage>
+    <CashStatusBanner user={user}/>
     <section className="stats-grid">
       <StatCard title="Atendimentos hoje" value={overview?.todayCount ?? "—"} icon={CalendarDays}
         note="Agenda do estabelecimento"/>
@@ -600,6 +628,7 @@ function OverviewPage({ user }) {
         <CalendarDays size={17} /> {user.role === "profissional" ? "Meus atendimentos" : "Ver agenda"}
       </Button>} />
     <ErrorMessage>{error}</ErrorMessage>
+    {user.role === "dono" && <CashStatusBanner user={user}/>}
     <section className="stats-grid">
       {user.role === "profissional" ? <>
         <StatCard title="Atendimentos hoje" value={data?.todayCount ?? "—"} note="Na minha agenda" icon={CalendarDays} />
