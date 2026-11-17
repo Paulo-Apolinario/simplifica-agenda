@@ -456,10 +456,16 @@ app.get("/api/overview", requireAuth, (req, res) => {
       ${req.user.role === "profissional" ? "AND a.professional_id = ?" : ""}`,
     req.user.role === "profissional" ? [localNow(tenant(req)), req.user.id] : [localNow(tenant(req))],
   ).slice(0, 6);
+  const blockedToday = req.user.role === "profissional"
+    ? db.prepare(`SELECT count(*) AS total FROM blocked_slots
+      WHERE tenant_id = ? AND professional_id = ? AND starts_at < ? AND ends_at > ?`)
+      .get(tenant(req), req.user.id, `${localNow(tenant(req)).slice(0, 10)}T23:59:59`, `${localNow(tenant(req)).slice(0, 10)}T00:00:00`).total
+    : null;
   const earnings = req.user.role === "profissional" ? professionalEarnings(tenant(req), req.user.id) : null;
   const completedToday = req.user.role === "profissional" ? db.prepare(`SELECT count(*) AS total FROM appointments WHERE tenant_id = ? AND professional_id = ? AND status = 'concluido' AND substr(starts_at, 1, 10) = ?`).get(tenant(req), req.user.id, localNow(tenant(req)).slice(0, 10)).total : null;
   res.json({
     completedToday,
+    blockedToday,
     earningsDueCents: earnings?.dueCents ?? null,
     todayCount: summary.today_count,
     activeClients: summary.active_clients,
@@ -699,7 +705,7 @@ app.post("/api/team-members", requireAuth, allowRoles("dono"), async (req, res) 
   const name = requiredText(req.body?.name, "Nome");
   const role = req.body?.role;
   if (!["profissional", "recepcao", "sem_acesso"].includes(role)) return fail(res, 400, "Perfil inválido.");
-  const jobTitle = String(req.body?.jobTitle ?? "").trim();
+  const jobTitle = String(req.body?.jobTitle ?? (role === "recepcao" ? "Recepção" : role === "profissional" ? "Profissional" : "")).trim();
   if (!jobTitle || jobTitle.length > 80) return fail(res, 400, "Informe o cargo ou função (até 80 caracteres).");
   if (role === "sem_acesso") {
     const id = createId();
