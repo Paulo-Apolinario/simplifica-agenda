@@ -569,7 +569,7 @@ app.get("/api/clients/:id/history", requireAuth, (req, res) => {
 app.get("/api/services", requireAuth, (_req, res) => {
   const services = db.prepare(`
     SELECT s.id, s.name, s.duration_minutes AS durationMinutes, s.price_cents AS priceCents, s.active,
-       s.house_share_percent AS houseSharePercent, s.commission_mode AS commissionMode, s.service_commission_percent AS serviceCommissionPercent,
+       s.house_share_percent AS houseSharePercent, s.commission_mode AS commissionMode, s.service_commission_percent AS serviceCommissionPercent, s.public_enabled AS publicEnabled,
       group_concat(u.name, ', ') AS professionalNames
     FROM services s LEFT JOIN professional_services ps ON ps.service_id = s.id
       AND ps.tenant_id = s.tenant_id
@@ -584,6 +584,7 @@ app.post("/api/services", requireAuth, allowRoles("dono"), (req, res) => {
   const durationMinutes = Number(req.body?.durationMinutes);
   const priceCents = Number(req.body?.priceCents);
   const houseSharePercent = Number(req.body?.houseSharePercent ?? 0);
+  const publicEnabled = req.body?.publicEnabled !== false;
   const commissionMode = req.body?.commissionMode ?? "professional";
   const serviceCommissionPercent = Number(req.body?.serviceCommissionPercent ?? 0);
   if (!["professional", "custom"].includes(commissionMode) || !Number.isFinite(serviceCommissionPercent) || serviceCommissionPercent < 0 || serviceCommissionPercent > 100) return fail(res, 400, "Comissão do serviço inválida.");
@@ -594,8 +595,8 @@ app.post("/api/services", requireAuth, allowRoles("dono"), (req, res) => {
     return fail(res, 400, "Informe uma duração e um preço válidos.");
   }
   const id = createId();
-  db.prepare("INSERT INTO services (id, tenant_id, name, duration_minutes, price_cents, house_share_percent, commission_mode, service_commission_percent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(id, tenant(req), name, durationMinutes, priceCents, houseSharePercent, commissionMode, serviceCommissionPercent);
+  db.prepare("INSERT INTO services (id, tenant_id, name, duration_minutes, price_cents, house_share_percent, commission_mode, service_commission_percent, public_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(id, tenant(req), name, durationMinutes, priceCents, houseSharePercent, commissionMode, serviceCommissionPercent, publicEnabled ? 1 : 0);
   const professionalIds = Array.isArray(req.body.professionalIds) ? req.body.professionalIds : [];
   const assign = db.prepare(`
     INSERT INTO professional_services (tenant_id, professional_id, service_id)
@@ -613,6 +614,7 @@ app.patch("/api/services/:id", requireAuth, allowRoles("dono"), (req, res) => {
   const duration = Number(req.body?.durationMinutes);
   const price = Number(req.body?.priceCents);
   const houseShare = Number(req.body?.houseSharePercent ?? 0);
+  const publicEnabled = req.body?.publicEnabled !== false;
   const commissionMode = req.body?.commissionMode ?? "professional";
   const serviceCommissionPercent = Number(req.body?.serviceCommissionPercent ?? 0);
   if (!["professional", "custom"].includes(commissionMode) || !Number.isFinite(serviceCommissionPercent) || serviceCommissionPercent < 0 || serviceCommissionPercent > 100) return fail(res, 400, "Comissão do serviço inválida.");
@@ -620,8 +622,8 @@ app.patch("/api/services/:id", requireAuth, allowRoles("dono"), (req, res) => {
   if (!Number.isInteger(duration) || duration < 5 || duration > 720 || !Number.isInteger(price) || price < 0) {
     return fail(res, 400, "Informe uma duração e um preço válidos.");
   }
-  db.prepare("UPDATE services SET name = ?, duration_minutes = ?, price_cents = ?, active = ?, house_share_percent = ?, commission_mode = ?, service_commission_percent = ? WHERE id = ? AND tenant_id = ?")
-    .run(name, duration, price, req.body.active === false ? 0 : 1, houseShare, commissionMode, serviceCommissionPercent, req.params.id, tenant(req));
+  db.prepare("UPDATE services SET name = ?, duration_minutes = ?, price_cents = ?, active = ?, house_share_percent = ?, commission_mode = ?, service_commission_percent = ?, public_enabled = ? WHERE id = ? AND tenant_id = ?")
+    .run(name, duration, price, req.body.active === false ? 0 : 1, houseShare, commissionMode, serviceCommissionPercent, publicEnabled ? 1 : 0, req.params.id, tenant(req));
   const ids = Array.isArray(req.body.professionalIds) ? req.body.professionalIds : null;
   if (ids) {
     const update = db.transaction(() => {
@@ -1187,11 +1189,29 @@ app.get("/api/public/:slug/logo", (req, res) => {
 });
 
 app.get("/api/settings", requireAuth, (req, res) => {
-  const settings = db.prepare("SELECT business_name AS businessName, logo_url AS logoUrl, address, phone, whatsapp, timezone, theme FROM business_settings WHERE tenant_id = ?")
+  const settings = db.prepare("SELECT business_name AS businessName, logo_url AS logoUrl, address, phone, whatsapp, timezone, theme,
+    booking_min_notice_minutes AS bookingMinNoticeMinutes, booking_max_days AS bookingMaxDays,
+    booking_slot_interval_minutes AS bookingSlotIntervalMinutes, booking_cancellation_hours AS bookingCancellationHours,
+    booking_allow_cancellation AS bookingAllowCancellation FROM business_settings WHERE tenant_id = ?")
     .get(tenant(req));
   const hours = db.prepare("SELECT weekday, opens_at AS opensAt, closes_at AS closesAt FROM business_hours WHERE tenant_id = ? ORDER BY weekday")
     .all(tenant(req));
   res.json({ settings, hours });
+});
+
+app.patch("/api/settings/booking", requireAuth, allowRoles("dono"), (req, res) => {
+  const min = Number(req.body?.bookingMinNoticeMinutes);
+  const max = Number(req.body?.bookingMaxDays);
+  const interval = Number(req.body?.bookingSlotIntervalMinutes);
+  const cancel = Number(req.body?.bookingCancellationHours);
+  if (!Number.isInteger(min) || min < 0 || min > 10080 ||
+      !Number.isInteger(max) || max < 1 || max > 365 ||
+      ![15,30,60].includes(interval) || !Number.isInteger(cancel) || cancel < 0 || cancel > 168)
+    return fail(res, 400, "Revise as regras de agendamento.");
+  db.prepare(`UPDATE business_settings SET booking_min_notice_minutes = ?, booking_max_days = ?,
+    booking_slot_interval_minutes = ?, booking_cancellation_hours = ?, booking_allow_cancellation = ?
+    WHERE tenant_id = ?`).run(min,max,interval,cancel,req.body?.bookingAllowCancellation === false ? 0 : 1,tenant(req));
+  res.json({ ok: true });
 });
 
 app.put("/api/settings", requireAuth, allowRoles("dono"), (req, res) => {
