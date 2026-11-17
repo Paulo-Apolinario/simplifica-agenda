@@ -112,11 +112,36 @@ test("commercial setup, authenticated account and staff password rotation", asyn
       .run(login.body.user.tenantId, staffId, serviceId);
     db.prepare("INSERT INTO professional_hours (tenant_id, professional_id, weekday, opens_at, closes_at) VALUES (?, ?, ?, ?, ?)")
       .run(login.body.user.tenantId, staffId, 2, "09:00", "18:00");
+    // The booking directory shows business clients with minimum information
+    // even before this professional has served them.
+    db.prepare("INSERT INTO clients (id, tenant_id, name, phone, email, notes) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("shared-client", login.body.user.tenantId, "Cliente compartilhada", "85999990000",
+        "private@example.com", "Anotação confidencial");
     const professionalLogin = await request("/auth/staff-login", "POST", {
       slug: "comercio-teste", staffCode: "001", password: profPassword,
     });
     assert.equal(professionalLogin.status, 200);
     assert.equal(professionalLogin.body.user.role, "profissional");
+    const sharedDirectory = await request("/booking/clients");
+    assert.equal(sharedDirectory.status, 200);
+    const visibleShared = sharedDirectory.body.clients.find(row => row.id === "shared-client");
+    assert.equal(visibleShared.name, "Cliente compartilhada");
+    assert.equal(visibleShared.phone, "85999990000");
+    assert.equal(Object.hasOwn(visibleShared, "notes"), false);
+    assert.equal(Object.hasOwn(visibleShared, "email"), false);
+    const privateList = await request("/clients");
+    assert.equal(privateList.body.clients.some(row => row.id === "shared-client"), false);
+    const quickClient = await request("/booking/clients", "POST", {
+      name: "Cliente via profissional", phone: "85988887777",
+    });
+    assert.equal(quickClient.status, 201);
+    assert.equal((await request("/booking/clients", "POST", {
+      name: "Duplicada", phone: "85988887777",
+    })).status, 409);
+    const otherTenant = db.prepare("SELECT tenant_id AS tenantId FROM clients WHERE id = ?")
+      .get(quickClient.body.client.id);
+    assert.equal(otherTenant.tenantId, login.body.user.tenantId);
+
     assert.equal((await request("/professional/my-services?month=2026-11")).status, 200);
     assert.equal((await request("/appointments/a-prof-test", "PATCH", {
       status: "concluido", paymentMethod: "pix", priceCents: 1,
@@ -141,6 +166,17 @@ test("commercial setup, authenticated account and staff password rotation", asyn
       professionalId: staffId, serviceId, startsAt: "2030-01-08T10:00:00", notes: "Sem cadastro de cliente",
     });
     assert.equal(anonymousAppointment.status, 201);
+    const bookedShared = await request("/appointments", "POST", {
+      clientId: "shared-client", professionalId: staffId,
+      serviceId, startsAt: "2030-01-08T14:00:00",
+    });
+    assert.equal(bookedShared.status, 201);
+    const bookedQuick = await request("/appointments", "POST", {
+      clientId: quickClient.body.client.id, professionalId: staffId,
+      serviceId, startsAt: "2030-01-08T15:00:00",
+    });
+    assert.equal(bookedQuick.status, 201);
+
     const anonymous = db.prepare("SELECT c.name FROM appointments a JOIN clients c ON c.id = a.client_id WHERE a.id = ?")
       .get(anonymousAppointment.body.id);
     assert.equal(anonymous.name, "Cliente não informado");
