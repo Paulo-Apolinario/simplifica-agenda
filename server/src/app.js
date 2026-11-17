@@ -477,7 +477,7 @@ app.get("/api/clients", requireAuth, (req, res) => {
       max(a.starts_at) FILTER (WHERE a.status = 'concluido') AS lastVisit
     FROM clients c
     LEFT JOIN appointments a ON a.client_id = c.id AND a.tenant_id = c.tenant_id
-    WHERE c.tenant_id = ? AND (? = '%%' OR c.name LIKE ? OR c.phone LIKE ?)
+    WHERE c.tenant_id = ? AND c.notes != '__internal_anonymous__' AND (? = '%%' OR c.name LIKE ? OR c.phone LIKE ?)
       AND (? != 'profissional' OR EXISTS (
         SELECT 1 FROM appointments own
         WHERE own.tenant_id = c.tenant_id AND own.client_id = c.id AND own.professional_id = ?
@@ -919,8 +919,8 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
     // Anonymous internal appointments get their own unregistered-client record.
     // Preserve the existing NOT NULL foreign key without an unsafe table rebuild.
     const resolvedClientId = client?.id ?? createId();
-    if (!client) db.prepare("INSERT INTO clients (id, tenant_id, name) VALUES (?, ?, ?)")
-      .run(resolvedClientId, tenant(req), "Cliente não informado");
+    if (!client) db.prepare("INSERT INTO clients (id, tenant_id, name, notes) VALUES (?, ?, ?, ?)")
+      .run(resolvedClientId, tenant(req), "Cliente não informado", "__internal_anonymous__");
     db.prepare(`
       INSERT INTO appointments
         (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at,
