@@ -1204,10 +1204,10 @@ app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("
   // Completion is always restricted to the assigned professional and recorded as unpaid.
   const beforeAudit = auditSnapshot(tenant(req), appointment.id);
   const result = db.prepare(`
-    UPDATE appointments SET status = 'concluido'
+    UPDATE appointments SET status = 'concluido', completed_on = ?
     WHERE id = ? AND tenant_id = ? AND professional_id = ?
     AND status IN ('agendado', 'confirmado')
-  `).run(appointment.id, tenant(req), req.user.id);
+  `).run(cashDay(tenant(req)), appointment.id, tenant(req), req.user.id);
   if (!result.changes) return fail(res, 409, "Atendimento já atualizado.");
   recordAppointmentAudit(tenant(req), appointment.id, "conclusao", req.user, beforeAudit);
   res.json({ ok: true });
@@ -1288,6 +1288,8 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   if (appointment.paidOn && cashClosing(tenant(req), appointment.paidOn)
       && (method !== appointment.paymentMethod || priceCents !== appointment.priceCents || status !== appointment.status))
     return fail(res, 409, "Pagamento de caixa já fechado não pode ser alterado.");
+  if (appointment.paymentMethod && status !== "concluido")
+    return fail(res, 409, "Não é possível retirar a conclusão de um serviço já recebido.");
   if (appointment.paymentMethod && method !== appointment.paymentMethod)
     return fail(res, 409, "O pagamento registrado não pode ser alterado diretamente.");
   if (!appointment.paymentMethod && method && status !== "concluido")
@@ -1324,11 +1326,12 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     })) return false;
     db.prepare(`
       UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?,
+        completed_on = CASE WHEN ? = 'concluido' AND status != 'concluido' THEN ? ELSE completed_on END,
         payment_method = ?, paid_on = CASE WHEN payment_method = '' AND ? != '' THEN ? ELSE paid_on END,
         paid_at = CASE WHEN payment_method = '' AND ? != '' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE paid_at END,
         price_cents = ?, notes = ?
       WHERE id = ? AND tenant_id = ?
-    `).run(startsAt, endsAt, status, method || "", method || "", cashDay(tenant(req)), method || "",
+    `).run(startsAt, endsAt, status, status, cashDay(tenant(req)), method || "", method || "", cashDay(tenant(req)), method || "",
       priceCents, req.body?.notes === undefined ? appointment.notes : String(req.body.notes),
       appointment.id, tenant(req));
     return true;
