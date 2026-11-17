@@ -2007,7 +2007,7 @@ function SettlementsPage() {
     </section>
     <section className="panel management-panel"><div className="panel-heading"><div><h2>Histórico de fechamentos</h2></div></div>
       {data.batches.length?<div className="management-list">{data.batches.map(b=>
-        <article className="service-row" key={b.id}><icon name="check-circle" inline/>
+        <article className="service-row" key={b.id}><CheckCheck size={18}/>
           <span className="min-w-0 flex-1"><b>{b.professionalName}</b><small>{b.paidAt} · protocolo {b.id.slice(0,8)}</small></span>
           <strong>{money(b.totalCents)}</strong></article>)}</div>:
         <p className="panel-subtitle">Nenhum fechamento registrado neste mês.</p>}
@@ -2015,6 +2015,113 @@ function SettlementsPage() {
   </>;
 }
 
+function SaasAdminPage() {
+  const [key,setKey]=useState("");
+  const [connected,setConnected]=useState(false);
+  const [businesses,setBusinesses]=useState([]);
+  const [values,setValues]=useState({businessName:"",slug:"",ownerName:"",ownerEmail:"",plan:"comercial"});
+  const [issued,setIssued]=useState(null);
+  const [error,setError]=useState(""),[busy,setBusy]=useState(false);
+  const call=useCallback(async(path,method="GET",body)=>{
+    const response=await fetch("/api/saas"+path,{
+      method,headers:{"X-Saas-Admin-Key":key,...(body?{"Content-Type":"application/json"}:{})},
+      ...(body?{body:JSON.stringify(body)}:{}),credentials:"same-origin",
+    });
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||"Falha na Central SaaS.");
+    return data;
+  },[key]);
+  const refresh=useCallback(async()=>{
+    const result=await call("/businesses");setBusinesses(result.businesses);setConnected(true);
+  },[call]);
+  const connect=async e=>{e.preventDefault();setError("");
+    try{await refresh();}catch(e){setError(e.message);}
+  };
+  const create=async e=>{
+    e.preventDefault();setBusy(true);setError("");
+    try{
+      const result=await call("/businesses","POST",values);
+      setIssued(result);
+      setValues({businessName:"",slug:"",ownerName:"",ownerEmail:"",plan:"comercial"});
+      await refresh();
+    }catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  const change=async(item,status)=>{
+    if(!window.confirm(`Deseja ${status==="suspended"?"suspender":"reativar"} ${item.name}?`))return;
+    setBusy(true);setError("");
+    try{await call(`/businesses/${item.id}`,"PATCH",{
+      plan:item.plan,status,notes:item.notes||"",dueDate:item.dueDate||null,
+    });await refresh();}
+    catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  return <main className="saas-admin-page">
+    <div className="saas-admin-header"><div className="public-brand"><img src="/assets/simplifica-perfil.svg" alt=""/> Simplifica <span>Admin</span></div>
+      <a className="button button-secondary" href="/">Voltar ao sistema</a></div>
+    <div className="saas-admin-content">
+      <PageTitle eyebrow="ÁREA RESTRITA DO OPERADOR" title="Central SaaS"
+        description="Cadastre clientes comerciais e administre planos e acessos. A chave não é armazenada pelo navegador."/>
+      {!connected?<form className="panel management-panel saas-admin-login" onSubmit={connect}>
+        <Field label="Chave de acesso da plataforma" type="password" required autoComplete="off" value={key}
+          onChange={e=>setKey(e.target.value)} placeholder="Chave SAAS_ADMIN_KEY do servidor"/>
+        <ErrorMessage>{error}</ErrorMessage><Button>Acessar Central SaaS</Button>
+        <p className="panel-subtitle">Configure SAAS_ADMIN_KEY no arquivo .env do servidor. Use somente em HTTPS fora do localhost.</p>
+      </form>:<>
+        <div className="saas-admin-top-actions"><Button variant="secondary" type="button" onClick={()=>{
+          setConnected(false);setKey("");setIssued(null);setBusinesses([]);
+        }}>Encerrar acesso à central</Button></div>
+        <section className="panel management-panel">
+          <div className="panel-heading"><div><h2>Cadastrar novo estabelecimento</h2>
+            <p className="panel-subtitle">O cliente receberá acesso comercial, sem interferir no ambiente de demonstração.</p></div></div>
+          <form className="form-stack" onSubmit={create}>
+            <div className="form-grid">
+              <Field label="Nome do estabelecimento" required maxLength={120} value={values.businessName}
+                onChange={e=>setValues(v=>({...v,businessName:e.target.value}))}/>
+              <Field label="Identificador do link (sem espaços)" required maxLength={80} placeholder="ex: studio-maria"
+                value={values.slug} onChange={e=>setValues(v=>({...v,slug:e.target.value.toLowerCase()}))}/>
+              <Field label="Nome do proprietário" required maxLength={120} value={values.ownerName}
+                onChange={e=>setValues(v=>({...v,ownerName:e.target.value}))}/>
+              <Field label="E-mail de login do proprietário" type="email" required value={values.ownerEmail}
+                onChange={e=>setValues(v=>({...v,ownerEmail:e.target.value}))}/>
+              <SelectField label="Plano" value={values.plan} onChange={e=>setValues(v=>({...v,plan:e.target.value}))}>
+                <option value="comercial">Comercial</option><option value="profissional">Profissional</option>
+                <option value="premium">Premium</option>
+              </SelectField>
+            </div>
+            <ErrorMessage>{error}</ErrorMessage><Button disabled={busy}>{busy?"Criando...":"Cadastrar comércio e gerar acesso"}</Button>
+          </form>
+        </section>
+        {issued&&<section className="panel management-panel saas-secret">
+          <h2>Acesso criado — entregue a senha uma única vez</h2>
+          <p className="panel-subtitle">O sistema não envia credenciais automaticamente. Copie e repasse ao proprietário por canal seguro.</p>
+          <Field label="E-mail" value={issued.business.ownerEmail} readOnly/>
+          <Field label="Senha temporária (não será exibida novamente)" value={issued.temporaryPassword} readOnly/>
+          <div className="booking-share-actions">
+            <Button variant="secondary" type="button" onClick={()=>navigator.clipboard.writeText(
+              `Comércio: ${issued.business.name}\nE-mail: ${issued.business.ownerEmail}\nSenha temporária: ${issued.temporaryPassword}\nIdentificador: ${issued.business.slug}\nAltere a senha após acessar.`
+            )}>Copiar instruções</Button>
+            <Button type="button" onClick={()=>setIssued(null)}>Entreguei com segurança</Button>
+          </div>
+        </section>}
+        <section className="panel management-panel"><div className="panel-heading"><div>
+          <h2>Estabelecimentos cadastrados</h2><p className="panel-subtitle">Status do acesso e plano de cada empresa.</p></div>
+          <span className="count-chip">{businesses.length}</span></div>
+          <div className="management-list">{businesses.map(item=>
+            <article key={item.id} className="service-row request-item">
+              <span className="service-row-icon"><ShieldCheck size={18}/></span>
+              <div className="min-w-0 flex-1"><b>{item.name}</b>
+                <small>{item.ownerName} · {item.ownerEmail}</small>
+                <small>{item.slug} · {item.plan} · {item.status==="suspended"?"Suspenso":"Ativo"}</small></div>
+              {item.slug!=="studio-bela-vista"&&
+                <Button type="button" variant="secondary" disabled={busy}
+                  onClick={()=>change(item,item.status==="suspended"?"active":"suspended")}>
+                  {item.status==="suspended"?"Reativar":"Suspender"}
+                </Button>}
+            </article>)}</div>
+        </section>
+      </>}
+    </div>
+  </main>;
+}
 function AccessDenied() {
   return <div className="panel"><EmptyState icon={ShieldCheck} title="Acesso restrito"
     description="Esta área está disponível apenas para o perfil de dono." /></div>;
@@ -2026,7 +2133,7 @@ export default function App() {
   const [installation, setInstallation] = useState(null);
   const location = useLocation();
   useEffect(() => {
-    if (location.pathname.startsWith("/agendar/") || location.pathname.startsWith("/acompanhar/")) { setLoading(false); return; }
+    if (location.pathname.startsWith("/agendar/") || location.pathname.startsWith("/acompanhar/") || location.pathname === "/central-saas") { setLoading(false); return; }
     Promise.all([
       api("/installation/status"),
       api("/auth/me").then(({ user: current }) => current).catch(() => null),
@@ -2040,6 +2147,7 @@ export default function App() {
     const token=decodeURIComponent(location.pathname.slice("/acompanhar/".length).split("/")[0]);
     return <PublicRequestPage token={token}/>;
   }
+  if (location.pathname === "/central-saas") return <SaasAdminPage />;
   if (location.pathname.startsWith("/agendar/")) {
     const slug = decodeURIComponent(location.pathname.slice("/agendar/".length).split("/")[0]);
     return <PublicBooking slug={slug} />;
