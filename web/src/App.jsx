@@ -2018,8 +2018,13 @@ function SettlementsPage() {
   return <>
     <PageTitle eyebrow="GESTÃO FINANCEIRA" title="Fechamentos e repasses"
       description="Confira os serviços concluídos e registre os valores efetivamente pagos aos profissionais."/>
-    <div className="month-filter"><label>Mês</label><input type="month" className="input month-input" value={month}
-      onChange={e=>setMonth(e.target.value)}/></div>
+    <div className="booking-queue-tools">
+      <div className="month-filter"><label>Mês</label><input type="month" className="input month-input" value={month}
+        onChange={e=>setMonth(e.target.value)}/></div>
+      <a className="button button-secondary" href={`/api/settlements/export.csv?month=${encodeURIComponent(month)}`}>
+        <Download size={16}/> Exportar relatório CSV
+      </a>
+    </div>
     <section className="stats-grid finance-stats">
       <StatCard title="Saldo pendente" value={money(due)} icon={Wallet} tone="orange" note="Ainda não registrado como pago"/>
       <StatCard title="Total de repasses" value={money(data.professionals.reduce((sum,p)=>sum+p.earnedCents,0))}
