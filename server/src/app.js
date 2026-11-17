@@ -1738,6 +1738,7 @@ app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req
   if (notes.length > 500) return fail(res, 400, "Observação deve ter até 500 caracteres.");
   const result = db.transaction(() => {
     if (cashClosing(tenant(req), date)) return null;
+    if (date === cashDay(tenant(req)) && !cashOpening(tenant(req), date)) return "unopened";
     const summary = cashDaySummary(tenant(req), date);
     const openingCashCents = cashOpening(tenant(req), date)?.openingCashCents ?? 0;
     const movements=cashMovements(tenant(req),date);
@@ -1748,7 +1749,7 @@ app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req
       (id, tenant_id, cash_date, closed_by, closed_by_name, expected_total_cents, expected_cash_cents,
        counted_cash_cents, difference_cents, method_totals_json, receipt_count, notes,
        opening_cash_cents, receipts_snapshot_json, supply_cents, withdrawal_cents, movements_snapshot_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id, tenant(req), date, req.user.id, req.user.name || "Usuário",
       summary.expectedTotalCents, summary.expectedCashCents, counted, difference,
       JSON.stringify(summary.methods), summary.receiptCount, notes, openingCashCents,
@@ -1762,6 +1763,7 @@ app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req
       movements.supplyCents,movements.withdrawalCents,JSON.stringify(movements.rows));
     return { id, date, differenceCents: difference };
   })();
+  if (result === "unopened") return fail(res, 409, "Abra o caixa antes de fechá-lo.");
   if (!result) return fail(res, 409, "Esse dia já possui um fechamento de caixa.");
   res.status(201).json({ closing: result });
 });
