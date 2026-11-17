@@ -233,7 +233,9 @@ db.exec(`
 
 ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
 ensureColumn("commission_payments", "batch_id", "TEXT");
+ensureColumn("whatsapp_notifications", "delivery_state", "TEXT NOT NULL DEFAULT 'pending'");
 ensureColumn("appointments", "management_token_hash", "TEXT");
+ensureColumn("appointments", "whatsapp_opt_in", "INTEGER NOT NULL DEFAULT 0");
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS appointment_management_token_idx ON appointments(management_token_hash) WHERE management_token_hash IS NOT NULL");
 
 db.exec("CREATE UNIQUE INDEX IF NOT EXISTS global_staff_login_code_idx ON users(login_code) WHERE login_code IS NOT NULL");
