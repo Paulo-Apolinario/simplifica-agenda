@@ -618,3 +618,20 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
 
 .nav-request-count { display: inline-grid; min-width: 23px; height: 22px; place-items: center; padding: 0 5px;
  margin-left: auto; border-radius: 12px; font-size: 11px; color: #1d4ed8; font-weight: 700; background: #dbeafe; }
+
+/* Central SaaS and financial settings: clear desktop and mobile hierarchy */
+.saas-admin-page { min-height: 100dvh; background: #f5f8fc; padding: 24px; }
+.saas-admin-header { max-width: 1200px; margin: auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0 25px; }
+.saas-admin-content { max-width: 1200px; margin: auto; display: grid; gap: 17px; }
+.saas-admin-content .management-panel { max-width: 100%; }
+.saas-admin-content .form-stack { width: 100%; }
+.saas-admin-content .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 15px; }
+.saas-admin-login { max-width: 560px!important; display: grid; gap: 14px; }
+.saas-admin-top-actions { display: flex; justify-content: flex-end; }
+.saas-secret { border: 1px solid #bad7ff!important; background: #f8fbff!important; display: grid; gap: 14px; }
+.saas-secret h2 { font-size: 17px; }
+@media(max-width:760px) {
+  .saas-admin-page { padding: 12px; }
+  .saas-admin-header { padding: 5px 0 18px; }
+  .saas-admin-content .form-grid { grid-template-columns: 1fr; }
+}

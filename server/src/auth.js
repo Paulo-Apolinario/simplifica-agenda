@@ -23,7 +23,8 @@ export function requireAuth(req, res, next) {
   const activeUser = db.prepare(`
     SELECT u.*, t.slug FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE u.id = ? AND u.tenant_id = ? AND u.active = 1
   `).get(req.session.user.id, req.session.user.tenantId);
-  if (!activeUser) {
+  const subscription = activeUser && db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(activeUser.tenant_id);
+  if (!activeUser || subscription?.status === "suspended") {
     req.session.destroy((error) => {
       if (error) return next(error);
       res.status(401).json({ error: "Sua sessão expirou. Faça login novamente." });

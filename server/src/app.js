@@ -199,6 +199,8 @@ const DEMO_TENANT_ID = "tenant-salao-demo";
 const isDemoTenant = (tenantId) => tenantId === DEMO_TENANT_ID;
 app.use("/api", (req, res, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
+  // SaaS operations use an independent operator key and never write demo tenant data.
+  if (req.path.startsWith("/saas/")) return next();
   if (req.path.startsWith("/auth/") || req.path.startsWith("/installation/")) return next();
   if (req.session?.user && isDemoTenant(req.session.user.tenantId)) {
     return fail(res, 403, "A demonstração é somente leitura. Entre com uma conta comercial para salvar alterações.");
@@ -267,6 +269,79 @@ app.post("/api/installation/setup", limitAttempts("setup", 8, 15 * 60 * 1000), a
 });
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+// SaaS operator uses an independent high-entropy key, never a tenant user session.
+// Configure SAAS_ADMIN_KEY (>= 32 characters) locally and use HTTPS for network access.
+function requireSaasAdmin(req,res,next) {
+  const configured=process.env.SAAS_ADMIN_KEY || "";
+  const provided=String(req.get("X-Saas-Admin-Key")||"");
+  if(configured.length<32)return fail(res,503,"Central SaaS não configurada no servidor.");
+  const first=Buffer.from(configured),second=Buffer.from(provided);
+  if(first.length!==second.length || !crypto.timingSafeEqual(first,second))
+    return fail(res,403,"Credencial da Central SaaS inválida.");
+  next();
+}
+app.get("/api/saas/businesses", requireSaasAdmin, (req,res)=>{
+  const businesses=db.prepare(`SELECT t.id,t.name,t.slug,t.created_at AS createdAt,
+    COALESCE(ss.plan,'comercial') AS plan,COALESCE(ss.status,'active') AS status,
+    ss.due_date AS dueDate,ss.notes,u.email AS ownerEmail,u.name AS ownerName
+    FROM tenants t LEFT JOIN tenant_subscriptions ss ON ss.tenant_id=t.id
+    LEFT JOIN users u ON u.tenant_id=t.id AND u.role='dono'
+    ORDER BY t.created_at DESC`).all();
+  res.setHeader("Cache-Control","no-store");
+  res.json({businesses});
+});
+app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",20,15*60*1000), async(req,res)=>{
+  const name=requiredText(req.body?.businessName,"Estabelecimento",120);
+  const ownerName=requiredText(req.body?.ownerName,"Proprietário",120);
+  const email=requiredText(req.body?.ownerEmail,"E-mail do proprietário",200).toLowerCase();
+  if(db.prepare("SELECT 1 FROM users WHERE lower(email)=? LIMIT 1").get(email))
+    return fail(res,409,"Este e-mail já está cadastrado em outro estabelecimento.");
+  const slug=String(req.body?.slug||"").trim().toLowerCase();
+  const plan=String(req.body?.plan||"comercial").trim();
+  if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)||slug.length>80||
+      slug==="studio-bela-vista" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||
+      !["comercial","profissional","premium"].includes(plan))
+    return fail(res,400,"Revise identificador, e-mail e plano.");
+  // Initial credential is shown once; operator must deliver it securely to the owner.
+  const password=crypto.randomBytes(18).toString("base64url");
+  const hash=await bcrypt.hash(password,12),id=createId(),userId=createId();
+  const days=[[0,null,null],[1,"09:00","18:00"],[2,"09:00","18:00"],
+    [3,"09:00","18:00"],[4,"09:00","18:00"],[5,"09:00","18:00"],[6,"09:00","13:00"]];
+  try {
+    db.transaction(()=>{
+      db.prepare("INSERT INTO tenants (id,name,slug) VALUES (?,?,?)").run(id,name,slug);
+      db.prepare("INSERT INTO business_settings (tenant_id,business_name) VALUES (?,?)").run(id,name);
+      db.prepare(`INSERT INTO users (id,tenant_id,name,email,password_hash,role)
+        VALUES (?,?,?,?,?,'dono')`).run(userId,id,ownerName,email,hash);
+      const hours=db.prepare("INSERT INTO business_hours (tenant_id,weekday,opens_at,closes_at) VALUES (?,?,?,?)");
+      days.forEach(d=>hours.run(id,...d));
+      db.prepare("INSERT INTO tenant_subscriptions (tenant_id,plan,status) VALUES (?,?,'active')").run(id,plan);
+    })();
+  } catch(err) {
+    if(err.code?.startsWith("SQLITE_CONSTRAINT"))return fail(res,409,"Identificador já utilizado.");
+    throw err;
+  }
+  res.setHeader("Cache-Control","no-store");
+  res.status(201).json({business:{id,name,slug,ownerEmail:email,plan,status:"active"},temporaryPassword:password,
+    warning:"Entregue a senha temporária de maneira privada. Ela não será exibida novamente."});
+});
+app.patch("/api/saas/businesses/:id",requireSaasAdmin,(req,res)=>{
+  const row=db.prepare("SELECT id,slug FROM tenants WHERE id=?").get(req.params.id);
+  if(!row || row.slug==="studio-bela-vista")return fail(res,404,"Estabelecimento indisponível.");
+  const plan=String(req.body?.plan||"comercial"),status=String(req.body?.status||"active");
+  const notes=String(req.body?.notes||"").trim(),dueDate=req.body?.dueDate||null;
+  if(!["comercial","profissional","premium"].includes(plan)||!["active","suspended"].includes(status)||
+     notes.length>300||(dueDate!==null && !/^\d{4}-\d{2}-\d{2}$/.test(String(dueDate))))
+    return fail(res,400,"Plano, status ou data inválidos.");
+  db.prepare(`INSERT INTO tenant_subscriptions (tenant_id,plan,status,notes,due_date)
+    VALUES (?,?,?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET plan=excluded.plan,
+    status=excluded.status,notes=excluded.notes,due_date=excluded.due_date`)
+    .run(row.id,plan,status,notes,dueDate);
+  if(status==="suspended") db.prepare("DELETE FROM sessions WHERE tenant_id=?").run(row.id);
+  res.json({ok:true});
+});
+
+
 
 const staffPasswordValid = (password) =>
   typeof password === "string" && /^(?=.*[A-Za-z])(?=.*[0-9])[A-Za-z0-9]{6,8}$/.test(password);
@@ -354,6 +429,8 @@ app.post("/api/auth/login", limitAttempts("login", 15, 15 * 60 * 1000), async (r
 
   if (candidates.length > 1) return fail(res, 400, "Informe o identificador do negócio para entrar.");
   const user = candidates[0];
+  if(user && db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(user.tenant_id)?.status==="suspended")
+    return fail(res,403,"O acesso do estabelecimento está suspenso. Contate o suporte.");
   if (!user || user.role === "profissional" || !(await bcrypt.compare(password, user.password_hash))) {
     return fail(res, 401, "E-mail ou senha incorretos.");
   }
@@ -852,6 +929,38 @@ app.patch("/api/professionals/:id", requireAuth, allowRoles("dono"), (req, res) 
   res.json({ ok: true });
 });
 
+app.get("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
+  const rules=db.prepare(`SELECT psc.professional_id AS professionalId,psc.service_id AS serviceId,
+    psc.commission_percent AS commissionPercent,psc.house_share_percent AS houseSharePercent,
+    u.name AS professionalName,s.name AS serviceName FROM professional_service_commissions psc
+    JOIN users u ON u.id=psc.professional_id AND u.tenant_id=psc.tenant_id
+    JOIN services s ON s.id=psc.service_id AND s.tenant_id=psc.tenant_id
+    WHERE psc.tenant_id=? ORDER BY u.name,s.name`).all(tenant(req));
+  res.json({rules});
+});
+app.put("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
+  const pro=String(req.body?.professionalId||""), svc=String(req.body?.serviceId||"");
+  const percent=Number(req.body?.commissionPercent),house=Number(req.body?.houseSharePercent??0);
+  if(![percent,house].every(v=>Number.isFinite(v)&&v>=0&&v<=100)||house>percent)
+    return fail(res,400,"Repasse e retenção inválidos.");
+  if(!db.prepare("SELECT 1 FROM users WHERE id=? AND tenant_id=? AND role='profissional'").get(pro,tenant(req)) ||
+     !db.prepare("SELECT 1 FROM services WHERE id=? AND tenant_id=?").get(svc,tenant(req)))
+    return fail(res,404,"Serviço ou profissional não encontrado neste estabelecimento.");
+  db.prepare(`INSERT INTO professional_service_commissions
+    (tenant_id,professional_id,service_id,commission_percent,house_share_percent) VALUES (?,?,?,?,?)
+    ON CONFLICT(tenant_id,professional_id,service_id) DO UPDATE SET
+    commission_percent=excluded.commission_percent,house_share_percent=excluded.house_share_percent`)
+    .run(tenant(req),pro,svc,percent,house);
+  res.json({ok:true});
+});
+app.delete("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
+  const changed=db.prepare(`DELETE FROM professional_service_commissions
+    WHERE tenant_id=? AND professional_id=? AND service_id=?`)
+    .run(tenant(req),req.body?.professionalId,req.body?.serviceId);
+  if(!changed.changes)return fail(res,404,"Regra não encontrada.");
+  res.json({ok:true});
+});
+
 app.get("/api/schedule", requireAuth, (req, res) => {
   const from = String(req.query.from ?? "");
   const to = String(req.query.to ?? "");
@@ -968,6 +1077,83 @@ app.post("/api/commissions/:id/pay", requireAuth, allowRoles("dono"), (req, res)
 });
 
 // Each professional can see and complete only their own work, without editing finances.
+// Period closing records commission disbursements without triggering actual bank transfers.
+app.get("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
+  const month=String(req.query.month||localNow(tenant(req)).slice(0,7));
+  if(!validMonth(month))return fail(res,400,"Mês inválido.");
+  const items=db.prepare(`SELECT a.id,a.professional_id AS professionalId,u.name AS professionalName,
+    a.price_cents AS priceCents,a.commission_percent AS commissionPercent,
+    a.house_share_percent AS houseSharePercent,a.starts_at AS startsAt,
+    cp.amount_cents AS paidCents,cp.batch_id AS batchId
+    FROM appointments a JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    LEFT JOIN commission_payments cp ON cp.appointment_id=a.id AND cp.tenant_id=a.tenant_id
+    WHERE a.tenant_id=? AND a.status='concluido' AND substr(a.starts_at,1,7)=?
+    ORDER BY u.name,a.starts_at`).all(tenant(req),month);
+  const summaries=new Map();
+  for(const item of items) {
+    const cur=summaries.get(item.professionalId)||{
+      professionalId:item.professionalId,professionalName:item.professionalName,completed:0,pendingServices:0,grossCents:0,
+      earnedCents:0,paidCents:0,dueCents:0};
+    const earned=commissionCents(item);
+    cur.completed++;cur.grossCents+=item.priceCents;cur.earnedCents+=earned;
+    cur.paidCents+=item.paidCents??0;cur.dueCents+=item.paidCents===null?earned:0;
+    if(item.paidCents===null)cur.pendingServices++;
+    summaries.set(item.professionalId,cur);
+  }
+  const batches=db.prepare(`SELECT b.id,b.period,b.total_cents AS totalCents,b.paid_at AS paidAt,
+    u.name AS professionalName FROM payout_batches b
+    JOIN users u ON u.id=b.professional_id AND u.tenant_id=b.tenant_id
+    WHERE b.tenant_id=? AND b.period=? ORDER BY b.paid_at DESC`).all(tenant(req),month);
+  res.setHeader("Cache-Control","no-store");
+  res.json({month,professionals:[...summaries.values()],batches});
+});
+app.get("/api/settlements/export.csv", requireAuth, allowRoles("dono"), (req,res)=>{
+  const month=String(req.query.month||"");
+  if(!validMonth(month))return fail(res,400,"Mês inválido.");
+  const rows=db.prepare(`SELECT a.starts_at AS startsAt,u.name AS professionalName,
+    s.name AS serviceName,a.price_cents AS priceCents,a.commission_percent AS commissionPercent,
+    a.house_share_percent AS houseSharePercent, cp.amount_cents AS paidCents,
+    cp.batch_id AS batchId,cp.paid_at AS paidAt
+    FROM appointments a JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
+    LEFT JOIN commission_payments cp ON cp.appointment_id=a.id AND cp.tenant_id=a.tenant_id
+    WHERE a.tenant_id=? AND a.status='concluido' AND substr(a.starts_at,1,7)=?
+    ORDER BY u.name,a.starts_at`).all(tenant(req),month);
+  sendCsv(res,`fechamentos-${month}.csv`,
+    ["Data","Profissional","Serviço","Preço em centavos","Comissão bruta (%)",
+     "Retenção (%)","Repasse em centavos","Pago","Lote","Registrado em"],
+    rows.map(row=>[row.startsAt,row.professionalName,row.serviceName,row.priceCents,
+      row.commissionPercent,row.houseSharePercent,commissionCents(row),
+      row.paidCents!==null?"Sim":"Não",row.batchId||"",row.paidAt||""]));
+});
+
+app.post("/api/settlements", requireAuth, allowRoles("dono"), (req,res) => {
+  const professionalId=String(req.body?.professionalId||"");
+  const month=String(req.body?.month||"");
+  if(!validMonth(month))return fail(res,400,"Mês inválido.");
+  if(!db.prepare("SELECT 1 FROM users WHERE id=? AND tenant_id=? AND role='profissional'").get(professionalId,tenant(req)))
+    return fail(res,404,"Profissional não encontrado.");
+  const complete=db.prepare(`SELECT a.id,a.price_cents AS priceCents,
+    a.commission_percent AS commissionPercent,a.house_share_percent AS houseSharePercent
+    FROM appointments a LEFT JOIN commission_payments cp ON cp.appointment_id=a.id
+    WHERE a.tenant_id=? AND a.professional_id=? AND a.status='concluido'
+      AND substr(a.starts_at,1,7)=? AND cp.appointment_id IS NULL`);
+  const batchId=createId();
+  const result=db.transaction(()=>{
+    const rows=complete.all(tenant(req),professionalId,month);
+    if(!rows.length)return null;
+    const total=rows.reduce((sum,row)=>sum+commissionCents(row),0);
+    db.prepare(`INSERT INTO payout_batches (id,tenant_id,professional_id,period,total_cents,created_by)
+      VALUES (?,?,?,?,?,?)`).run(batchId,tenant(req),professionalId,month,total,req.user.id);
+    const pay=db.prepare(`INSERT INTO commission_payments (appointment_id,tenant_id,professional_id,amount_cents,batch_id)
+      VALUES (?,?,?,?,?)`);
+    rows.forEach(row=>pay.run(row.id,tenant(req),professionalId,commissionCents(row),batchId));
+    return {id:batchId,totalCents:total,count:rows.length};
+  })();
+  if(!result)return fail(res,409,"Não existem serviços concluídos pendentes para este profissional e período.");
+  res.status(201).json({batch:result,message:"Fechamento registrado. Nenhuma transferência financeira foi efetuada."});
+});
+
 app.get("/api/professional/my-services", requireAuth, allowRoles("profissional"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
@@ -1015,9 +1201,11 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
   }
   const chosen = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END AS commission, s.house_share_percent AS houseShare
+      COALESCE(psc.commission_percent, CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END) AS commission,
+      COALESCE(psc.house_share_percent,s.house_share_percent) AS houseShare
     FROM services s
     JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
+    LEFT JOIN professional_service_commissions psc ON psc.tenant_id=s.tenant_id AND psc.service_id=s.id AND psc.professional_id=u.id
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
   `).get(tenant(req), serviceId, professionalId);
   const client = clientId ? db.prepare("SELECT id FROM clients WHERE id = ? AND tenant_id = ?").get(clientId, tenant(req)) : null;
@@ -1398,6 +1586,8 @@ app.get("/api/public/:slug", (req, res) => {
     FROM tenants t JOIN business_settings b ON b.tenant_id = t.id WHERE t.slug = ?
   `).get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
+  if(db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(business.tenantId)?.status==="suspended")
+    return fail(res,403,"Este estabelecimento está temporariamente indisponível.");
   const services = db.prepare(`
     SELECT id, name, duration_minutes AS durationMinutes, price_cents AS priceCents
     FROM services WHERE tenant_id = ? AND active = 1 AND public_enabled = 1 ORDER BY name
@@ -1468,6 +1658,8 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
   }
   const business = db.prepare("SELECT id, timezone FROM tenants JOIN business_settings ON business_settings.tenant_id = tenants.id WHERE slug = ?").get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
+  if(db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(business.id)?.status==="suspended")
+    return fail(res,403,"Este estabelecimento está temporariamente indisponível.");
   const name = requiredText(req.body?.name, "Nome", 120);
   const phone = requiredText(req.body?.phone, "Telefone", 20);
   const digits = phone.replace(/\D/g, "");
@@ -1477,8 +1669,10 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
   if (!validDateTime(startsAt) || !serviceId || !professionalId) return fail(res, 400, "Escolha serviço, profissional e horário.");
   const selected = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END AS commission, s.house_share_percent AS houseShare
+      COALESCE(psc.commission_percent, CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END) AS commission,
+      COALESCE(psc.house_share_percent,s.house_share_percent) AS houseShare
     FROM services s JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
+    LEFT JOIN professional_service_commissions psc ON psc.tenant_id=s.tenant_id AND psc.service_id=s.id AND psc.professional_id=u.id
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND s.public_enabled = 1 AND u.active = 1
   `).get(business.id, serviceId, professionalId);
   if (!selected) return fail(res, 400, "Serviço ou profissional inválido.");
@@ -1505,10 +1699,10 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
     }
     db.prepare(`
       INSERT INTO appointments
-        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent, house_share_percent, booking_source, management_token_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public', ?)
+        (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, price_cents, commission_percent, house_share_percent, booking_source, management_token_hash, whatsapp_opt_in)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'public', ?, ?)
     `).run(id, business.id, client.id, professionalId, serviceId, normalizedStart, endsAt,
-      selected.price, selected.commission, selected.houseShare, managementHash(accessToken));
+      selected.price, selected.commission, selected.houseShare, managementHash(accessToken), req.body?.whatsappOptIn === true ? 1 : 0);
     return true;
   });
   if (!create()) return;
@@ -1533,7 +1727,7 @@ app.get("/api/public/manage/:token", (req, res) => {
     whatsapp: record.whatsapp, canManage,
   } });
 });
-app.post("/api/public/manage/:token/cancel", limitAttempts("manage-cancel", 15, 15 * 60 * 1000), (req, res) => {
+app.post("/api/public/manage/:token/cancel", limitAttempts("manage-cancel", 15, 15 * 60 * 1000), async(req, res) => {
   const row = managedPublicAppointment(req.params.token);
   if (!row) return fail(res, 404, "Solicitação não encontrada.");
   if (!row.allowCancellation || !["agendado", "confirmado"].includes(row.status) ||
@@ -1542,7 +1736,11 @@ app.post("/api/public/manage/:token/cancel", limitAttempts("manage-cancel", 15, 
   const changed = db.prepare("UPDATE appointments SET status='cancelado' WHERE id=? AND tenant_id=? AND status IN ('agendado','confirmado')")
     .run(row.id, row.tenantId);
   if (!changed.changes) return fail(res, 409, "O atendimento foi atualizado. Recarregue a página.");
-  res.json({ ok:true, status:"cancelado" });
+  queueWhatsAppNotification(row.tenantId,row.id,"cancelado");
+  const whatsappState=await notifyStatusWhatsApp(row.tenantId,row.id,"cancelado");
+  db.prepare(`UPDATE whatsapp_notifications SET delivery_state=? WHERE tenant_id=? AND appointment_id=? AND status='cancelado'`)
+    .run(whatsappState,row.tenantId,row.id);
+  res.json({ ok:true, status:"cancelado", whatsappState });
 });
 app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedule", 15, 15 * 60 * 1000), (req, res) => {
   const row = managedPublicAppointment(req.params.token);
@@ -1577,20 +1775,90 @@ app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedul
   res.json({ ok:true, status:"agendado", startsAt:normalized, message:"Remarcação solicitada. Aguarde nova confirmação." });
 });
 
+// Meta WhatsApp Cloud API is opt-in and requires an approved utility template per status.
+// Configured server-side only: WHATSAPP_CLOUD_CONFIG_JSON maps business slug to credentials.
+function whatsAppCloudConfig(slug) {
+  if (!process.env.WHATSAPP_CLOUD_CONFIG_JSON) return null;
+  try {
+    const entries=JSON.parse(process.env.WHATSAPP_CLOUD_CONFIG_JSON);
+    const c=entries?.[slug];
+    if(!c?.accessToken || !c?.phoneNumberId || !c?.confirmedTemplate)return null;
+    return c;
+  } catch (e) { console.error("WhatsApp Cloud API: configuração JSON inválida"); return null; }
+}
+async function notifyStatusWhatsApp(tenantId,appointmentId,targetStatus) {
+  const row=db.prepare(`SELECT a.id,a.status,a.whatsapp_opt_in AS whatsappOptIn,
+    a.starts_at AS startsAt,t.slug,c.name AS clientName,c.phone,s.name AS serviceName,
+    u.name AS professionalName,b.business_name AS businessName
+    FROM appointments a JOIN tenants t ON t.id=a.tenant_id
+    JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
+    JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
+    JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    JOIN business_settings b ON b.tenant_id=a.tenant_id
+    WHERE a.id=? AND a.tenant_id=?`).get(appointmentId,tenantId);
+  if(!row || row.status!==targetStatus || !["confirmado","cancelado"].includes(targetStatus))return "not-applicable";
+  const config=whatsAppCloudConfig(row.slug);
+  if(!row.whatsappOptIn || !config)return row.whatsappOptIn?"not-configured":"no-consent";
+  const raw=row.phone.replace(/\D/g,"");
+  const number=raw.startsWith("55")?raw:"55"+raw;
+  if(!/^55\d{10,11}$/.test(number))return "invalid-phone";
+  const template=String(targetStatus==="confirmado"?config.confirmedTemplate:config.cancelledTemplate || "");
+  if(!/^[a-z0-9_]+$/.test(template))return "invalid-template";
+  const graphVersion=/^v\d+\.\d+$/.test(config.graphVersion||"")?config.graphVersion:"v23.0";
+  const fields=[row.clientName,row.serviceName,row.startsAt.slice(0,16).replace("T"," às "),row.businessName];
+  const payload={messaging_product:"whatsapp",to:number,type:"template",template:{
+    name:template,language:{code:config.language||"pt_BR"},components:[{
+      type:"body",parameters:fields.map(text=>({type:"text",text}))
+    }]
+  }};
+  try{
+    const result=await fetch(`https://graph.facebook.com/${graphVersion}/${encodeURIComponent(config.phoneNumberId)}/messages`,{
+      method:"POST",headers:{"Authorization":`Bearer ${config.accessToken}`,"Content-Type":"application/json"},
+      body:JSON.stringify(payload),signal:AbortSignal.timeout(8000),
+    });
+    if(!result.ok){console.error("WhatsApp Cloud API falhou com HTTP",result.status);return "failed";}
+    return "submitted"; // Submission is not proof of delivery; webhook integration is separate.
+  }catch(e){console.error("WhatsApp Cloud API indisponível:",e.message);return "failed";}
+}
+
+// Assisted WhatsApp: opening a conversation never proves that a message was sent.
+function queueWhatsAppNotification(tenantId,appointmentId,status) {
+  db.prepare(`INSERT OR IGNORE INTO whatsapp_notifications
+    (id,tenant_id,appointment_id,status) VALUES (?,?,?,?)`)
+    .run(createId(),tenantId,appointmentId,status);
+}
+app.post("/api/requests/:id/whatsapp-opened", requireAuth, allowRoles("dono","recepcao"), (req,res)=>{
+  const status=String(req.body?.status||"");
+  if(!["confirmado","cancelado","agendado"].includes(status))
+    return fail(res,400,"Notificação inválida.");
+  const record=db.prepare(`SELECT id FROM appointments
+    WHERE id=? AND tenant_id=? AND booking_source='public' AND status=?`)
+    .get(req.params.id,tenant(req),status);
+  if(!record)return fail(res,409,"Solicitação ou status não encontrado.");
+  queueWhatsAppNotification(tenant(req),record.id,status);
+  db.prepare(`UPDATE whatsapp_notifications SET opened_at=datetime('now'),opened_by=?
+    WHERE tenant_id=? AND appointment_id=? AND status=?`)
+    .run(req.user.id,tenant(req),record.id,status);
+  res.json({ok:true,message:"Conversa aberta. O envio depende da confirmação no WhatsApp."});
+});
+
 // Reception and owner handle only public requests for their own business.
 app.get("/api/requests", requireAuth, allowRoles("dono","recepcao"), (req, res) => {
   const rows=db.prepare(`SELECT a.id, a.starts_at AS startsAt, a.status,
     c.name AS clientName, c.phone AS clientPhone, s.name AS serviceName,
+    b.business_name AS businessName, wn.opened_at AS whatsappOpenedAt, wn.delivery_state AS whatsappDeliveryState,
     u.name AS professionalName
     FROM appointments a JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
     JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
     JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    JOIN business_settings b ON b.tenant_id=a.tenant_id
+    LEFT JOIN whatsapp_notifications wn ON wn.tenant_id=a.tenant_id AND wn.appointment_id=a.id AND wn.status=a.status
     WHERE a.tenant_id=? AND a.booking_source='public'
     ORDER BY CASE WHEN a.status='agendado' THEN 0 ELSE 1 END, a.starts_at DESC LIMIT 250`).all(tenant(req));
   res.setHeader("Cache-Control","no-store");
   res.json({ requests:rows });
 });
-app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), (req,res) => {
+app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), async(req,res) => {
   const action=String(req.body?.action ?? "");
   if (!["confirm","reject"].includes(action)) return fail(res,400,"Ação inválida.");
   const next=action==="confirm"?"confirmado":"cancelado";
@@ -1598,7 +1866,14 @@ app.patch("/api/requests/:id", requireAuth, allowRoles("dono","recepcao"), (req,
     WHERE id=? AND tenant_id=? AND booking_source='public' AND status='agendado'`)
     .run(next,req.params.id,tenant(req));
   if (!changed.changes) return fail(res,409,"Solicitação não encontrada ou já analisada.");
-  res.json({ok:true,status:next});
+  queueWhatsAppNotification(tenant(req),req.params.id,next);
+  const whatsappState=await notifyStatusWhatsApp(tenant(req),req.params.id,next);
+  db.prepare(`UPDATE whatsapp_notifications SET delivery_state=?
+    WHERE tenant_id=? AND appointment_id=? AND status=?`)
+    .run(whatsappState,tenant(req),req.params.id,next);
+  res.json({ok:true,status:next,whatsappState,message:whatsappState==="submitted"
+    ?"Confirmação encaminhada à Meta; entrega ainda não verificada."
+    :"Status registrado. Use o botão WhatsApp para enviar o aviso manualmente."});
 });
 
 const webDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");

@@ -322,6 +322,8 @@ const navItems = [
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
   { to: "/comissoes", label: "Comissões da equipe", icon: CircleDollarSign },
+  { to: "/regras-comissao", label: "Regras de comissão", icon: Settings },
+  { to: "/fechamentos", label: "Fechamentos", icon: Wallet },
   { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
@@ -351,8 +353,8 @@ function Shell({ user, onLogout, children }) {
     if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
-    if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes"].includes(item.to);
-    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos"].includes(item.to)) return false;
+    if (user.role === "recepcao") return !["/financeiro", "/recebimentos", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos", "/comissoes", "/regras-comissao", "/fechamentos"].includes(item.to);
+    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
     return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
   useEffect(() => {
@@ -1682,6 +1684,7 @@ function PublicBooking({ slug }) {
   const [slots, setSlots] = useState([]);
   const [time, setTime] = useState("");
   const [client, setClient] = useState({ name: "", phone: "" });
+  const [whatsappOptIn,setWhatsappOptIn] = useState(false);
   const [message, setMessage] = useState("");
   const [managementToken,setManagementToken] = useState("");
   const [error, setError] = useState("");
@@ -1717,12 +1720,13 @@ function PublicBooking({ slug }) {
     setLoading(true);
     try {
       const result = await api(`/public/${slug}/appointments`, { method: "POST", body: {
-        ...client, serviceId, professionalId, startsAt: `${date}T${time}:00`,
+        ...client, serviceId, professionalId, whatsappOptIn, startsAt: `${date}T${time}:00`,
       } });
       setMessage(result.message);
       setManagementToken(result.managementToken || "");
       setTime("");
       setClient({ name: "", phone: "" });
+      setWhatsappOptIn(false);
     } catch (reason) { setTime(""); setError(reason.message); } finally { setLoading(false); }
   };
   if (!data && !error) return <div className="public-page"><Loading /></div>;
@@ -1769,6 +1773,10 @@ function PublicBooking({ slug }) {
             <span>{service.name} com {professional.name}</span><span>{dateLabel(date)} às {time} · {money(service.priceCents)}</span></div>}
           {error && <ErrorMessage>{error}</ErrorMessage>}
           <Button className="public-submit" disabled={loading || loadingSlots || !time || !serviceId || !professionalId || !client.name.trim() || !client.phone.trim()}>{loading ? "Solicitando..." : "Solicitar agendamento"}</Button>
+          <label className="choice-option"><input type="checkbox" checked={whatsappOptIn}
+            onChange={e=>setWhatsappOptIn(e.target.checked)}/>
+            Aceito receber avisos desta reserva por WhatsApp. O agendamento funciona mesmo sem esta autorização.
+          </label>
           <p className="public-privacy"><ShieldCheck size={14} /> Seus dados são utilizados para organizar o atendimento e permitir contato do estabelecimento.</p>
         </form>}
     </section>
@@ -1781,6 +1789,7 @@ function OnlineRequestsPage() {
   const [filter,setFilter]=useState("agendado");
   const [error,setError]=useState("");
   const [busy,setBusy]=useState("");
+  const [notice,setNotice]=useState(null);
   const refresh=useCallback(()=>api("/requests")
     .then(result=>{setItems(result.requests);setError("");})
     .catch(e=>setError(e.message)),[]);
@@ -1789,13 +1798,18 @@ function OnlineRequestsPage() {
     const description=action==="confirm"?"confirmar":"recusar";
     if(!window.confirm(`Deseja ${description} a solicitação de ${item.clientName}?`))return;
     setBusy(item.id);setError("");
-    try{await api(`/requests/${item.id}`,{method:"PATCH",body:{action}});await refresh();}
+    try{
+      const result=await api(`/requests/${item.id}`,{method:"PATCH",body:{action}});
+      await refresh();
+      if(result.whatsappState!=="submitted" && item.clientPhone)
+        setNotice({...item,status:result.status});
+    }
     catch(e){setError(e.message);}finally{setBusy("");}
   };
   const visible=items.filter(item=>filter==="all" || item.status===filter);
   return <>
     <PageTitle eyebrow="CENTRAL DE AGENDAMENTOS" title="Solicitações online"
-      description="Confirme ou recuse os pedidos feitos pelo link e QR Code do seu estabelecimento." />
+      description="Confirme ou recuse pedidos e abra um aviso pronto para envio manual pelo WhatsApp. A confirmação não envia mensagens sozinha." />
     <div className="booking-queue-tools">
       <SelectField label="Situação" value={filter} onChange={e=>setFilter(e.target.value)}>
         <option value="agendado">Aguardando confirmação</option><option value="confirmado">Confirmados</option>
@@ -1819,13 +1833,39 @@ function OnlineRequestsPage() {
             <Button disabled={busy===item.id} onClick={()=>act(item,"confirm")}>Confirmar</Button>
             <Button variant="secondary" disabled={busy===item.id} onClick={()=>act(item,"reject")}>Recusar</Button>
           </>}
-          {item.clientPhone && <a className="button button-secondary" href={whatsappUrl(item.clientPhone,
-            `Olá, ${item.clientName}! Sobre seu agendamento de ${item.serviceName} em ${dateTimeLabel(item.startsAt)}.`)}
-            rel="noreferrer" target="_blank"><Phone size={16}/> WhatsApp</a>}
+          {item.clientPhone && <button type="button" className="button button-secondary" onClick={()=>{
+            const state=item.status==="confirmado"?"CONFIRMADO ✅":item.status==="cancelado"?"CANCELADO ❌":"AGUARDANDO CONFIRMAÇÃO ⏳";
+            const message=`Olá, ${item.clientName}! Aqui é ${item.businessName}. Seu agendamento de ${item.serviceName}, com ${item.professionalName}, em ${dateTimeLabel(item.startsAt)}, está: ${state}. Em caso de dúvidas, responda por aqui.`;
+            window.open(whatsappUrl(item.clientPhone,message),"_blank","noopener,noreferrer");
+            api(`/requests/${item.id}/whatsapp-opened`,{method:"POST",body:{status:item.status}})
+              .then(refresh).catch(e=>setError(e.message));
+          }}><Phone size={16}/> Abrir WhatsApp ({item.status==="confirmado"?"confirmação":item.status==="cancelado"?"cancelamento":"solicitação"})</button>}
+          {item.whatsappDeliveryState==="submitted" && <small>Enviado à API do WhatsApp — entrega ainda não verificada</small>}
+          {item.whatsappDeliveryState==="failed" && <small>Envio automático não concluído — envie manualmente</small>}
+          {item.whatsappOpenedAt && <small>Conversa aberta anteriormente — envio manual não verificado</small>}
         </article>)}</div>:
         <EmptyState icon={ClipboardCheck} title="Nenhuma solicitação nesta situação"
           description="Pedidos de clientes pelo link público aparecerão aqui." />}
     </section>
+    {notice && <Modal title="Avisar cliente pelo WhatsApp" onClose={()=>setNotice(null)}>
+      <div className="form-stack">
+        <p className="booking-share-notice"><Info size={16}/> O agendamento foi
+          {notice.status==="confirmado"?" confirmado":" recusado"} no sistema.
+          Para avisar o cliente sem API oficial configurada, é necessário enviar a mensagem no WhatsApp.</p>
+        <p className="panel-subtitle">Uma conversa aberta não significa que a mensagem foi enviada.</p>
+        <div className="modal-actions">
+          <Button variant="secondary" onClick={()=>setNotice(null)}>Avisar depois</Button>
+          <Button onClick={()=>{
+            const state=notice.status==="confirmado"?"CONFIRMADO ✅":"CANCELADO ❌";
+            const txt=`Olá, ${notice.clientName}! Aqui é ${notice.businessName}. Seu agendamento de ${notice.serviceName}, com ${notice.professionalName}, em ${dateTimeLabel(notice.startsAt)}, está: ${state}.`;
+            window.open(whatsappUrl(notice.clientPhone,txt),"_blank","noopener,noreferrer");
+            api(`/requests/${notice.id}/whatsapp-opened`,{method:"POST",body:{status:notice.status}})
+              .then(refresh).catch(e=>setError(e.message));
+            setNotice(null);
+          }}><Phone size={16}/> Abrir WhatsApp para enviar</Button>
+        </div>
+      </div>
+    </Modal>}
   </>;
 }
 function PublicRequestPage({ token }) {
@@ -1896,6 +1936,258 @@ function PublicRequestPage({ token }) {
   </main>;
 }
 
+function CommissionPoliciesPage() {
+  const [data,setData]=useState({services:[],professionals:[],rules:[]});
+  const [pro,setPro]=useState(""),[service,setService]=useState("");
+  const [percent,setPercent]=useState("70"),[retention,setRetention]=useState("0");
+  const [error,setError]=useState(""),[message,setMessage]=useState("");
+  const refresh=useCallback(async()=>{
+    try{
+      const [srv,team,rules]=await Promise.all([api("/services"),api("/professionals"),api("/commission-rules")]);
+      setData({services:srv.services,professionals:team.professionals.filter(x=>x.role==="profissional"&&x.active),rules:rules.rules});
+    }catch(e){setError(e.message);}
+  },[]);
+  useEffect(()=>{refresh();},[refresh]);
+  const save=async e=>{
+    e.preventDefault();setError("");setMessage("");
+    try{await api("/commission-rules",{method:"PUT",body:{
+      professionalId:pro,serviceId:service,commissionPercent:Number(percent),houseSharePercent:Number(retention),
+    }});setMessage("Regra salva para futuros agendamentos.");await refresh();}
+    catch(e){setError(e.message);}
+  };
+  const remove=async rule=>{
+    if(!window.confirm("Remover esta regra? Novos agendamentos usarão a comissão padrão do serviço ou profissional."))return;
+    try{await api("/commission-rules",{method:"DELETE",body:{professionalId:rule.professionalId,serviceId:rule.serviceId}});await refresh();}
+    catch(e){setError(e.message);}
+  };
+  return <>
+    <PageTitle eyebrow="POLÍTICAS DE REPASSE" title="Comissões por profissional e serviço"
+      description="Personalize a divisão de cada serviço para cada profissional, inclusive repasse integral."/>
+    <form className="panel management-panel settings-single-section" onSubmit={save}>
+      <div className="panel-heading"><div><h2>Nova regra personalizada</h2>
+        <p className="panel-subtitle">Tem prioridade sobre a taxa do serviço e a comissão padrão do profissional. Não altera agendamentos já registrados.</p></div></div>
+      <div className="form-grid">
+        <SelectField label="Profissional" value={pro} required onChange={e=>setPro(e.target.value)}>
+          <option value="">Selecione</option>{data.professionals.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </SelectField>
+        <SelectField label="Serviço" value={service} required onChange={e=>setService(e.target.value)}>
+          <option value="">Selecione</option>{data.services.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+        </SelectField>
+        <Field label="Repasse do serviço ao profissional (%)" type="number" min="0" max="100" step="0.5"
+          value={percent} onChange={e=>setPercent(e.target.value)}/>
+        <Field label="Retenção adicional de materiais (pontos %)" type="number" min="0" max="100" step="0.5"
+          value={retention} onChange={e=>setRetention(e.target.value)}/>
+      </div>
+      <p className="panel-subtitle">Repasse efetivo: {Math.max(0,Number(percent)-Number(retention))}% do valor do serviço.
+        Para repasse integral, use 100% e retenção 0%.</p>
+      <ErrorMessage>{error}</ErrorMessage>{message&&<p className="success-message">{message}</p>}
+      <div className="modal-actions"><Button>Salvar regra</Button></div>
+    </form>
+    <section className="panel management-panel">
+      <div className="panel-heading"><div><h2>Regras cadastradas</h2>
+        <p className="panel-subtitle">Exceções aplicáveis somente aos próximos atendimentos.</p></div></div>
+      {data.rules.length?<div className="management-list">{data.rules.map(rule=>
+        <article className="service-row request-item" key={rule.professionalId+"-"+rule.serviceId}>
+          <span className="service-row-icon"><CircleDollarSign size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{rule.professionalName} · {rule.serviceName}</b>
+            <small>{rule.commissionPercent}% de repasse bruto · {rule.houseSharePercent}% de retenção</small></div>
+          <strong>{Math.max(0,rule.commissionPercent-rule.houseSharePercent)}% líquido</strong>
+          <Button variant="secondary" type="button" onClick={()=>remove(rule)}>Remover</Button>
+        </article>)}</div>:<EmptyState icon={Wallet} title="Nenhuma regra especial"
+          description="Os agendamentos usam a configuração padrão enquanto não houver exceção."/>}
+    </section>
+  </>;
+}
+function SettlementsPage() {
+  const [month,setMonth]=useState(localDate().slice(0,7));
+  const [data,setData]=useState({professionals:[],batches:[]});
+  const [error,setError]=useState(""),[message,setMessage]=useState(""),[busy,setBusy]=useState("");
+  const refresh=useCallback(()=>api(`/settlements?month=${encodeURIComponent(month)}`)
+    .then(setData).catch(e=>setError(e.message)),[month]);
+  useEffect(()=>{refresh();},[refresh]);
+  const close=async pro=>{
+    if(!window.confirm(`Registrar como pago o saldo de ${money(pro.dueCents)} de ${pro.professionalName}? Isso não transfere dinheiro.`))return;
+    setBusy(pro.professionalId);setError("");setMessage("");
+    try{
+      const result=await api("/settlements",{method:"POST",body:{month,professionalId:pro.professionalId}});
+      setMessage(`Fechamento registrado: ${money(result.batch.totalCents)} em ${result.batch.count} serviços. Confirme a transferência fora do sistema.`);
+      await refresh();
+    }catch(e){setError(e.message);}finally{setBusy("");}
+  };
+  const due=data.professionals.reduce((sum,p)=>sum+p.dueCents,0);
+  return <>
+    <PageTitle eyebrow="GESTÃO FINANCEIRA" title="Fechamentos e repasses"
+      description="Confira os serviços concluídos e registre os valores efetivamente pagos aos profissionais."/>
+    <div className="booking-queue-tools">
+      <div className="month-filter"><label>Mês</label><input type="month" className="input month-input" value={month}
+        onChange={e=>setMonth(e.target.value)}/></div>
+      <a className="button button-secondary" href={`/api/settlements/export.csv?month=${encodeURIComponent(month)}`}>
+        <Download size={16}/> Exportar relatório CSV
+      </a>
+    </div>
+    <section className="stats-grid finance-stats">
+      <StatCard title="Saldo pendente" value={money(due)} icon={Wallet} tone="orange" note="Ainda não registrado como pago"/>
+      <StatCard title="Total de repasses" value={money(data.professionals.reduce((sum,p)=>sum+p.earnedCents,0))}
+        icon={CircleDollarSign} note="Comissões dos serviços concluídos"/>
+    </section>
+    <ErrorMessage>{error}</ErrorMessage>{message&&<p className="success-message">{message}</p>}
+    <section className="panel management-panel"><div className="panel-heading"><div><h2>Fechamento por profissional</h2>
+      <p className="panel-subtitle">O sistema apenas registra o pagamento; ele não envia PIX nem dinheiro.</p></div></div>
+      {data.professionals.length?<div className="management-list">{data.professionals.map(pro=>
+        <article className="service-row request-item" key={pro.professionalId}>
+          <span className="service-row-icon"><Wallet size={18}/></span>
+          <div className="min-w-0 flex-1"><b>{pro.professionalName}</b>
+            <small>{pro.completed} serviços · bruto {money(pro.grossCents)} · já registrado pago {money(pro.paidCents)}</small></div>
+          <strong>{money(pro.dueCents)} pendente</strong>
+          {pro.pendingServices>0&&<Button disabled={busy===pro.professionalId}
+            onClick={()=>close(pro)}>Registrar fechamento</Button>}
+        </article>)}</div>:<EmptyState icon={Wallet} title="Sem serviços concluídos" description="Os fechamentos do período aparecerão aqui."/>}
+    </section>
+    <section className="panel management-panel"><div className="panel-heading"><div><h2>Histórico de fechamentos</h2></div></div>
+      {data.batches.length?<div className="management-list">{data.batches.map(b=>
+        <article className="service-row" key={b.id}><CheckCheck size={18}/>
+          <span className="min-w-0 flex-1"><b>{b.professionalName}</b><small>{b.paidAt} · protocolo {b.id.slice(0,8)}</small></span>
+          <strong>{money(b.totalCents)}</strong></article>)}</div>:
+        <p className="panel-subtitle">Nenhum fechamento registrado neste mês.</p>}
+    </section>
+  </>;
+}
+
+function SaasAdminPage() {
+  const [key,setKey]=useState("");
+  const [connected,setConnected]=useState(false);
+  const [businesses,setBusinesses]=useState([]);
+  const [values,setValues]=useState({businessName:"",slug:"",ownerName:"",ownerEmail:"",plan:"comercial"});
+  const [issued,setIssued]=useState(null);
+  const [editing,setEditing]=useState(null);
+  const [error,setError]=useState(""),[busy,setBusy]=useState(false);
+  const call=useCallback(async(path,method="GET",body)=>{
+    const response=await fetch("/api/saas"+path,{
+      method,headers:{"X-Saas-Admin-Key":key,...(body?{"Content-Type":"application/json"}:{})},
+      ...(body?{body:JSON.stringify(body)}:{}),credentials:"same-origin",
+    });
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||"Falha na Central SaaS.");
+    return data;
+  },[key]);
+  const refresh=useCallback(async()=>{
+    const result=await call("/businesses");setBusinesses(result.businesses);setConnected(true);
+  },[call]);
+  const connect=async e=>{e.preventDefault();setError("");
+    try{await refresh();}catch(e){setError(e.message);}
+  };
+  const create=async e=>{
+    e.preventDefault();setBusy(true);setError("");
+    try{
+      const result=await call("/businesses","POST",values);
+      setIssued(result);
+      setValues({businessName:"",slug:"",ownerName:"",ownerEmail:"",plan:"comercial"});
+      await refresh();
+    }catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  const change=async(item,status)=>{
+    if(!window.confirm(`Deseja ${status==="suspended"?"suspender":"reativar"} ${item.name}?`))return;
+    setBusy(true);setError("");
+    try{await call(`/businesses/${item.id}`,"PATCH",{
+      plan:item.plan,status,notes:item.notes||"",dueDate:item.dueDate||null,
+    });await refresh();}
+    catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  return <main className="saas-admin-page">
+    <div className="saas-admin-header"><div className="public-brand"><img src="/assets/simplifica-perfil.svg" alt=""/> Simplifica <span>Admin</span></div>
+      <a className="button button-secondary" href="/">Voltar ao sistema</a></div>
+    <div className="saas-admin-content">
+      <PageTitle eyebrow="ÁREA RESTRITA DO OPERADOR" title="Central SaaS"
+        description="Cadastre clientes comerciais e administre planos e acessos. A chave não é armazenada pelo navegador."/>
+      {!connected?<form className="panel management-panel saas-admin-login" onSubmit={connect}>
+        <Field label="Chave de acesso da plataforma" type="password" required autoComplete="off" value={key}
+          onChange={e=>setKey(e.target.value)} placeholder="Chave SAAS_ADMIN_KEY do servidor"/>
+        <ErrorMessage>{error}</ErrorMessage><Button>Acessar Central SaaS</Button>
+        <p className="panel-subtitle">Configure SAAS_ADMIN_KEY no arquivo .env do servidor. Use somente em HTTPS fora do localhost.</p>
+      </form>:<>
+        <div className="saas-admin-top-actions"><Button variant="secondary" type="button" onClick={()=>{
+          setConnected(false);setKey("");setIssued(null);setBusinesses([]);
+        }}>Encerrar acesso à central</Button></div>
+        <section className="panel management-panel">
+          <div className="panel-heading"><div><h2>Cadastrar novo estabelecimento</h2>
+            <p className="panel-subtitle">O cliente receberá acesso comercial, sem interferir no ambiente de demonstração.</p></div></div>
+          <form className="form-stack" onSubmit={create}>
+            <div className="form-grid">
+              <Field label="Nome do estabelecimento" required maxLength={120} value={values.businessName}
+                onChange={e=>setValues(v=>({...v,businessName:e.target.value}))}/>
+              <Field label="Identificador do link (sem espaços)" required maxLength={80} placeholder="ex: studio-maria"
+                value={values.slug} onChange={e=>setValues(v=>({...v,slug:e.target.value.toLowerCase()}))}/>
+              <Field label="Nome do proprietário" required maxLength={120} value={values.ownerName}
+                onChange={e=>setValues(v=>({...v,ownerName:e.target.value}))}/>
+              <Field label="E-mail de login do proprietário" type="email" required value={values.ownerEmail}
+                onChange={e=>setValues(v=>({...v,ownerEmail:e.target.value}))}/>
+              <SelectField label="Plano" value={values.plan} onChange={e=>setValues(v=>({...v,plan:e.target.value}))}>
+                <option value="comercial">Comercial</option><option value="profissional">Profissional</option>
+                <option value="premium">Premium</option>
+              </SelectField>
+            </div>
+            <ErrorMessage>{error}</ErrorMessage><Button disabled={busy}>{busy?"Criando...":"Cadastrar comércio e gerar acesso"}</Button>
+          </form>
+        </section>
+        {issued&&<section className="panel management-panel saas-secret">
+          <h2>Acesso criado — entregue a senha uma única vez</h2>
+          <p className="panel-subtitle">O sistema não envia credenciais automaticamente. Copie e repasse ao proprietário por canal seguro.</p>
+          <Field label="E-mail" value={issued.business.ownerEmail} readOnly/>
+          <Field label="Senha temporária (não será exibida novamente)" value={issued.temporaryPassword} readOnly/>
+          <div className="booking-share-actions">
+            <Button variant="secondary" type="button" onClick={()=>navigator.clipboard.writeText(
+              `Comércio: ${issued.business.name}\nE-mail: ${issued.business.ownerEmail}\nSenha temporária: ${issued.temporaryPassword}\nIdentificador: ${issued.business.slug}\nAltere a senha após acessar.`
+            )}>Copiar instruções</Button>
+            <Button type="button" onClick={()=>setIssued(null)}>Entreguei com segurança</Button>
+          </div>
+        </section>}
+        <section className="panel management-panel"><div className="panel-heading"><div>
+          <h2>Estabelecimentos cadastrados</h2><p className="panel-subtitle">Status do acesso e plano de cada empresa.</p></div>
+          <span className="count-chip">{businesses.length}</span></div>
+          <div className="management-list">{businesses.map(item=>
+            <article key={item.id} className="service-row request-item">
+              <span className="service-row-icon"><ShieldCheck size={18}/></span>
+              <div className="min-w-0 flex-1"><b>{item.name}</b>
+                <small>{item.ownerName} · {item.ownerEmail}</small>
+                <small>{item.slug} · {item.plan} · {item.status==="suspended"?"Suspenso":"Ativo"}</small></div>
+              {item.slug!=="studio-bela-vista"&&<>
+                <Button type="button" variant="secondary" onClick={()=>setEditing({...item})}>Editar plano</Button>
+                <Button type="button" variant="secondary" disabled={busy}
+                  onClick={()=>change(item,item.status==="suspended"?"active":"suspended")}>
+                  {item.status==="suspended"?"Reativar":"Suspender"}
+                </Button></>}
+            </article>)}</div>
+        </section>
+        {editing&&<Modal title={`Plano de ${editing.name}`} onClose={()=>setEditing(null)}>
+          <form className="form-stack" onSubmit={async e=>{
+            e.preventDefault();setBusy(true);setError("");
+            try{
+              await call(`/businesses/${editing.id}`,"PATCH",{
+                plan:editing.plan,status:editing.status,notes:editing.notes||"",dueDate:editing.dueDate||null,
+              });
+              setEditing(null);await refresh();
+            }catch(err){setError(err.message);}finally{setBusy(false);}
+          }}>
+            <SelectField label="Plano" value={editing.plan}
+              onChange={e=>setEditing(v=>({...v,plan:e.target.value}))}>
+              <option value="comercial">Comercial</option><option value="profissional">Profissional</option><option value="premium">Premium</option>
+            </SelectField>
+            <Field label="Vencimento (registro administrativo)" type="date" value={editing.dueDate||""}
+              onChange={e=>setEditing(v=>({...v,dueDate:e.target.value}))}/>
+            <Field label="Observações contratuais">
+              <textarea className="input" rows={3} maxLength={300} value={editing.notes||""}
+                onChange={e=>setEditing(v=>({...v,notes:e.target.value}))}/>
+            </Field>
+            <p className="panel-subtitle">O vencimento é apenas informativo nesta fase. Não existe cobrança automática.</p>
+            <ErrorMessage>{error}</ErrorMessage>
+            <div className="modal-actions"><Button type="button" variant="secondary"
+              onClick={()=>setEditing(null)}>Cancelar</Button><Button disabled={busy}>Salvar</Button></div>
+          </form>
+        </Modal>}
+      </>}
+    </div>
+  </main>;
+}
 function AccessDenied() {
   return <div className="panel"><EmptyState icon={ShieldCheck} title="Acesso restrito"
     description="Esta área está disponível apenas para o perfil de dono." /></div>;
@@ -1907,7 +2199,7 @@ export default function App() {
   const [installation, setInstallation] = useState(null);
   const location = useLocation();
   useEffect(() => {
-    if (location.pathname.startsWith("/agendar/") || location.pathname.startsWith("/acompanhar/")) { setLoading(false); return; }
+    if (location.pathname.startsWith("/agendar/") || location.pathname.startsWith("/acompanhar/") || location.pathname === "/central-saas") { setLoading(false); return; }
     Promise.all([
       api("/installation/status"),
       api("/auth/me").then(({ user: current }) => current).catch(() => null),
@@ -1921,6 +2213,7 @@ export default function App() {
     const token=decodeURIComponent(location.pathname.slice("/acompanhar/".length).split("/")[0]);
     return <PublicRequestPage token={token}/>;
   }
+  if (location.pathname === "/central-saas") return <SaasAdminPage />;
   if (location.pathname.startsWith("/agendar/")) {
     const slug = decodeURIComponent(location.pathname.slice("/agendar/".length).split("/")[0]);
     return <PublicBooking slug={slug} />;
@@ -1940,6 +2233,8 @@ export default function App() {
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage /> : <AccessDenied />} />
       <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>
       <Route path="/comissoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <TeamCommissionsPage/> : <AccessDenied/>}/>
+      <Route path="/regras-comissao" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <CommissionPoliciesPage/> : <AccessDenied/>}/>
+      <Route path="/fechamentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettlementsPage/> : <AccessDenied/>}/>
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
       <Route path="/recebimentos" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ReceivablesPage user={user} /> : <AccessDenied />} />
