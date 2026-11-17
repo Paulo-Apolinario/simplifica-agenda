@@ -1008,7 +1008,7 @@ app.get("/api/schedule", requireAuth, (req, res) => {
 const commissionCents = row => Math.round(row.priceCents * Math.max(0,
   row.commissionPercent - (row.houseSharePercent ?? 0)) / 100);
 function professionalEarnings(tenantId, professionalId, month = null) {
-  const whereMonth = month ? " AND substr(a.starts_at, 1, 7) = ?" : "";
+  const whereMonth = month ? " AND substr(COALESCE(a.completed_on, a.starts_at), 1, 7) = ?" : "";
   const params = month ? [tenantId, professionalId, month] : [tenantId, professionalId];
   const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, s.name AS serviceName,
     c.name AS clientName, a.price_cents AS priceCents,
@@ -1044,7 +1044,7 @@ app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
     JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
     LEFT JOIN commission_payments cp ON cp.appointment_id = a.id AND cp.tenant_id = a.tenant_id
-    WHERE a.tenant_id = ? AND a.status = 'concluido' AND substr(a.starts_at, 1, 7) = ?
+    WHERE a.tenant_id = ? AND a.status = 'concluido' AND substr(COALESCE(a.completed_on, a.starts_at), 1, 7) = ?
     ORDER BY a.starts_at DESC`).all(tenant(req), month);
   res.json({ month, commissions: rows.map(row => ({...row,
     earnedCents: commissionCents(row), paid: row.paidCents !== null })) });
