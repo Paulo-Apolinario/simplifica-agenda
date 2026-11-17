@@ -324,9 +324,9 @@ const navItems = [
   { to: "/comissoes", label: "Comissões da equipe", icon: CircleDollarSign },
   { to: "/regras-comissao", label: "Regras de comissão", icon: Settings },
   { to: "/fechamentos", label: "Fechamentos", icon: Wallet },
-  { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/recebimentos", label: "Caixa e recebimentos", icon: CircleDollarSign },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
+  { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/configuracoes", label: "Configurações do estabelecimento", icon: Settings },
   { to: "/minha-conta", label: "Minha conta", icon: ShieldCheck },
 ];
@@ -1460,6 +1460,49 @@ function ReceivablesPage({ user }) {
   </>;
 }
 
+
+function AppointmentAuditReport({ month }) {
+  const [events, setEvents] = useState([]);
+  const [action, setAction] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    api(`/reports/appointment-audit?month=${encodeURIComponent(month)}&action=${encodeURIComponent(action)}`)
+      .then(data => { if (alive) { setEvents(data.events); setError(""); } })
+      .catch(reason => { if (alive) setError(reason.message); });
+    return () => { alive = false; };
+  }, [month, action]);
+  const labels = { criacao: "Criado", confirmacao: "Confirmado", cancelamento: "Cancelado",
+    remarcacao: "Remarcado", conclusao: "Concluído", pagamento: "Pagamento", status: "Status alterado",
+    edicao: "Editado", comissao: "Comissão ajustada" };
+  const detail = event => {
+    const before = event.before || {}, after = event.after || {};
+    const changes = [
+      ["Status", "status"], ["Horário", "startsAt"], ["Valor", "priceCents"],
+      ["Pagamento", "paymentMethod"], ["Comissão (%)", "commissionPercent"], ["Taxa estabelecimento (%)", "houseSharePercent"]
+    ].filter(([, key]) => after[key] !== undefined && before[key] !== after[key])
+      .map(([label, key]) => `${label}: ${before[key] === undefined ? "—" : before[key]} → ${after[key]}`);
+    return changes.join(" · ") || "Ação registrada";
+  };
+  return <section className="panel management-panel">
+    <div className="panel-heading"><div><p className="eyebrow">RASTREABILIDADE</p><h2>Histórico de ações dos atendimentos</h2>
+      <p className="panel-subtitle">Ações registradas no mês, com responsável e alterações. Até 300 eventos recentes.</p></div>
+      <select className="input" aria-label="Filtrar ações" value={action} onChange={e => setAction(e.target.value)}>
+        <option value="">Todas as ações</option>
+        {Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    {events.length ? <div className="management-list">{events.map(event =>
+      <article className="service-row" key={event.id}>
+        <span className="service-row-icon"><Clock3 size={18}/></span>
+        <div className="min-w-0 flex-1"><b>{labels[event.action] || event.action} · {event.clientName}</b>
+          <small>{event.serviceName} · {event.actorName} · {dateTimeLabel(event.createdAt)}</small>
+          <small style={{overflowWrap:"anywhere"}}>{detail(event)}</small>
+        </div>
+      </article>)}</div> : <p className="report-empty">Nenhuma ação registrada neste período.</p>}
+  </section>;
+}
+
 function FinancePage() {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [report, setReport] = useState(null);
@@ -1503,6 +1546,7 @@ function FinancePage() {
         {client.phone && <a href={whatsappUrl(client.phone, `Oi, ${client.name}! Sentimos sua falta por aqui 💚 Que tal agendar um novo horário?`)} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={15} /> Chamar no WhatsApp</a>}</div>)}</div>
         : <p className="report-empty">Nenhum cliente sumido por enquanto. Seu relacionamento está em dia! 💚</p>}
     </section>
+    <AppointmentAuditReport month={month}/>
   </>;
 }
 
