@@ -35,6 +35,12 @@ db.exec(`
     UNIQUE (tenant_id, email)
   );
   CREATE UNIQUE INDEX IF NOT EXISTS users_email_idx ON users(tenant_id, lower(email));
+  CREATE TABLE IF NOT EXISTS business_logos (
+    tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    image_type TEXT NOT NULL,
+    image_blob BLOB NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS business_settings (
     tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
     business_name TEXT NOT NULL,
