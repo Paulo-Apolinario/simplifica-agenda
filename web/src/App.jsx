@@ -1396,7 +1396,7 @@ function BookingSharePage({ user }) {
 }
 
 
-function DailyCashClosing() {
+function DailyCashClosing({ revision }) {
   const [date, setDate] = useState(localDate().slice(0, 10));
   const [summary, setSummary] = useState(null);
   const [closings, setClosings] = useState([]);
@@ -1418,7 +1418,7 @@ function DailyCashClosing() {
       setError("");
     }).catch(reason => { if (active) setError(reason.message); });
     return () => { active = false; };
-  }, [date, updated]);
+  }, [date, updated, revision]);
   const closeDay = async () => {
     const input = String(counted).trim().replace(",", ".");
     if (!/^\d+(?:\.\d{1,2})?$/.test(input)) {
@@ -1496,6 +1496,7 @@ function ReceivablesPage({ user }) {
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const [cashRevision, setCashRevision] = useState(0);
   const [method, setMethod] = useState("pix");
   const refresh = useCallback(() =>
     api(`/receivables?month=${encodeURIComponent(month)}`)
@@ -1510,6 +1511,7 @@ function ReceivablesPage({ user }) {
     try {
       await api(`/receivables/${item.id}/pay`, { method: "POST", body: { paymentMethod: method } });
       await refresh();
+      setCashRevision(n => n + 1);
     } catch (reason) { setError(reason.message); } finally { setBusy(""); }
   };
   return <>
@@ -1553,7 +1555,7 @@ function ReceivablesPage({ user }) {
           <strong>{money(item.priceCents)}</strong>
         </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
     </section>
-    <DailyCashClosing/>
+    <DailyCashClosing revision={cashRevision}/>
   </>;
 }
 
