@@ -421,22 +421,6 @@ function StatCard({ title, value, note, icon: Icon, tone = "blue" }) {
 }
 
 function AppointmentCard({ appointment, onOpen, compact = false }) {
-  const completeOwn = async () => {
-    const future = appointment.startsAt > new Intl.DateTimeFormat("sv-SE", {
-      timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-    }).format(new Date()).replace(" ", "T");
-    const prompt = future
-      ? "Este horário ainda não começou. Confirma que o serviço foi realmente realizado antecipadamente? O pagamento ficará pendente."
-      : "Confirmar que o serviço foi realizado? O pagamento ficará pendente para a administração.";
-    if (!window.confirm(prompt)) return;
-    setSaving(true); setError("");
-    try {
-      await api(`/professional/my-services/${appointment.id}/complete`, { method: "POST" });
-      onUpdated();
-    } catch (reason) { setError(reason.message); }
-    finally { setSaving(false); }
-  };
   const message = `Olá, ${appointment.clientName}! Passando para confirmar seu horário de ${appointment.serviceName} no dia ${dateTimeLabel(appointment.startsAt)} com ${appointment.professionalName}. Podemos confirmar?`;
   const whatsapp = whatsappUrl(appointment.clientPhone, message);
   return (
@@ -712,6 +696,25 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
     setSaving(true); setError("");
     try { await api(`/appointments/${appointment.id}`, { method: "PATCH", body: patch }); onUpdated(); }
     catch (reason) { setError(reason.message); } finally { setSaving(false); }
+  };
+  const completeOwn = async () => {
+    if (!canCompleteService || !["agendado", "confirmado"].includes(appointment.status)) return;
+    const scheduledTime = new Date(appointment.startsAt).getTime();
+    const earlyCompletion = Number.isFinite(scheduledTime) && scheduledTime > Date.now();
+    const confirmation = earlyCompletion
+      ? "Este horário ainda não começou. Confirma que o serviço foi realmente realizado antecipadamente? O pagamento ficará pendente."
+      : "Confirmar que o serviço foi realizado? O pagamento ficará pendente para a administração.";
+    if (!window.confirm(confirmation)) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api(`/professional/my-services/${encodeURIComponent(appointment.id)}/complete`, { method: "POST" });
+      onUpdated();
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setSaving(false);
+    }
   };
   const message = `Olá, ${appointment.clientName}! Passando para confirmar seu horário de ${appointment.serviceName} no dia ${dateTimeLabel(appointment.startsAt)} com ${appointment.professionalName}. Podemos confirmar?`;
   const whatsApp = whatsappUrl(appointment.clientPhone, message);
