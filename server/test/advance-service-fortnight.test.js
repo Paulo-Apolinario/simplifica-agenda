@@ -67,6 +67,21 @@ test("atendimento antecipado entra no caixa da empresa e gera saldo quinzenal se
     const schedule = await request("/schedule?from="+tomorrow+"T00:00:00&to="+tomorrow+"T23:59:59");
     assert.equal(schedule.status,200);
     assert.equal(schedule.body.appointments.some(item=>item.id==="anticipated"),false);
+    const history = await request("/clients/client-1/history");
+    const completed = history.body.history.find(item => item.id === "anticipated");
+    assert.equal(completed.startsAt, tomorrow + "T10:00:00");
+    assert.equal(completed.completedOn, current);
+
+    db.prepare("UPDATE business_hours SET opens_at = '09:00', closes_at = '18:00' WHERE tenant_id = ?").run(tenant);
+    const slotsRoute = "/public/salao-quinzena/slots?serviceId=service-1&professionalId=pro-1&date=" + tomorrow;
+    assert.ok((await request(slotsRoute)).body.slots.includes("10:00"));
+    const replacement = await request("/public/salao-quinzena/appointments", "POST", {
+      name: "Novo cliente", phone: "85900000001", startsAt: tomorrow + "T10:00:00",
+      serviceId: "service-1", professionalId: "pro-1",
+    });
+    assert.equal(replacement.status, 201);
+    assert.equal((await request("/appointments/anticipated", "PATCH", {status:"agendado"})).status, 409);
+
     assert.equal((await request("/receivables/anticipated/pay","POST",{paymentMethod:"pix"})).status,200);
     const day = await request("/cash/daily?date="+current);
     assert.equal(day.body.expectedTotalCents,5000);

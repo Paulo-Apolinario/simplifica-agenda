@@ -2,6 +2,9 @@ export function overlaps(start, end, otherStart, otherEnd) {
   return start < otherEnd && end > otherStart;
 }
 
+export const completedEarlySql =
+  "a.status = 'concluido' AND a.completed_on IS NOT NULL AND a.completed_on < substr(a.starts_at, 1, 10)";
+
 export function findScheduleConflict(db, {
   tenantId,
   professionalId,
@@ -11,10 +14,11 @@ export function findScheduleConflict(db, {
 }) {
   const appointment = db.prepare(`
     SELECT id, starts_at AS startsAt, ends_at AS endsAt
-    FROM appointments
+    FROM appointments a
     WHERE tenant_id = ?
       AND professional_id = ?
       AND status NOT IN ('cancelado', 'faltou')
+      AND NOT (${completedEarlySql})
       AND starts_at < ?
       AND ends_at > ?
       AND (? IS NULL OR id != ?)

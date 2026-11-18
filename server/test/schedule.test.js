@@ -9,19 +9,22 @@ test("considera conflito apenas quando os intervalos se sobrepõem", () => {
   assert.equal(overlaps("10:00", "11:00", "09:00", "10:00"), false);
 });
 
-test("ignora cancelamentos e faltas, aceita encaixes contíguos e exclui remarcação", () => {
+test("libera cancelamentos, faltas e conclusões em data anterior e permite excluir a própria reserva", () => {
   const db = new Database(":memory:");
   db.exec(`
     CREATE TABLE appointments (
-      id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, status TEXT
+      id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, status TEXT, completed_on TEXT
     );
     CREATE TABLE blocked_slots (
       id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, reason TEXT
     );
     INSERT INTO appointments VALUES
-      ('cancelled', 't', 'p', '2026-10-10T09:00:00', '2026-10-10T10:00:00', 'cancelado'),
-      ('missed', 't', 'p', '2026-10-10T09:00:00', '2026-10-10T10:00:00', 'faltou'),
-      ('active', 't', 'p', '2026-10-10T10:00:00', '2026-10-10T11:00:00', 'agendado');
+      ('cancelled', 't', 'p', '2026-10-10T09:00:00', '2026-10-10T10:00:00', 'cancelado', NULL),
+      ('missed', 't', 'p', '2026-10-10T09:00:00', '2026-10-10T10:00:00', 'faltou', NULL),
+      ('active', 't', 'p', '2026-10-10T10:00:00', '2026-10-10T11:00:00', 'agendado', NULL),
+      ('early', 't', 'p', '2026-10-10T09:00:00', '2026-10-10T10:00:00', 'concluido', '2026-10-09'),
+      ('same-day', 't', 'p', '2026-10-10T11:00:00', '2026-10-10T12:00:00', 'concluido', '2026-10-10'),
+      ('legacy', 't', 'p', '2026-10-10T12:00:00', '2026-10-10T13:00:00', 'concluido', NULL);
   `);
 
   assert.equal(findScheduleConflict(db, {
@@ -46,6 +49,15 @@ test("ignora cancelamentos e faltas, aceita encaixes contíguos e exclui remarca
     endsAt: "2026-10-10T11:30:00",
   }).id, "active");
 
+  for (const [hour, end, id] of [["11", "12", "same-day"], ["12", "13", "legacy"]]) {
+    assert.equal(findScheduleConflict(db, {
+      tenantId: "t",
+      professionalId: "p",
+      startsAt: `2026-10-10T${hour}:00:00`,
+      endsAt: `2026-10-10T${end}:00:00`,
+    }).id, id);
+  }
+
   db.close();
 });
 
@@ -53,7 +65,7 @@ test("reconhece bloqueio global ou individual do profissional", () => {
   const db = new Database(":memory:");
   db.exec(`
     CREATE TABLE appointments (
-      id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, status TEXT
+      id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, status TEXT, completed_on TEXT
     );
     CREATE TABLE blocked_slots (
       id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, reason TEXT

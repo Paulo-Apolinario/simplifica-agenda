@@ -109,7 +109,7 @@ const api = async (url, options = {}) => {
     const message = data?.error ?? "Não foi possível concluir a solicitação.";
     if (response.status === 409 && /caixa|abertura|abr[a-z]* o caixa/i.test(message))
       showNotice(message, "warning");
-    throw new Error(message);
+    throw Object.assign(new Error(message), { status: response.status });
   }
   return data;
 };
@@ -516,7 +516,8 @@ function StatCard({ title, value, note, icon: Icon, tone = "blue" }) {
 
 function AppointmentCard({ appointment, onOpen, compact = false }) {
   const message = `Olá, ${appointment.clientName}! Passando para confirmar seu horário de ${appointment.serviceName} no dia ${dateTimeLabel(appointment.startsAt)} com ${appointment.professionalName}. Podemos confirmar?`;
-  const whatsapp = whatsappUrl(appointment.clientPhone, message);
+  const whatsapp = appointment.bookingSource !== "public" || appointment.whatsappOptIn
+    ? whatsappUrl(appointment.clientPhone, message) : "";
   return (
     <article className={`appointment-card ${compact ? "appointment-card-compact" : ""}`}>
       <button className="appointment-main" onClick={() => onOpen(appointment)}>
@@ -816,9 +817,17 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
   const [startsAt, setStartsAt] = useState(appointment.startsAt.slice(0, 16));
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState(null);
   const save = async (patch) => {
     setSaving(true); setError("");
-    try { await api(`/appointments/${appointment.id}`, { method: "PATCH", body: patch }); onUpdated(); }
+    try {
+      const result = await api(`/appointments/${appointment.id}`, { method: "PATCH", body: patch });
+      if (needsManualWhatsApp(appointment, result.whatsappState)) {
+        setNotice({ ...appointment, status: patch.status, startsAt: patch.startsAt || appointment.startsAt });
+      } else {
+        onUpdated();
+      }
+    }
     catch (reason) { setError(reason.message); } finally { setSaving(false); }
   };
   const completeOwn = async () => {
@@ -841,7 +850,9 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
     }
   };
   const message = `Olá, ${appointment.clientName}! Passando para confirmar seu horário de ${appointment.serviceName} no dia ${dateTimeLabel(appointment.startsAt)} com ${appointment.professionalName}. Podemos confirmar?`;
-  const whatsApp = whatsappUrl(appointment.clientPhone, message);
+  const whatsApp = appointment.bookingSource !== "public" || appointment.whatsappOptIn
+    ? whatsappUrl(appointment.clientPhone, message) : "";
+  if (notice) return <WhatsAppStatusNotice appointment={notice} onClose={onUpdated} />;
   return <Modal title="Detalhes do atendimento" onClose={onClose}>
     <div className="detail-person"><span className="profile-avatar large">{appointment.clientName.split(" ").map((p) => p[0]).slice(0, 2).join("")}</span><div><h3>{appointment.clientName}</h3><span>{appointment.clientPhone || "Sem telefone cadastrado"}</span></div></div>
     <div className="detail-summary">
@@ -1030,7 +1041,9 @@ function ClientsPage({ user }) {
       <ClientForm client={modal.id ? modal : null} onClose={() => setModal(null)} onSaved={() => { setModal(null); refresh(); }}/>)}
     {history && <Modal title={`Histórico de ${history.client.name}`} onClose={() => setHistory(null)} wide>
       <p className="mb-4 text-sm text-slate-500">{history.client.notes || "Sem observações sobre este cliente."}</p>
-      {history.appointments.length ? <div className="appointments-list">{history.appointments.map((item) => <div className="history-item" key={item.id}><span>{dateTimeLabel(item.startsAt)}</span><b>{item.serviceName}</b><span>{item.professionalName}</span><span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span></div>)}</div>
+      {history.appointments.length ? <div className="appointments-list">{history.appointments.map((item) => <div className="history-item" key={item.id}><span>{item.status === "concluido" && item.completedOn ? <>
+        Agendado para {dateTimeLabel(item.startsAt)}<br />Realizado em {dateLabel(item.completedOn)}
+      </> : dateTimeLabel(item.startsAt)}</span><b>{item.serviceName}</b><span>{item.professionalName}</span><span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span></div>)}</div>
         : <EmptyState icon={CalendarDays} title="Nenhum atendimento ainda" description="Os atendimentos deste cliente aparecerão aqui." />}
     </Modal>}
   </>;
@@ -2141,6 +2154,13 @@ function PublicBooking({ slug }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [loadingSlots, setLoadingSlots] = useState(false);
+  const [slotsRevision, setSlotsRevision] = useState(0);
+  const reloadSlots = () => {
+    setSlots([]);
+    setTime("");
+    setLoadingSlots(true);
+    setSlotsRevision((revision) => revision + 1);
+  };
   useEffect(() => {
     setData(null); setServiceId(""); setProfessionalId(""); setTime(""); setSlots([]); setError("");
     let active = true;
@@ -2153,13 +2173,13 @@ function PublicBooking({ slug }) {
     setSlots([]); setTime(""); setLoadingSlots(false);
     if (!serviceId || !professionalId || !date) return;
     let active = true;
-    setLoadingSlots(true); setError("");
+    setLoadingSlots(true);
     api(`/public/${encodeURIComponent(slug)}/slots?serviceId=${encodeURIComponent(serviceId)}&professionalId=${encodeURIComponent(professionalId)}&date=${encodeURIComponent(date)}`)
       .then(({ slots: available }) => { if (active) setSlots(available || []); })
       .catch(reason => { if (active) setError(reason.message); })
       .finally(() => { if (active) setLoadingSlots(false); });
     return () => { active = false; };
-  }, [slug, serviceId, professionalId, date]);
+  }, [slug, serviceId, professionalId, date, slotsRevision]);
   const service = data?.services.find((item) => item.id === serviceId);
   const professionals = data?.professionals ?? [];
   const professional = professionals.find(person => person.id === professionalId);
@@ -2178,7 +2198,14 @@ function PublicBooking({ slug }) {
       setTime("");
       setClient({ name: "", phone: "" });
       setWhatsappOptIn(false);
-    } catch (reason) { setTime(""); setError(reason.message); } finally { setLoading(false); }
+    } catch (reason) {
+      if (reason.status === 409) {
+        reloadSlots();
+        setError("Este horário ficou indisponível. Escolha outro horário para continuar.");
+      } else {
+        setError(reason.message);
+      }
+    } finally { setLoading(false); }
   };
   if (!data && !error) return <div className="public-page"><Loading /></div>;
   if (error && !data) return <div className="public-page"><div className="public-booking-card"><img className="public-logo" src="/assets/simplifica-perfil.svg" alt="Simplifica Agenda"/><h1>Não encontramos esse estabelecimento</h1><p>{error}</p><p>Confira o link recebido do estabelecimento.</p></div></div>;
@@ -2197,24 +2224,24 @@ function PublicBooking({ slug }) {
             <Link to={`/acompanhar/${managementToken}`} className="button button-primary">Ver meu comprovante</Link>
             <Button variant="secondary" onClick={()=>navigator.clipboard.writeText(window.location.origin+`/acompanhar/${managementToken}`)}>Copiar link do comprovante</Button>
           </>}
-          <Button variant="secondary" onClick={() => {setMessage("");setManagementToken("");}}>Fazer outro agendamento</Button></div> :
+          <Button variant="secondary" onClick={() => { reloadSlots(); setMessage(""); setManagementToken(""); }}>Fazer outro agendamento</Button></div> :
         <form className="public-form" onSubmit={submit}>
           <div className="booking-step"><span>1</span><b>Qual serviço você deseja?</b></div>
-          <div className="public-service-grid">{data.services.map((item) => <button key={item.id} type="button" aria-pressed={serviceId === item.id} onClick={() => { setServiceId(item.id); setProfessionalId(""); setTime(""); }}
+          <div className="public-service-grid">{data.services.map((item) => <button key={item.id} type="button" aria-pressed={serviceId === item.id} onClick={() => { setServiceId(item.id); setProfessionalId(""); setTime(""); setError(""); }}
             className={`public-service-card ${serviceId === item.id ? "public-service-selected" : ""}`}><span className="shortcut-icon blue"><Scissors size={18} /></span><span><b>{item.name}</b><small>{item.durationMinutes} min · {money(item.priceCents)}</small></span>{serviceId === item.id && <Check size={16} className="text-blue-600" />}</button>)}</div>
           {!data.services.length && <p className="public-empty-note">Este estabelecimento ainda não possui serviços ativos cadastrados.</p>}
           <div className="booking-step"><span>2</span><b>Escolha profissional e data</b></div>
           <div className="form-grid">
-            <SelectField label="Profissional" disabled={!serviceId} required value={professionalId} onChange={(e) => setProfessionalId(e.target.value)}>
+            <SelectField label="Profissional" disabled={!serviceId} required value={professionalId} onChange={(e) => { setProfessionalId(e.target.value); setError(""); }}>
               <option value="">Selecione o profissional</option>{professionals.map((person) => <option value={person.id} key={person.id}>{person.name}</option>)}
             </SelectField>
-            <Field label="Data" type="date" min={localDate()} required value={date} onChange={(e) => setDate(e.target.value)} />
+            <Field label="Data" type="date" min={localDate()} required value={date} onChange={(e) => { setDate(e.target.value); setError(""); }} />
           </div>
           {!professionals.length && <p className="public-empty-note">Nenhum profissional ativo está disponível neste estabelecimento.</p>}
           <div className="booking-step"><span>3</span><b>Horários disponíveis</b></div>
           {serviceId && professionalId ? loadingSlots
             ? <p className="public-empty-note" aria-live="polite">Consultando horários disponíveis...</p>
-            : <div className="slot-grid">{slots.length ? slots.map((slot) => <button type="button" aria-pressed={time === slot} className={`slot-button ${time === slot ? "slot-selected" : ""}`} onClick={() => setTime(slot)} key={slot}>{slot}</button>)
+            : <div className="slot-grid">{slots.length ? slots.map((slot) => <button type="button" aria-pressed={time === slot} className={`slot-button ${time === slot ? "slot-selected" : ""}`} onClick={() => { setTime(slot); setError(""); }} key={slot}>{slot}</button>)
             : <p className="public-empty-note">Não há horários disponíveis nesta data. Experimente outro dia.</p>}</div>
             : <p className="public-empty-note">Selecione um serviço e um profissional para consultar horários.</p>}
           <div className="booking-step"><span>4</span><b>Seus dados para confirmação</b></div>
@@ -2235,6 +2262,38 @@ function PublicBooking({ slug }) {
   </main>;
 }
 
+function needsManualWhatsApp(appointment, state) {
+  return Boolean(appointment.whatsappOptIn && appointment.clientPhone
+    && state && !["submitted", "no-consent", "not-applicable"].includes(state));
+}
+
+function openAppointmentWhatsApp(appointment) {
+  const status = statusNames[appointment.status];
+  const business = appointment.businessName ? `Aqui é ${appointment.businessName}. ` : "";
+  const message = `Olá, ${appointment.clientName}! ${business}Seu agendamento de ${appointment.serviceName}, com ${appointment.professionalName}, em ${dateTimeLabel(appointment.startsAt)}, está: ${status}.`;
+  window.open(whatsappUrl(appointment.clientPhone, message), "_blank", "noopener,noreferrer");
+  return api(`/requests/${appointment.id}/whatsapp-opened`, {
+    method: "POST", body: { status: appointment.status },
+  });
+}
+
+function WhatsAppStatusNotice({ appointment, onClose }) {
+  const [error, setError] = useState("");
+  return <Modal title="Avisar cliente pelo WhatsApp" onClose={onClose}>
+    <div className="form-stack">
+      <p className="booking-share-notice"><Info size={16}/> O status foi registrado. Você pode abrir o WhatsApp para enviar o aviso manualmente.</p>
+      <p className="panel-subtitle">Uma conversa aberta não significa que a mensagem foi enviada.</p>
+      <ErrorMessage>{error}</ErrorMessage>
+      <div className="modal-actions">
+        <Button variant="secondary" onClick={onClose}>Avisar depois</Button>
+        <Button onClick={() => openAppointmentWhatsApp(appointment).then(onClose).catch((reason) => setError(reason.message))}>
+          <Phone size={16}/> Abrir WhatsApp para enviar
+        </Button>
+      </div>
+    </div>
+  </Modal>;
+}
+
 function OnlineRequestsPage() {
   const [items,setItems]=useState([]);
   const [filter,setFilter]=useState("agendado");
@@ -2252,7 +2311,7 @@ function OnlineRequestsPage() {
     try{
       const result=await api(`/requests/${item.id}`,{method:"PATCH",body:{action}});
       await refresh();
-      if(result.whatsappState!=="submitted" && item.clientPhone)
+      if (needsManualWhatsApp(item, result.whatsappState))
         setNotice({...item,status:result.status});
     }
     catch(e){setError(e.message);}finally{setBusy("");}
@@ -2284,39 +2343,17 @@ function OnlineRequestsPage() {
             <Button disabled={busy===item.id} onClick={()=>act(item,"confirm")}>Confirmar</Button>
             <Button variant="secondary" disabled={busy===item.id} onClick={()=>act(item,"reject")}>Recusar</Button>
           </>}
-          {item.clientPhone && <button type="button" className="button button-secondary" onClick={()=>{
-            const state=item.status==="confirmado"?"CONFIRMADO ✅":item.status==="cancelado"?"CANCELADO ❌":"AGUARDANDO CONFIRMAÇÃO ⏳";
-            const message=`Olá, ${item.clientName}! Aqui é ${item.businessName}. Seu agendamento de ${item.serviceName}, com ${item.professionalName}, em ${dateTimeLabel(item.startsAt)}, está: ${state}. Em caso de dúvidas, responda por aqui.`;
-            window.open(whatsappUrl(item.clientPhone,message),"_blank","noopener,noreferrer");
-            api(`/requests/${item.id}/whatsapp-opened`,{method:"POST",body:{status:item.status}})
-              .then(refresh).catch(e=>setError(e.message));
-          }}><Phone size={16}/> Abrir WhatsApp ({item.status==="confirmado"?"confirmação":item.status==="cancelado"?"cancelamento":"solicitação"})</button>}
+          {item.whatsappOptIn && item.clientPhone && <button type="button" className="button button-secondary" onClick={() =>
+            openAppointmentWhatsApp(item).then(refresh).catch((reason) => setError(reason.message))
+          }><Phone size={16}/> Abrir WhatsApp ({item.status==="confirmado"?"confirmação":item.status==="cancelado"?"cancelamento":"solicitação"})</button>}
           {item.whatsappDeliveryState==="submitted" && <small>Enviado à API do WhatsApp — entrega ainda não verificada</small>}
           {item.whatsappDeliveryState==="failed" && <small>Envio automático não concluído — envie manualmente</small>}
-          {item.whatsappOpenedAt && <small>Conversa aberta anteriormente — envio manual não verificado</small>}
+          {item.whatsappOptIn && item.whatsappOpenedAt && <small>Conversa aberta anteriormente — envio manual não verificado</small>}
         </article>)}</div>:
         <EmptyState icon={ClipboardCheck} title="Nenhuma solicitação nesta situação"
           description="Pedidos de clientes pelo link público aparecerão aqui." />}
     </section>
-    {notice && <Modal title="Avisar cliente pelo WhatsApp" onClose={()=>setNotice(null)}>
-      <div className="form-stack">
-        <p className="booking-share-notice"><Info size={16}/> O agendamento foi
-          {notice.status==="confirmado"?" confirmado":" recusado"} no sistema.
-          Para avisar o cliente sem API oficial configurada, é necessário enviar a mensagem no WhatsApp.</p>
-        <p className="panel-subtitle">Uma conversa aberta não significa que a mensagem foi enviada.</p>
-        <div className="modal-actions">
-          <Button variant="secondary" onClick={()=>setNotice(null)}>Avisar depois</Button>
-          <Button onClick={()=>{
-            const state=notice.status==="confirmado"?"CONFIRMADO ✅":"CANCELADO ❌";
-            const txt=`Olá, ${notice.clientName}! Aqui é ${notice.businessName}. Seu agendamento de ${notice.serviceName}, com ${notice.professionalName}, em ${dateTimeLabel(notice.startsAt)}, está: ${state}.`;
-            window.open(whatsappUrl(notice.clientPhone,txt),"_blank","noopener,noreferrer");
-            api(`/requests/${notice.id}/whatsapp-opened`,{method:"POST",body:{status:notice.status}})
-              .then(refresh).catch(e=>setError(e.message));
-            setNotice(null);
-          }}><Phone size={16}/> Abrir WhatsApp para enviar</Button>
-        </div>
-      </div>
-    </Modal>}
+    {notice && <WhatsAppStatusNotice appointment={notice} onClose={() => { setNotice(null); refresh(); }} />}
   </>;
 }
 function PublicRequestPage({ token }) {

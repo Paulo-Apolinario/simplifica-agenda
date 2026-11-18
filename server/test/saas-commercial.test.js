@@ -115,9 +115,19 @@ test("SaaS operator, individual commissions, settlement and WhatsApp notice stat
       VALUES (?,?,?,?,?,?,?,?, 'public',1)`)
       .run("request-consent",tenant,clientId,proId,serviceId,
         "2030-01-09T11:00:00","2030-01-09T11:30:00",10000);
-    const noProvider=await request("/requests/request-consent","PATCH",{action:"confirm"});
+    const noProvider=await request("/appointments/request-consent","PATCH",{status:"confirmado"});
     assert.equal(noProvider.status,200);
     assert.equal(noProvider.body.whatsappState,"not-configured");
+    const noticeId = () => db.prepare(`SELECT id FROM whatsapp_notifications
+      WHERE appointment_id = 'request-consent' AND status = 'confirmado'`).get().id;
+    const firstNotice = noticeId();
+    assert.equal((await request("/appointments/request-consent","PATCH",{status:"confirmado"})).body.whatsappState,null);
+    assert.equal((await request("/requests/request-consent","PATCH",{action:"confirm"})).status,409);
+    assert.equal(noticeId(),firstNotice);
+    assert.equal((await request("/appointments/request-consent","PATCH",{status:"agendado"})).status,200);
+    assert.equal((await request("/requests/request-consent","PATCH",{action:"confirm"})).body.whatsappState,"not-configured");
+    assert.notEqual(noticeId(),firstNotice);
+
     db.prepare(`INSERT INTO appointments (id,tenant_id,client_id,professional_id,service_id,
       starts_at,ends_at,price_cents,booking_source)
       VALUES (?,?,?,?,?,?,?,?, 'public')`)
@@ -127,8 +137,9 @@ test("SaaS operator, individual commissions, settlement and WhatsApp notice stat
     assert.equal(reject.status,200);
     assert.equal(reject.body.whatsappState,"no-consent");
 
-    assert.equal((await request("/requests/request-saas/whatsapp-opened","POST",{status:"confirmado"})).status,200);
-    assert.ok((await request("/requests")).body.requests.find(x=>x.id==="request-saas").whatsappOpenedAt);
+    assert.equal((await request("/requests/request-saas/whatsapp-opened","POST",{status:"confirmado"})).status,403);
+    assert.equal((await request("/requests/request-consent/whatsapp-opened","POST",{status:"confirmado"})).status,200);
+    assert.ok((await request("/requests")).body.requests.find(x=>x.id==="request-consent").whatsappOpenedAt);
     assert.equal((await request("/commission-rules","PUT",{
       professionalId:"foreign",serviceId,commissionPercent:100,
     })).status,404);
