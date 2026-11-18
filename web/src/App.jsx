@@ -499,10 +499,10 @@ function Shell({ user, onLogout, children }) {
   );
 }
 
-function PageTitle({ eyebrow, title, description, actions }) {
+function PageTitle({ eyebrow, title, description, actions, actionClassName = "" }) {
   return <div className="page-title-row">
     <div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1>{description && <p className="page-description">{description}</p>}</div>
-    {actions && <div className="page-actions">{actions}</div>}
+    {actions && <div className={`page-actions ${actionClassName}`.trim()}>{actions}</div>}
   </div>;
 }
 
@@ -576,7 +576,7 @@ function ReceptionDashboard({ user }) {
   const waiting = schedule.appointments.filter(item => item.status === "agendado");
   const confirmed = schedule.appointments.filter(item => item.status === "confirmado");
   return <>
-    <PageTitle eyebrow="CENTRAL DE ATENDIMENTO" title={`Bom trabalho, ${user.name.split(" ")[0]} 👋`}
+    <PageTitle actionClassName="dashboard-top-actions" eyebrow="CENTRAL DE ATENDIMENTO" title={`Bom trabalho, ${user.name.split(" ")[0]} 👋`}
       description="Acompanhe os horários, confirme solicitações e organize o atendimento ao cliente."
       actions={<Link className="button button-primary dashboard-action-button" to="/agenda"><CalendarDays size={16}/> Abrir agenda</Link>}/>
     <ErrorMessage>{error}</ErrorMessage>
@@ -622,7 +622,7 @@ function OverviewPage({ user }) {
   const navigate = useNavigate();
   if (!data && !error) return <Loading />;
   return <>
-    <PageTitle eyebrow={`${user.role === "profissional" ? "MINHA ROTINA" : "RESUMO DO NEGÓCIO"} · ${dateLabel(localDate(), { weekday: "long" }).toUpperCase()}`} title={`Olá, ${user.name.split(" ")[0]} 👋`}
+    <PageTitle actionClassName={user.role === "dono" ? "dashboard-top-actions" : ""} eyebrow={`${user.role === "profissional" ? "MINHA ROTINA" : "RESUMO DO NEGÓCIO"} · ${dateLabel(localDate(), { weekday: "long" }).toUpperCase()}`} title={`Olá, ${user.name.split(" ")[0]} 👋`}
       description={user.role === "profissional" ? "Seus horários, serviços concluídos e comissões em um só lugar." : "Aqui está um resumo do seu negócio. Tenha um ótimo dia!"}
       actions={<Button className={user.role === "dono" ? "dashboard-action-button" : ""} onClick={() => navigate(user.role === "profissional" ? "/meus-atendimentos" : "/agenda")}>
         <CalendarDays size={17} /> {user.role === "profissional" ? "Meus atendimentos" : "Ver agenda"}
