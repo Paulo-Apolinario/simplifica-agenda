@@ -125,6 +125,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .page-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
 .page-actions > .button { flex-shrink: 0; }
 .dashboard-action-button { width: 160px; min-height: 40px; }
+.dashboard-top-actions { padding-right: 20px; }
 .dashboard-cash-status {
   margin-bottom: 24px;
   padding: 18px 20px;
@@ -421,6 +422,7 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
   .dashboard-cash-content { grid-template-columns: minmax(0, 1fr); }
   .dashboard-cash-action { justify-content: flex-start; }
   .dashboard-action-button { width: auto; min-width: 160px; }
+  .dashboard-top-actions { padding-right: 0; }
   .page-actions { justify-content: flex-start; }
 
   .sidebar { z-index: 55; width: 270px; transform: translateX(-105%); transition: transform .2s ease; }
