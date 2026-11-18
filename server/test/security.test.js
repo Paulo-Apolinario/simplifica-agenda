@@ -132,7 +132,7 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(receivables.body.receivables[0].paid, false);
     assert.equal((await request(`/receivables/${apptId}/pay`, "POST", { paymentMethod: "pix" })).status, 200);
     assert.equal((await request(`/receivables/${apptId}/pay`, "POST", { paymentMethod: "pix" })).status, 409);
-    const paidReport = await request("/reports?month=2026-11");
+    const paidReport = await request("/reports?month=" + cashDate.slice(0, 7));
     assert.equal(paidReport.body.revenueCents, 7500);
     assert.equal(paidReport.body.pendingCents, 0);
 

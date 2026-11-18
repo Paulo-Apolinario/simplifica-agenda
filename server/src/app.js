@@ -17,6 +17,7 @@ const sessionSecret = process.env.SESSION_SECRET ?? "desenvolvimento-local-chave
 if (process.env.NODE_ENV === "production" && (!process.env.SESSION_SECRET || sessionSecret.length < 32)) {
   throw new Error("Defina SESSION_SECRET com pelo menos 32 caracteres em produção.");
 }
+const appointmentCompletionMonth = "substr(COALESCE(a.completed_on, a.starts_at), 1, 7)";
 const paymentMethods = ["dinheiro", "pix", "cartao_credito", "cartao_debito", "transferencia"];
 const statuses = ["agendado", "confirmado", "concluido", "cancelado", "faltou"];
 
@@ -543,7 +544,7 @@ app.get("/api/overview", requireAuth, (req, res) => {
       count(DISTINCT client_id) FILTER (WHERE substr(starts_at, 1, 7) = ?
         AND status NOT IN ('cancelado', 'faltou')) AS active_clients,
       coalesce(sum(price_cents) FILTER (
-        WHERE substr(starts_at, 1, 7) = ? AND status = 'concluido'), 0) AS month_revenue,
+        WHERE substr(paid_on, 1, 7) = ? AND payment_method != '' AND status = 'concluido'), 0) AS month_revenue,
       count(*) FILTER (WHERE substr(starts_at, 1, 7) = ?
         AND status NOT IN ('cancelado', 'faltou')) AS month_count
     FROM appointments WHERE tenant_id = ?
@@ -1565,10 +1566,15 @@ function cashDaySummary(tenantId, date) {
 app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
-  const rows = appointmentRows(tenant(req), "AND substr(a.starts_at, 1, 7) = ? AND a.status = 'concluido'", [month]);
-  res.json({ month, receivables: rows.map(row => ({
+  const completedCount = db.prepare(`SELECT COUNT(*) AS total FROM appointments a
+    WHERE a.tenant_id = ? AND a.status = 'concluido' AND ${appointmentCompletionMonth} = ?`).get(tenant(req), month).total;
+  const rows = appointmentRows(tenant(req), `AND a.status = 'concluido' AND (
+    (a.payment_method = '' AND ${appointmentCompletionMonth} = ?)
+    OR (a.payment_method != '' AND substr(a.paid_on, 1, 7) = ?)
+  )`, [month, month]);
+  res.json({ month, completedCount, receivables: rows.map(row => ({
     id: row.id, clientName: row.clientName, serviceName: row.serviceName, professionalName: row.professionalName,
-    startsAt: row.startsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod,
+    startsAt: row.startsAt, completedOn: row.completedOn, priceCents: row.priceCents, paymentMethod: row.paymentMethod,
     paidOn: row.paidOn, paid: Boolean(row.paymentMethod),
   })) });
 });
@@ -1721,7 +1727,8 @@ app.get("/api/cash/daily", requireAuth, allowRoles("dono", "recepcao"), (req, re
   res.setHeader("Cache-Control", "no-store");
   const opening = cashOpening(tenant(req), date);
   const movements = cashMovements(tenant(req), date);
-  res.json({ ...summary, opening, movements: movements.rows,
+  const { timezone } = db.prepare("SELECT timezone FROM business_settings WHERE tenant_id = ?").get(tenant(req)) ?? {};
+  res.json({ ...summary, opening, timezone, movements: movements.rows,
     supplyCents: movements.supplyCents, withdrawalCents: movements.withdrawalCents,
     openingCashCents: opening?.openingCashCents ?? 0,
     expectedDrawerCashCents: (opening?.openingCashCents ?? 0) + summary.expectedCashCents + movements.supplyCents - movements.withdrawalCents,
@@ -1744,14 +1751,17 @@ app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req
   const date = String(req.body?.date ?? "");
   const counted = req.body?.countedCashCents;
   const notes = String(req.body?.notes ?? "").trim();
-  if (!validCashDate(date) || date > cashDay(tenant(req)))
+  const today = cashDay(tenant(req));
+  if (!validCashDate(date) || date > today)
     return fail(res, 400, "Selecione uma data válida que não seja futura.");
+  if (req.user.role === "recepcao" && date !== today)
+    return fail(res, 403, "Somente o administrador pode fechar caixas de outros dias.");
   if (!Number.isSafeInteger(counted) || counted < 0 || counted > 100000000000)
     return fail(res, 400, "Informe o valor em dinheiro contado, em centavos.");
   if (notes.length > 500) return fail(res, 400, "Observação deve ter até 500 caracteres.");
   const result = db.transaction(() => {
     if (cashClosing(tenant(req), date)) return null;
-    if (date === cashDay(tenant(req)) && !cashOpening(tenant(req), date)) return "unopened";
+    if (date === today && !cashOpening(tenant(req), date)) return "unopened";
     const summary = cashDaySummary(tenant(req), date);
     const openingCashCents = cashOpening(tenant(req), date)?.openingCashCents ?? 0;
     const movements=cashMovements(tenant(req),date);
@@ -1809,16 +1819,16 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const revenue = db.prepare(`
-    SELECT coalesce(sum(CASE WHEN payment_method != '' THEN price_cents ELSE 0 END), 0) AS revenue_cents,
-      coalesce(sum(CASE WHEN payment_method = '' THEN price_cents ELSE 0 END), 0) AS pending_cents,
-      count(*) AS completed_count,
-      count(*) FILTER (WHERE payment_method = '') AS pending_count
-    FROM appointments WHERE tenant_id = ? AND substr(starts_at, 1, 7) = ? AND status = 'concluido'
-  `).get(tenant(req), month);
+    SELECT coalesce(sum(price_cents) FILTER (WHERE payment_method != '' AND substr(paid_on, 1, 7) = @month), 0) AS revenue_cents,
+      coalesce(sum(price_cents) FILTER (WHERE payment_method = '' AND ${appointmentCompletionMonth} = @month), 0) AS pending_cents,
+      count(*) FILTER (WHERE ${appointmentCompletionMonth} = @month) AS completed_count,
+      count(*) FILTER (WHERE payment_method = '' AND ${appointmentCompletionMonth} = @month) AS pending_count
+    FROM appointments a WHERE tenant_id = @tenantId AND status = 'concluido'
+  `).get({ tenantId: tenant(req), month });
   const byService = db.prepare(`
     SELECT s.id, s.name, count(a.id) AS count, coalesce(sum(a.price_cents), 0) AS revenueCents
     FROM appointments a JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
-    WHERE a.tenant_id = ? AND substr(a.starts_at, 1, 7) = ? AND a.status = 'concluido'
+    WHERE a.tenant_id = ? AND ${appointmentCompletionMonth} = ? AND a.status = 'concluido'
     GROUP BY s.id ORDER BY count DESC
   `).all(tenant(req), month);
   const byProfessional = db.prepare(`
@@ -1826,7 +1836,7 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
       coalesce(sum(a.price_cents), 0) AS revenueCents,
       coalesce(sum(round(a.price_cents * max(0, a.commission_percent - a.house_share_percent) / 100)), 0) AS commissionCents
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
-    WHERE a.tenant_id = ? AND substr(a.starts_at, 1, 7) = ? AND a.status = 'concluido'
+    WHERE a.tenant_id = ? AND ${appointmentCompletionMonth} = ? AND a.status = 'concluido'
     GROUP BY u.id ORDER BY revenueCents DESC
   `).all(tenant(req), month);
   const inactiveClients = db.prepare(`

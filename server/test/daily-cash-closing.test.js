@@ -53,9 +53,27 @@ test("fechamento diário por data de recebimento, permissões e bloqueio de lan�
     const initial = await request("/cash/daily");
     assert.equal(initial.status, 200);
     const today = initial.body.today;
+    const priorDate = new Date(today + "T12:00:00Z");
+    priorDate.setUTCDate(1);
+    priorDate.setUTCMonth(priorDate.getUTCMonth() - 1);
+    const priorDay = priorDate.toISOString().slice(0, 10);
+    db.prepare("UPDATE appointments SET completed_on = ? WHERE id = 'cash-b'").run(priorDay);
+    const priorMonth = priorDay.slice(0, 7);
+    assert.equal((await request("/receivables?month=" + priorMonth)).body.receivables.find(row => row.id === "cash-b")?.paid, false);
+
     assert.equal((await request("/cash/openings","POST",{date:today,openingCashCents:0})).status,201);
     assert.equal((await request("/receivables/cash-a/pay", "POST", {paymentMethod:"dinheiro"})).status, 200);
     assert.equal((await request("/receivables/cash-b/pay", "POST", {paymentMethod:"pix"})).status, 200);
+    const currentReceipts = await request("/receivables?month=" + today.slice(0, 7));
+    assert.equal(currentReceipts.body.receivables.find(row => row.id === "cash-b")?.paidOn, today);
+    const priorReceipts = await request("/receivables?month=" + priorMonth);
+    assert.equal(priorReceipts.body.completedCount >= 1, true);
+    assert.equal(priorReceipts.body.receivables.some(row => row.id === "cash-b"), false);
+    const monthReport = await request("/reports?month=" + today.slice(0, 7));
+    assert.equal(monthReport.body.revenueCents, 10000);
+    assert.equal((await request("/reports?month=" + priorMonth)).body.revenueCents, 0);
+
+
     const report = await request("/cash/daily?date=" + today);
     assert.equal(report.body.expectedTotalCents, 10000);
     assert.equal(report.body.expectedCashCents, 8500);
@@ -74,6 +92,7 @@ test("fechamento diário por data de recebimento, permissões e bloqueio de lan�
     assert.equal(recep.status, 200);
     assert.equal((await request("/cash/daily?date=" + today)).status, 200);
     assert.equal((await request("/cash/closings")).status, 403);
+    assert.equal((await request("/cash/closings", "POST", {date:priorDay,countedCashCents:0})).status, 403);
   } finally {
     await new Promise(resolve => server.close(resolve));
     db.close();

@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDownToLine, ArrowLeft, ArrowRight, CalendarDays, Check, CheckCheck, ChevronDown,
+  ArrowDownToLine, ArrowLeft, ArrowRight, CalendarDays, Check, CheckCheck,
   ChevronLeft, ChevronRight, CircleDollarSign, Clock3, Download, ExternalLink, LayoutDashboard,
   LogOut, Menu, Moon, MoreHorizontal, Plus, Search, Settings, ShieldCheck, Sun, Users,
   Wallet, X, Scissors, UserRound, CalendarClock, CalendarX2, Phone, Mail, Sparkles,
   Copy, QrCode, Share2, Link2, Smartphone, Info, ClipboardCheck, UserRoundCheck, Upload,
 } from "lucide-react";
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import QRCode from "react-qr-code";
 
 const money = (cents = 0) => new Intl.NumberFormat("pt-BR", {
   style: "currency", currency: "BRL",
@@ -27,6 +28,10 @@ const dateLabel = (date, options = { day: "2-digit", month: "long", year: "numer
   new Intl.DateTimeFormat("pt-BR", options).format(new Date(`${date}T12:00:00`));
 const dateTimeLabel = (value) => new Intl.DateTimeFormat("pt-BR", {
   day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit",
+}).format(new Date(value));
+
+const cashTimestamp = (value, timeZone = "America/Sao_Paulo") => new Intl.DateTimeFormat("pt-BR", {
+  timeZone, day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit",
 }).format(new Date(value));
 
 function confirmAction(message, title = "Confirmar ação") {
@@ -154,14 +159,36 @@ function SelectField({ label, children, ...props }) {
 }
 
 function Modal({ title, onClose, children, wide = false }) {
+  const panel = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
   useEffect(() => {
-    const close = (event) => event.key === "Escape" && onClose();
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
+    const previous = document.activeElement;
+    panel.current?.querySelector("button")?.focus();
+    return () => {
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, []);
+  const handleKeyDown = (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      closeRef.current();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = [...panel.current.querySelectorAll(
+      "button, input, select, textarea, a[href], summary, [tabindex]"
+    )].filter((element) => !element.matches(":disabled") && element.tabIndex >= 0 && element.getClientRects().length);
+    const first = focusable.at(0);
+    const last = focusable.at(-1);
+    if ((event.shiftKey && document.activeElement === first) || (!event.shiftKey && document.activeElement === last)) {
+      event.preventDefault();
+      (event.shiftKey ? last : first)?.focus();
+    }
+  };
   return (
     <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className={`modal-panel ${wide ? "max-w-2xl" : "max-w-lg"}`} role="dialog" aria-modal="true" aria-label={title}>
+      <section ref={panel} onKeyDown={handleKeyDown} className={`modal-panel ${wide ? "max-w-2xl" : "max-w-lg"}`} role="dialog" aria-modal="true" aria-label={title}>
         <header className="modal-header">
           <h2>{title}</h2>
           <button className="icon-button" onClick={onClose} aria-label="Fechar"><X size={19} /></button>
@@ -434,13 +461,17 @@ function Shell({ user, onLogout, children }) {
     window.addEventListener("simplifica:logo-updated", onLogoChange);
     return () => window.removeEventListener("simplifica:logo-updated", onLogoChange);
   }, []);
+  const mobileRoutes = user.role === "profissional"
+    ? ["/", "/agenda", "/meus-atendimentos", "/meus-ganhos", "/clientes"]
+    : ["/", "/agenda", "/solicitacoes", "/clientes", "/recebimentos"];
+  const mobileItems = mobileRoutes.map((route) => visibleNavItems.find((item) => item.to === route)).filter(Boolean);
   const pageName = location.pathname === "/recebimentos" && user.role === "recepcao"
     ? "Caixa e recebimentos"
     : (visibleNavItems.find((item) => item.to === location.pathname)?.label ?? "Simplifica Agenda");
   return (
     <div className="app-shell">
       {mobileOpen && <button className="sidebar-scrim" onClick={() => setMobileOpen(false)} aria-label="Fechar menu" />}
-      <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
+      <aside id="menu-principal" className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
         <Link to="/" className="brand-lockup" onClick={() => setMobileOpen(false)}>
           <span className="brand-mark"><img src="/assets/simplifica-perfil.svg" alt="" /></span>
           <span className="brand-type"><b>simplifica<span>.</span></b><small>AGENDA INTELIGENTE</small></span>
@@ -448,7 +479,6 @@ function Shell({ user, onLogout, children }) {
         <div className="business-switcher">
           <span className="business-avatar">{businessLogo ? <img src={businessLogo} alt="" className="business-logo-img"/> : businessName.slice(0, 1)}</span>
           <span className="min-w-0 flex-1"><b>{businessName}</b><small>{user.slug === "studio-bela-vista" ? "Ambiente de demonstração" : "Meu negócio"}</small></span>
-          <ChevronDown size={15} className="text-slate-400" />
         </div>
         <nav className="sidebar-nav" aria-label="Navegação principal">
           <span className="nav-caption">MENU PRINCIPAL</span>
@@ -476,7 +506,7 @@ function Shell({ user, onLogout, children }) {
           fontSize: 13, borderBottom: "1px solid #F59E0B",
         }}>Ambiente demonstrativo · somente visualização. Para cadastrar, alterar e receber pagamentos, utilize uma conta comercial.</div>}
         <header className="topbar">
-          <button className="icon-button mobile-menu-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menu"><Menu size={21} /></button>
+          <button className="icon-button mobile-menu-button" onClick={() => setMobileOpen(!mobileOpen)} aria-expanded={mobileOpen} aria-controls="menu-principal" aria-label="Menu principal"><Menu size={21} /></button>
           <div className="topbar-breadcrumb"><span>{businessName}</span><ChevronRight size={14} /><b>{pageName}</b></div>
           <div className="topbar-right">
             <span className="today-pill"><span /> Sistema funcionando</span>
@@ -487,10 +517,10 @@ function Shell({ user, onLogout, children }) {
         </header>
         <main className="page-content">{children}</main>
         <nav className="mobile-nav" aria-label="Navegação móvel">
-          {visibleNavItems.slice(0, 5).map(({ to, icon: Icon, end }) => (
-            <NavLink key={to} to={to} end={end} aria-label={visibleNavItems.find((item) => item.to === to).label}
+          {mobileItems.map(({ to, label, icon: Icon, end }) => (
+            <NavLink key={to} to={to} end={end} aria-label={label}
               className={({ isActive }) => `mobile-nav-link ${isActive ? "mobile-nav-active" : ""}`}>
-              <Icon size={20} /><span>{visibleNavItems.find((item) => item.to === to).label.split(" ")[0]}</span>
+              <Icon size={20} /><span>{{ "/recebimentos": "Caixa", "/meus-atendimentos": "Atender", "/meus-ganhos": "Ganhos" }[to] || label.split(" ")[0]}</span>
             </NavLink>
           ))}
         </nav>
@@ -510,7 +540,6 @@ function StatCard({ title, value, note, icon: Icon, tone = "blue" }) {
   return <article className="stat-card">
     <div className={`stat-icon stat-${tone}`}><Icon size={19} /></div>
     <div className="stat-copy"><span>{title}</span><strong>{value}</strong><small>{note}</small></div>
-    <span className="stat-trend"><ArrowRight size={15} /></span>
   </article>;
 }
 
@@ -579,7 +608,7 @@ function ReceptionDashboard({ user }) {
   return <>
     <PageTitle actionClassName="dashboard-top-actions" eyebrow="CENTRAL DE ATENDIMENTO" title={`Bom trabalho, ${user.name.split(" ")[0]} 👋`}
       description="Acompanhe os horários, confirme solicitações e organize o atendimento ao cliente."
-      actions={<Link className="button button-primary dashboard-action-button" to="/agenda"><CalendarDays size={16}/> Abrir agenda</Link>}/>
+      actions={<Link className="button button-primary dashboard-action-button" to="/solicitacoes"><ClipboardCheck size={16}/> Solicitações online</Link>}/>
     <ErrorMessage>{error}</ErrorMessage>
     <CashStatusBanner user={user}/>
     <section className="stats-grid">
@@ -602,7 +631,7 @@ function ReceptionDashboard({ user }) {
             description="Novos horários e solicitações aparecerão aqui quando estiverem agendados."/>}
       </section>
       <section className="panel shortcut-panel">
-        <div className="panel-heading"><div><p className="eyebrow">ATENDIMENTO RÁPIDO</p><h2>O que você precisa fazer?</h2></div></div>
+        <div className="panel-heading"><div><p className="eyebrow">ATENDIMENTO RÁPIDO</p><h2>Atalhos da recepção</h2></div></div>
         <div className="shortcuts">
           <Link className="shortcut-item" to="/solicitacoes"><span className="shortcut-icon blue"><ClipboardCheck size={18}/></span><span><b>Solicitações online</b><small>Confirmar ou recusar pedidos públicos</small></span><ArrowRight size={15}/></Link>
           <Link className="shortcut-item" to="/agenda"><span className="shortcut-icon blue"><CalendarDays size={18}/></span><span><b>Organizar agenda</b><small>Registrar, confirmar ou remarcar</small></span><ArrowRight size={15}/></Link>
@@ -639,9 +668,9 @@ function OverviewPage({ user }) {
           note={data?.upcoming?.[0]?.clientName ?? "Sem próximos horários"} icon={Clock3} tone="orange"/>
       </> : <>
         <StatCard title="Atendimentos hoje" value={data?.todayCount ?? "—"} note="Na agenda de hoje" icon={CalendarDays} />
-        <StatCard title={user.role === "dono" ? "Faturamento do mês" : "Agendamentos no mês"}
+        <StatCard title={user.role === "dono" ? "Recebido no mês" : "Agendamentos no mês"}
           value={user.role === "dono" ? money(data?.monthRevenueCents) : data?.monthCount ?? "—"}
-          note={user.role === "dono" ? `${data?.monthCount ?? 0} atendimentos agendados` : "Na agenda do negócio"}
+          note={user.role === "dono" ? "Por data de pagamento" : "Na agenda do negócio"}
           icon={CircleDollarSign} tone="green" />
         <StatCard title="Clientes ativos" value={data?.activeClients ?? "—"} note="Com horário neste mês" icon={Users} tone="purple" />
         <StatCard title="Próximo atendimento" value={data?.upcoming?.[0] ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(data.upcoming[0].startsAt)) : "Livre"}
@@ -656,7 +685,7 @@ function OverviewPage({ user }) {
           : <EmptyState icon={CalendarDays} title="Sua agenda está livre" description="Aproveite para organizar seus próximos horários." action={<Button variant="secondary" onClick={() => navigate("/agenda")}><CalendarDays size={15} /> Abrir agenda</Button>} />}
       </div>
       <div className="panel shortcut-panel">
-        <div className="panel-heading"><div><p className="eyebrow">ACESSO RÁPIDO</p><h2>O que você precisa?</h2></div></div>
+        <div className="panel-heading"><div><p className="eyebrow">ACESSO RÁPIDO</p><h2>Atalhos de trabalho</h2></div></div>
         <div className="shortcuts">
           <Link to="/agenda" className="shortcut-item"><span className="shortcut-icon blue"><CalendarDays size={18} /></span><span><b>Organizar agenda</b><small>Visualize sua semana</small></span><ArrowRight size={15} /></Link>
           {user.role === "profissional" ? <>
@@ -667,7 +696,7 @@ function OverviewPage({ user }) {
           <Link to="/servicos" className="shortcut-item"><span className="shortcut-icon violet"><Scissors size={18} /></span><span><b>Gerenciar serviços</b><small>Equipe, preços e duração</small></span><ArrowRight size={15} /></Link>
           {user.role === "dono" && <Link to="/financeiro" className="shortcut-item"><span className="shortcut-icon amber"><Wallet size={18} /></span><span><b>Conferir resultados</b><small>Receitas e comissões</small></span><ArrowRight size={15} /></Link>}</>}
         </div>
-        <div className="quick-tip"><Sparkles size={17} /><span><b>Dica para o seu dia</b><small>Confirme seus atendimentos pelo WhatsApp e evite faltas.</small></span></div>
+
       </div>
     </section>
     {selected && <AppointmentDetails appointment={selected}
@@ -683,14 +712,14 @@ function EmptyState({ icon: Icon = CalendarDays, title, description, action }) {
   return <div className="empty-state"><span className="empty-icon"><Icon size={22} /></span><b>{title}</b><p>{description}</p>{action}</div>;
 }
 
-function AppointmentForm({ onClose, onSaved, initialDate, user }) {
+function AppointmentForm({ onClose, onSaved, initialDate, initialHour = "09:00", initialProfessional = "", user }) {
   const isProfessional = user.role === "profissional";
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
   const [values, setValues] = useState({
-    clientId: "", serviceId: "", professionalId: isProfessional ? user.id : "",
-    startsAt: `${initialDate}T09:00`, notes: "",
+    clientId: "", serviceId: "", professionalId: isProfessional ? user.id : initialProfessional,
+    startsAt: `${initialDate}T${initialHour}`, notes: "",
   });
   const [quickClient, setQuickClient] = useState(false);
   const [newClient, setNewClient] = useState({ name: "", phone: "" });
@@ -887,9 +916,68 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
   </Modal>;
 }
 
+function AgendaGrid({ days, professionals, appointments, blocks, onOpen, onCreate }) {
+  const columns = days.flatMap((day) => professionals.map((professional) => ({ day, professional })));
+  const minutes = (value, day) => value.slice(0, 10) < day ? 0
+    : value.slice(0, 10) > day ? 1440 : Number(value.slice(11, 13)) * 60 + Number(value.slice(14, 16));
+  const gridAppointments = appointments.filter((item) => !["cancelado", "faltou"].includes(item.status));
+  const scheduledHours = [...gridAppointments, ...blocks].flatMap((item) => [
+    Math.floor(minutes(item.startsAt, item.startsAt.slice(0, 10)) / 60),
+    Math.ceil(minutes(item.endsAt, item.startsAt.slice(0, 10)) / 60),
+  ]);
+  const firstHour = Math.min(8, ...scheduledHours);
+  const lastHour = Math.max(20, ...scheduledHours);
+  const hours = Array.from({ length: lastHour - firstHour }, (_, index) =>
+    `${String(firstHour + index).padStart(2, "0")}:00`);
+  const pixels = (value) => value * 64 / 60;
+  const geometry = (item, day) => ({
+    top: pixels(Math.max(0, minutes(item.startsAt, day) - firstHour * 60)),
+    height: pixels(minutes(item.endsAt, day) - Math.max(firstHour * 60, minutes(item.startsAt, day))),
+  });
+  return <section className="panel calendar-panel operational-calendar" aria-label="Grade de horários"
+    style={{ "--day-count": columns.length }}>
+    <div className="calendar-heading"><div className="calendar-time-spacer" />
+      <div className="calendar-day-heads">{columns.map(({day, professional}) => <div key={`${day}-${professional.id}`}>
+        <span>{dateLabel(day, { weekday: "short", day: "2-digit", month: "short" })}</span>
+        <b>{professional.name}</b>
+      </div>)}</div>
+    </div>
+    <div className="calendar-body">
+      <div className="time-column">{hours.map((hour) => <span key={hour}>{hour}</span>)}</div>
+      <div className="calendar-day-columns">{columns.map(({day, professional}) => {
+        const events = gridAppointments.filter((item) => item.startsAt.slice(0, 10) === day
+          && (!professional.id || item.professionalId === professional.id));
+        const dayBlocks = blocks.filter((item) => item.startsAt < `${day}T24:00` && item.endsAt > `${day}T00:00`
+          && (!item.professionalId || !professional.id || item.professionalId === professional.id));
+        return <div className="calendar-day-column" key={`${day}-${professional.id}`}>
+          {hours.map((hour) => onCreate
+            ? <button key={hour} type="button" className="calendar-hour"
+                onClick={() => onCreate(day, hour, professional.active ? professional.id : "")}
+                aria-label={`Novo agendamento às ${hour}, ${dateLabel(day)}, ${professional.name}`} />
+            : <div key={hour} className="calendar-hour" />)}
+          {dayBlocks.map((block) => <div key={block.id} className="calendar-block" style={geometry(block, day)}>
+            {block.reason || "Horário bloqueado"}
+          </div>)}
+          {events.map((item) => {
+            const label = `${item.startsAt.slice(11, 16)} · ${item.clientName} · ${item.serviceName}`;
+            return <button key={item.id} className={`calendar-event event-${item.status}`}
+              style={geometry(item, day)} title={label} aria-label={label} onClick={() => onOpen(item)}>
+              <b>{item.startsAt.slice(11, 16)} · {item.clientName}</b><span>{item.serviceName}</span>
+            </button>;
+          })}
+        </div>;
+      })}</div>
+    </div>
+  </section>;
+}
+
 function AgendaPage({ user }) {
   const [date, setDate] = useState(localDate());
   const [view, setView] = useState("dia");
+  const [professionals, setProfessionals] = useState([]);
+  const [professionalId, setProfessionalId] = useState("");
+  const [newSlot, setNewSlot] = useState(null);
+  const canEdit = user.tenantId !== "tenant-salao-demo";
   const [data, setData] = useState({ appointments: [], blockedSlots: [] });
   const [modal, setModal] = useState("");
   const [selected, setSelected] = useState(null);
@@ -905,10 +993,25 @@ function AgendaPage({ user }) {
       .then(setData).catch((reason) => setError(reason.message));
   }, [days]);
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    api("/professionals").then(({professionals: team}) =>
+      setProfessionals(team.filter((person) => user.role !== "profissional" || person.id === user.id)))
+      .catch((reason) => setError(reason.message));
+  }, [user.id, user.role]);
+  const team = professionals.filter((person) => person.active
+    || data.appointments.some((item) => item.professionalId === person.id)
+    || data.blockedSlots.some((item) => item.professionalId === person.id));
+  const appointments = data.appointments.filter((item) => !professionalId || item.professionalId === professionalId);
+  const blocks = data.blockedSlots.filter((item) => !professionalId || !item.professionalId || item.professionalId === professionalId);
+  const visibleTeam = team.filter((person) => !professionalId || person.id === professionalId);
+  const createAt = (day, hour, professional) => {
+    setNewSlot({ day, hour, professional });
+    setModal("new");
+  };
   const move = (offset) => setDate(shiftDate(date, offset * (view === "semana" ? 7 : 1)));
   return <>
     <PageTitle eyebrow="SUA ROTINA EM UM SÓ LUGAR" title="Agenda" description={dateLabel(date)}
-      actions={<>{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => setModal("new")}><Plus size={17} /> Novo agendamento</Button>}</>} />
+      actions={<>{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => createAt(date, "09:00", professionalId)}><Plus size={17} /> Novo agendamento</Button>}</>} />
     <div className="agenda-toolbar">
       <div className="date-nav"><button className="icon-button" onClick={() => move(-1)} aria-label="Anterior"><ChevronLeft size={18} /></button>
         <button className="date-today" onClick={() => setDate(localDate())}>Hoje</button><button className="icon-button" onClick={() => move(1)} aria-label="Próximo"><ChevronRight size={18} /></button></div>
@@ -916,45 +1019,29 @@ function AgendaPage({ user }) {
       <span className="agenda-current-label">{view === "semana" ? `${dateLabel(days[0], { day: "2-digit", month: "short" })} — ${dateLabel(days.at(-1), { day: "2-digit", month: "short" })}` : dateLabel(date, { weekday: "long", day: "2-digit", month: "long" })}</span>
     </div>
     <ErrorMessage>{error}</ErrorMessage>
-    <section className={`panel calendar-panel ${view === "semana" ? "week-calendar" : ""}`}>
-      <div className="calendar-heading"><div className="calendar-time-spacer" /><div className="calendar-day-heads">{days.map((day) => <div key={day} className={day === localDate() ? "calendar-day-today" : ""}>
-        <span>{dateLabel(day, { weekday: "short" })}</span><b>{day.slice(-2)}</b></div>)}</div></div>
-      <div className="calendar-body">
-        <div className="time-column">{Array.from({ length: 12 }, (_, i) => <span key={i}>{`${String(i + 8).padStart(2, "0")}:00`}</span>)}</div>
-        <div className="calendar-day-columns">{days.map((day) => {
-          const events = data.appointments.filter((item) => item.startsAt.slice(0, 10) === day);
-          const blocks = data.blockedSlots.filter((item) => item.startsAt.slice(0, 10) === day);
-          return <div className="calendar-day-column" key={day}>
-            {Array.from({ length: 12 }, (_, i) => <button key={i} className="calendar-hour" onClick={() => { if (user.tenantId !== "tenant-salao-demo") { setDate(day); setModal("new"); } }} aria-label={`Novo agendamento às ${i + 8}:00`} />)}
-            {events.map((item) => {
-              const start = new Date(item.startsAt);
-              const mins = start.getHours() * 60 + start.getMinutes() - 8 * 60;
-              if (mins < 0 || mins > 720) return null;
-              const height = Math.max(50, (item.durationMinutes / 60) * 64);
-              return <button key={item.id} className={`calendar-event event-${item.status}`} style={{ top: `${mins / 60 * 64 + 6}px`, height: `${height}px` }} onClick={() => setSelected(item)}>
-                <b>{item.clientName}</b><span>{dateTimeLabel(item.startsAt).split(" ")[1]} · {item.serviceName}</span>
-              </button>;
-            })}
-            {blocks.map((block) => <div key={block.id} className="calendar-block" style={{ top: `${((new Date(block.startsAt).getHours() - 8) * 60 + new Date(block.startsAt).getMinutes()) / 60 * 64 + 4}px` }}>{block.professionalName || "Equipe"} · {block.reason || "Indisponível"} · por {block.createdByName || "Não identificado"}</div>)}
-          </div>;
-        })}</div>
-      </div>
-    </section>
+    {team.length > 1 && <div className="agenda-professional-filter">
+      <SelectField label="Profissional" value={professionalId} onChange={(event) => setProfessionalId(event.target.value)}>
+        <option value="">Todos os profissionais</option>
+        {team.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+      </SelectField>
+    </div>}
+    <AgendaGrid days={days} professionals={visibleTeam.length ? visibleTeam : [{ id: "", name: "Agenda" }]}
+      appointments={appointments} blocks={blocks} onOpen={setSelected} onCreate={canEdit ? createAt : null} />
     <div className="agenda-list-panel panel">
-      <div className="panel-heading"><div><p className="eyebrow">{view === "dia" ? "DETALHES DO DIA" : "SEMANA"}</p><h2>Atendimentos</h2></div><span className="count-chip">{data.appointments.length} agendados</span></div>
+      <div className="panel-heading"><div><p className="eyebrow">{view === "dia" ? "DETALHES DO DIA" : "SEMANA"}</p><h2>Atendimentos</h2></div><span className="count-chip">{appointments.length} atendimento(s)</span></div>
       {days.map((day) => {
-        const events = data.appointments.filter((item) => item.startsAt.slice(0, 10) === day);
-        const blocks = data.blockedSlots.filter((item) => item.startsAt.slice(0, 10) === day);
+        const events = appointments.filter((item) => item.startsAt.slice(0, 10) === day);
+        const dayBlocks = blocks.filter((item) => item.startsAt < `${day}T24:00` && item.endsAt > `${day}T00:00`);
         return <div key={day} className="agenda-day-group">
           {view === "semana" && <h3>{dateLabel(day, { weekday: "long", day: "2-digit", month: "long" })}</h3>}
           {events.length ? events.map((appointment) => <AppointmentCard key={appointment.id} appointment={appointment} onOpen={setSelected} />)
             : <p className="day-empty">Nenhum atendimento neste dia.</p>}
-          {blocks.map((block) => <div className="block-row" key={block.id}><CalendarX2 size={16} /> {block.professionalName || "Equipe"} · {block.reason || "Horário indisponível"} · Bloqueado por {block.createdByName || "Não identificado"}
+          {dayBlocks.map((block) => <div className="block-row" key={block.id}><CalendarX2 size={16} /> {block.professionalName || "Equipe"} · {block.reason || "Horário indisponível"} · Bloqueado por {block.createdByName || "Não identificado"}
             <span>{dateTimeLabel(block.startsAt)} — {dateTimeLabel(block.endsAt)}</span><button className="icon-button compact" onClick={() => api(`/blocked-slots/${block.id}`, { method: "DELETE" }).then(refresh).catch(reason => setError(reason.message))} aria-label="Remover bloqueio"><X size={15} /></button></div>)}
         </div>;
       })}
     </div>
-    {modal === "new" && <AppointmentForm initialDate={date} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
+    {modal === "new" && <AppointmentForm initialDate={newSlot.day} initialHour={newSlot.hour} initialProfessional={newSlot.professional} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {modal === "block" && <BlockForm initialDate={date} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {selected && <AppointmentDetails appointment={selected} readOnly={user.role === "profissional" || user.tenantId === "tenant-salao-demo"} canCompleteService={user.role === "profissional"} onClose={() => setSelected(null)} onUpdated={() => { setSelected(null); refresh(); }} />}
   </>;
@@ -1025,12 +1112,12 @@ function ClientsPage({ user }) {
     <section className="panel clients-panel">
       <div className="table-toolbar"><label className="search-field"><Search size={17} /><input placeholder="Buscar por nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} /></label>
         <span className="count-chip">{clients.length} clientes</span>{user.role !== "profissional" && <a className="button button-secondary export-button" href="/api/export/clients.csv"><Download size={15} /> Exportar CSV</a>}</div>
-      {clients.length ? <div className="table-scroll"><table><thead><tr><th>CLIENTE</th><th>CONTATO</th>{user.role !== "profissional" && <><th>ATENDIMENTOS</th><th>ÚLTIMA VISITA</th></>}<th> </th></tr></thead>
-        <tbody>{clients.map((client) => <tr key={client.id}>
-          <td><div className="table-person"><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><b>{client.name}</b><small>{user.role === "profissional" ? "Cliente do estabelecimento" : client.email || client.notes || "Cliente Simplifica"}</small></div></div></td>
-          <td>{client.phone || "—"}</td>{user.role !== "profissional" && <td><span className="count-chip">{client.appointmentCount}</span></td>}
-          {user.role !== "profissional" && <td>{client.lastVisit ? dateTimeLabel(client.lastVisit) : "Ainda sem visita"}</td>}
-          <td><div className="row-actions">{user.role !== "profissional" && <button className="text-link" onClick={() => showHistory(client)}>Histórico</button>}
+      {clients.length ? <div className="table-scroll client-records"><table role="table" aria-label="Clientes"><thead><tr><th>CLIENTE</th><th>CONTATO</th>{user.role !== "profissional" && <><th>ATENDIMENTOS</th><th>ÚLTIMA VISITA</th></>}<th> </th></tr></thead>
+        <tbody role="rowgroup">{clients.map((client) => <tr role="row" key={client.id}>
+          <td role="cell" className="client-record-name"><div className="table-person"><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><b>{client.name}</b><small>{user.role === "profissional" ? "Cliente do estabelecimento" : client.email || client.notes || "Cliente Simplifica"}</small></div></div></td>
+          <td role="cell" data-label="Contato">{client.phone || "Sem telefone"}</td>{user.role !== "profissional" && <td role="cell" data-label="Atendimentos"><span className="count-chip">{client.appointmentCount}</span></td>}
+          {user.role !== "profissional" && <td role="cell" data-label="Última visita">{client.lastVisit ? dateTimeLabel(client.lastVisit) : "Ainda sem visita"}</td>}
+          <td role="cell" className="client-record-actions"><div className="row-actions">{user.role !== "profissional" && <button className="text-link" onClick={() => showHistory(client)}>Histórico</button>}
             {user.role !== "profissional" && <button className="icon-button compact" onClick={() => setModal(client)} aria-label="Editar cliente"><MoreHorizontal size={18} /></button>}
             {client.phone && <a className="icon-button compact" aria-label="Enviar mensagem" href={whatsappUrl(client.phone, `Olá, ${client.name}! Tudo bem?`) } target="_blank" rel="noreferrer"><Phone size={15} /></a>}</div></td>
         </tr>)}</tbody></table></div>
@@ -1362,6 +1449,7 @@ function ServicesPage({ user, section = "services" }) {
       {section === "services" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">SERVIÇOS OFERECIDOS</p><h2>Serviços</h2></div><span className="count-chip">{services.length}</span></div>
         {services.length ? <div className="management-list">{services.map((service) => <article className="service-row" key={service.id}>
           <span className="service-row-icon"><Scissors size={18} /></span><div className="min-w-0 flex-1"><b>{service.name}</b><small>{service.durationMinutes} min · {service.commissionMode === "custom" ? `Repasse ${service.serviceCommissionPercent}%` : "Comissão padrão da equipe"} · Retenção ${service.houseSharePercent || 0}%</small></div>
+          <span className={`status-badge ${service.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{service.active ? "Ativo" : "Inativo"}</span>
           <strong>{money(service.priceCents)}</strong>{user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="icon-button compact" onClick={() => setModal(service)} aria-label="Editar serviço"><MoreHorizontal size={18} /></button>}
         </article>)}</div> : <EmptyState icon={Scissors} title="Nenhum serviço cadastrado" description="Adicione seu primeiro serviço." />}</section>}
       {section === "team" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe</h2></div><span className="count-chip">{team.filter((person) => person.active).length} ativos</span></div>
@@ -1369,7 +1457,10 @@ function ServicesPage({ user, section = "services" }) {
           <span className="table-avatar">{person.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
           <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.jobTitle || (person.role === "recepcao" ? "Recepção" : person.role === "sem_acesso" ? "Apoio" : "Profissional")}</small><small>{person.role === "profissional" ? `Acesso ${person.loginCode || person.staffCode || "—"} · Comissão padrão ${person.commissionPercent}%` : person.role === "recepcao" ? `${person.email} · Recepção` : "Sem login"}</small></div>
           {person.active ? <span className="status-badge bg-emerald-50 text-emerald-700">Ativa</span> : <span className="status-badge bg-slate-100 text-slate-500">Inativa</span>}
-          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="button button-quiet" onClick={() => setEditPerson({...person})}>Editar</button>}
+          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <details className="row-action-menu">
+            <summary className="button button-secondary" aria-label={`Ações de ${person.name}`}><MoreHorizontal size={17}/> Ações</summary>
+            <div className="row-action-options">
+              <button className="button button-quiet" onClick={() => setEditPerson({...person})}>Editar</button>
           {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && person.role === "profissional" && <button className="button button-quiet" onClick={() => setHoursFor(person)}>Horários</button>}
           {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && person.role === "profissional" && <button className="button button-quiet" onClick={async () => {
             try {
@@ -1378,10 +1469,12 @@ function ServicesPage({ user, section = "services" }) {
             } catch (reason) { setError(reason.message); }
           }}>Configurar acesso</button>}
           {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && person.role === "recepcao" && <button className="button button-quiet" onClick={() => { setPasswordFor(person); setResetPassword(""); }}>Redefinir senha</button>}
-          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="icon-button compact" onClick={async () => {
+          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="button button-quiet" onClick={async () => {
             try { await api(`/team-members/${person.id}`, { method: "PATCH", body: { name: person.name, phone: person.phone, commissionPercent: person.commissionPercent, active: !person.active } }); refresh(); }
             catch (reason) { setError(reason.message); }
-          }} aria-label={person.active ? "Desativar pessoa da equipe" : "Ativar pessoa da equipe"}><ShieldCheck size={16} /></button>}
+          }} aria-label={person.active ? "Desativar pessoa da equipe" : "Ativar pessoa da equipe"}><ShieldCheck size={16} />{person.active ? "Desativar" : "Ativar"}</button>}
+            </div>
+          </details>}
         </article>)}</div> : <EmptyState icon={UserRound} title="Só você por enquanto" description="Adicione profissionais para compartilhar a agenda." />}</section>}
     </div>
     {modal === "team" && <TeamMemberForm services={services} businessSlug={user.slug} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
@@ -1441,13 +1534,12 @@ function BookingSharePage({ user }) {
   const [message, setMessage] = useState("");
   useEffect(() => { setBaseUrl(window.location.origin); }, []);
   const link = baseUrl ? `${baseUrl}${publicPath}` : publicPath;
-  const isLocal = /^(localhost|127\\.0\\.0\\.1)$/i.test((() => {
-    try { return new URL(link).hostname; } catch { return ""; }
-  })());
+  const hostname = baseUrl && new URL(baseUrl).hostname;
+  const isLocal = ["localhost", "[::1]", "0.0.0.0"].includes(hostname) || hostname.startsWith("127.");
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(link);
-      setMessage("Link copiado. Compartilhe com seus clientes.");
+      setMessage(isLocal ? "Endereço local copiado para teste." : "Link copiado. Compartilhe com seus clientes.");
     } catch {
       setMessage("Não foi possível copiar automaticamente. Selecione e copie o endereço acima.");
     }
@@ -1471,10 +1563,10 @@ function BookingSharePage({ user }) {
         </div>
         <div className="booking-share-actions">
           <a className="button button-secondary" href={publicPath} target="_blank" rel="noreferrer"><ExternalLink size={16}/> Ver página do cliente</a>
-          <a className="button button-secondary" href={whatsapp} target="_blank" rel="noreferrer"><Share2 size={16}/> Enviar por WhatsApp</a>
+          {!isLocal && <a className="button button-secondary" href={whatsapp} target="_blank" rel="noreferrer"><Share2 size={16}/> Enviar por WhatsApp</a>}
         </div>
         {message && <p role="status" className="success-message">{message}</p>}
-        {isLocal && <p className="booking-share-notice"><Info size={17}/> Este link usa localhost. Ele funciona neste computador, mas para clientes em outros dispositivos será necessário publicar a página em HTTPS ou usar um endereço acessível na rede.</p>}
+        {isLocal && <p className="booking-share-notice"><Info size={17}/> Este endereço funciona apenas neste computador. Para divulgar aos clientes, abra o sistema pelo endereço público.</p>}
         {user.tenantId === "tenant-salao-demo" && <p className="booking-share-notice"><Info size={17}/> Esta é uma demonstração de compartilhamento. A reserva pública demonstrativa não grava solicitações reais.</p>}
       </section>
       <section className="panel management-panel booking-qr-panel">
@@ -1483,12 +1575,11 @@ function BookingSharePage({ user }) {
             <p className="panel-subtitle">Exiba no balcão ou compartilhe com seu cliente.</p></div>
           <QrCode size={20} className="text-blue-500"/>
         </div>
-        {baseUrl && <img
-          className="booking-qr-image"
-          alt="QR Code que direciona para a página pública de agendamentos"
-          src={`https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=12&data=${encodeURIComponent(link)}`}
-        />}
-        <p className="booking-qr-caption">O QR Code é gerado por um serviço externo e requer conexão com a internet. Não compartilha dados de clientes, apenas o endereço público de agendamento.</p>
+        {baseUrl && <div className="booking-qr-image">
+          <QRCode value={link} size={200} title="QR Code da página de agendamento"
+            role="img" aria-label="QR Code da página de agendamento" />
+        </div>}
+        <p className="booking-qr-caption">{isLocal ? "O QR Code aponta para o endereço local de teste." : "Escaneie o código para abrir a página de agendamento."}</p>
       </section>
     </div>
   </>;
@@ -1602,7 +1693,7 @@ function CashOpeningPanel({ revision, onOpened }) {
   </section>;
 }
 
-function DailyCashClosing({ revision, user }) {
+function DailyCashClosing({ revision, user, children }) {
   const [date, setDate] = useState(localDate().slice(0, 10));
   const [summary, setSummary] = useState(null);
   const [closings, setClosings] = useState([]);
@@ -1681,23 +1772,24 @@ function DailyCashClosing({ revision, user }) {
     finally { setBusy(false); }
   };
   const methods = summary?.closing?.methods || summary?.methods || {};
-  return <section className="panel management-panel">
+  return <>
+  <section className="panel management-panel" id="caixa-do-dia">
     <div className="panel-heading">
-      <div><p className="eyebrow">CONFERÊNCIA DIÁRIA</p><h2>Fechamento diário de caixa</h2>
+      <div><p className="eyebrow">CONFERÊNCIA DIÁRIA</p><h2>{summary?.today && date !== summary.today ? "Caixa da data selecionada" : "Caixa de hoje"}</h2>
         <p className="panel-subtitle">Registre a abertura em espécie, confira os recebimentos e encerre o dia. O saldo inicial não é faturamento.</p></div>
       <input className="input" type="date" aria-label="Data do caixa" value={date}
-        max={summary?.today || localDate().slice(0,10)} min={!isOwner ? (summary?.today || localDate().slice(0,10)) : undefined} onChange={e => setDate(e.target.value)}/>
+        max={summary?.today || localDate().slice(0,10)} min={!isOwner ? (summary?.today || localDate().slice(0,10)) : undefined} onChange={e => { if (e.target.value) { setDate(e.target.value); setSummary(null); setNotes(""); } }}/>
     </div>
     <ErrorMessage>{error}</ErrorMessage>
     {!summary ? <p className="report-empty">Carregando o caixa...</p> : <>
       <div className="stats-grid finance-stats">
         <StatCard title="Total recebido" value={money(summary.closing?.expectedTotalCents ?? summary.expectedTotalCents)} note={`${summary.closing?.receiptCount ?? summary.receiptCount} recebimento(s)`} icon={Wallet} tone="green"/>
-        <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents + (summary.closing.supplyCents || 0) - (summary.closing.withdrawalCents || 0) : summary.expectedDrawerCashCents)} note="Saldo inicial + recebimentos em espécie" icon={CircleDollarSign} tone="blue"/>
+        <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents + (summary.closing.supplyCents || 0) - (summary.closing.withdrawalCents || 0) : summary.expectedDrawerCashCents)} note="Saldo inicial + dinheiro recebido + suprimentos − sangrias" icon={CircleDollarSign} tone="blue"/>
         <StatCard title="Situação" value={summary.cashState === "closed" ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.cashState === "closed" ? "green" : "orange"}/>
       </div>
       {summary.opening && <div className="panel" style={{marginTop:16}}>
         <b>Abertura registrada por {summary.opening.openedByName}</b>
-        <p className="panel-subtitle">Saldo inicial em espécie: {money(summary.opening.openingCashCents)} · {summary.opening.openedAt}</p>
+        <p className="panel-subtitle">Saldo inicial em espécie: {money(summary.opening.openingCashCents)} · {cashTimestamp(summary.opening.openedAt, summary.timezone)}</p>
         {summary.opening.notes && <p className="panel-subtitle">{summary.opening.notes}</p>}
       </div>}
 
@@ -1730,7 +1822,7 @@ function DailyCashClosing({ revision, user }) {
         {(summary.movements || []).map(movement => <article className="service-row" key={movement.id}>
           <div className="min-w-0 flex-1">
             <b>{movement.type === "sangria" ? "Sangria" : "Suprimento"} · {movement.createdByName}</b>
-            <small>{movement.reason} · {movement.createdAt}</small>
+            <small>{movement.reason} · {cashTimestamp(movement.createdAt, summary.timezone)}</small>
           </div>
           <strong>{money(movement.amountCents)}</strong>
         </article>)}
@@ -1764,19 +1856,21 @@ function DailyCashClosing({ revision, user }) {
         </Button>
       </> : <p className="panel-subtitle">Abra o caixa do dia para habilitar o fechamento.</p>}
     </>}
-    {isOwner && <>
-    <div className="panel-heading" style={{marginTop:24}}><div><p className="eyebrow">REGISTROS</p><h3>Últimos fechamentos</h3></div></div>
+  </section>
+    {children}
+    {isOwner && <section className="panel management-panel" id="historico-do-caixa">
+    <div className="panel-heading"><div><h2>Histórico de fechamentos</h2><p className="panel-subtitle">Últimos 60 fechamentos registrados.</p></div></div>
     {closings.length ? <div className="management-list">{closings.map(item =>
       <article className="service-row" key={item.id}>
         <span className="service-row-icon"><Check size={18}/></span>
-        <div className="min-w-0 flex-1"><b>{item.cashDate} · {item.closedByName}</b>
+        <div className="min-w-0 flex-1"><b>{dateLabel(item.cashDate)} · {item.closedByName}</b>
           <small>{item.receiptCount} recebimento(s) · Diferença: {money(item.differenceCents)}</small></div>
         <strong>{money(item.expectedTotalCents)}</strong>
         <Button variant="secondary" onClick={()=>downloadPdf(item.id,item.cashDate)}><Download size={15}/> PDF</Button>
       </article>)}</div> : <p className="report-empty">Ainda não existem fechamentos registrados.</p>}
     <p className="panel-subtitle">Recebimentos antigos sem data registrada não entram automaticamente na conferência diária.</p>
-      </>}
-  </section>;
+    </section>}
+  </>;
 }
 
 function FinancialHubPage({ user }) {
@@ -1813,13 +1907,14 @@ function FinancialHubPage({ user }) {
 function ReceivablesPage({ user }) {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [items, setItems] = useState([]);
+  const [completedCount, setCompletedCount] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [cashRevision, setCashRevision] = useState(0);
   const [method, setMethod] = useState("pix");
   const refresh = useCallback(() =>
     api(`/receivables?month=${encodeURIComponent(month)}`)
-      .then(data => setItems(data.receivables))
+      .then(data => { setItems(data.receivables); setCompletedCount(data.completedCount); })
       .catch(reason => setError(reason.message)), [month]);
   useEffect(() => { refresh(); }, [refresh]);
   const pending = items.filter(item => !item.paid);
@@ -1835,16 +1930,22 @@ function ReceivablesPage({ user }) {
   };
   return <>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
-    <PageTitle eyebrow="CONTROLE DE CAIXA" title="Caixa e recebimentos"
-      description="Separe os serviços realizados dos pagamentos efetivamente registrados." />
+    <nav className="cash-section-nav" aria-label="Seções de caixa">
+      <a href="#caixa-do-dia">Caixa de hoje</a><a href="#recebimentos-do-mes">Recebimentos do mês</a>
+      {user.role === "dono" && <a href="#historico-do-caixa">Histórico de fechamentos</a>}
+    </nav>
+    <DailyCashClosing revision={cashRevision} user={user}>
+    <div id="recebimentos-do-mes" className="cash-receivables">
+    <h2>Recebimentos do mês</h2>
+    <p className="panel-subtitle">O recebido usa a data do pagamento. Os atendimentos concluídos e os pendentes usam a data de realização.</p>
     <div className="month-filter"><label htmlFor="cash-month">Mês de referência</label>
       <input id="cash-month" className="input month-input" type="month" value={month}
         onChange={e => setMonth(e.target.value)} /></div>
     <ErrorMessage>{error}</ErrorMessage>
     <section className="stats-grid finance-stats">
-      <StatCard title="Recebido" value={money(total(paid))} note="Serviços com pagamento registrado" icon={Wallet} tone="green" />
+      <StatCard title="Recebido no mês" value={money(total(paid))} note="Por data de pagamento" icon={Wallet} tone="green" />
       <StatCard title="A receber" value={money(total(pending))} note={`${pending.length} atendimento(s) pendente(s)`} icon={Clock3} tone="orange" />
-      <StatCard title="Concluídos" value={items.length} note="No período selecionado" icon={CheckCheck} tone="blue" />
+      <StatCard title="Concluídos no mês" value={completedCount} note="No período selecionado" icon={CheckCheck} tone="blue" />
     </section>
     <section className="panel management-panel">
       <div className="panel-heading"><div><p className="eyebrow">RECEBIMENTOS PENDENTES</p><h2>Registrar recebimento</h2>
@@ -1876,7 +1977,8 @@ function ReceivablesPage({ user }) {
         </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
     </section>
     <UnreconciledCash user={user} onChange={() => setCashRevision(n => n + 1)}/>
-    <DailyCashClosing revision={cashRevision} user={user}/>
+    </div>
+    </DailyCashClosing>
   </>;
 }
 
@@ -1939,12 +2041,12 @@ function FinancePage() {
     } catch (reason) { setError(reason.message); }
   };
   return <>
-    <PageTitle eyebrow="CUIDAR DO NEGÓCIO TAMBÉM É CUIDAR DE VOCÊ" title="Financeiro e relatórios" description="Acompanhe seus resultados com clareza."
+    <PageTitle eyebrow="RESULTADOS DO ESTABELECIMENTO" title="Financeiro e relatórios" description="Recebimentos, atendimentos realizados e histórico de alterações."
       actions={<><a className="button button-secondary" href="/api/export/appointments.csv"><Download size={16} /> Exportar atendimentos</a><Button onClick={downloadBackup}><ArrowDownToLine size={16} /> Backup do banco</Button></>} />
     <div className="month-filter"><label htmlFor="report-month">Mês de referência</label><input id="report-month" className="input month-input" type="month" value={month} onChange={(e) => setMonth(e.target.value)} /></div>
     <ErrorMessage>{error}</ErrorMessage>
     <section className="stats-grid finance-stats">
-      <StatCard title="Faturamento recebido" value={money(report?.revenueCents)} note="Atendimentos concluídos e pagos" icon={CircleDollarSign} tone="green" />
+      <StatCard title="Faturamento recebido" value={money(report?.revenueCents)} note="Por data de pagamento" icon={CircleDollarSign} tone="green" />
       <StatCard title="A receber" value={money(report?.pendingCents)} note="Serviços concluídos sem pagamento" icon={Clock3} tone="orange" />
       <StatCard title="Atendimentos concluídos" value={report?.completedCount ?? "—"} note="Neste mês" icon={CheckCheck} tone="blue" />
       <StatCard title="Serviços realizados" value={report?.byService?.length ?? "—"} note="Com pelo menos um atendimento" icon={Scissors} tone="purple" />
@@ -1955,7 +2057,7 @@ function FinancePage() {
         {report?.byService?.length ? <div className="report-list">{report.byService.map((item, index) => <div className="report-row" key={item.id}><span className={`rank rank-${index + 1}`}>{String(index + 1).padStart(2, "0")}</span><div className="min-w-0 flex-1"><b>{item.name}</b><small>{item.count} atendimentos</small></div><strong>{money(item.revenueCents)}</strong></div>)}
         </div> : <p className="report-empty">Os serviços realizados aparecerão aqui.</p>}
       </section>
-      <section className="panel report-panel"><div className="panel-heading"><div><p className="eyebrow">SEU TIME</p><h2>Comissão por profissional</h2></div></div>
+      <section className="panel report-panel"><div className="panel-heading"><div><p className="eyebrow">SEU TIME</p><h2>Comissão estimada por profissional</h2></div></div>
         {report?.byProfessional?.length ? <div className="report-list">{report.byProfessional.map((item) => <div className="report-row" key={item.id}><span className="table-avatar">{item.name[0]}</span><div className="min-w-0 flex-1"><b>{item.name}</b><small>{item.count} atendimentos · {money(item.revenueCents)} em vendas</small></div><strong>{money(item.commissionCents)}</strong></div>)}
         </div> : <p className="report-empty">As comissões dos atendimentos concluídos aparecerão aqui.</p>}
       </section>
@@ -2393,12 +2495,13 @@ function PublicRequestPage({ token }) {
       {!info ? <ErrorMessage>{error||"Consultando agendamento..."}</ErrorMessage> : <>
         <div className="booking-success public-receipt" role="status">
           <span><ClipboardCheck size={26}/></span><p className="eyebrow">COMPROVANTE DIGITAL DE SOLICITAÇÃO</p>
-          <h2>{info.businessName}</h2><p>Protocolo: <strong>{info.protocol}</strong></p>
+          <h1>{info.businessName}</h1><p>Protocolo: <strong>{info.protocol}</strong></p>
           <div className="public-booking-summary">
-            <b>{info.status==="agendado"?"Aguardando confirmação":statusNames[info.status]||info.status}</b>
+            <b className={`status-badge ${statusStyles[info.status] || ""}`}>{info.status==="agendado"?"Aguardando confirmação":statusNames[info.status]||info.status}</b>
+            <strong className="receipt-appointment-time">{dateTimeLabel(info.startsAt)}</strong>
             <span>Cliente: {info.clientName}</span>
             <span>{info.serviceName} · {info.professionalName}</span>
-            <span>{dateTimeLabel(info.startsAt)} · {money(info.priceCents)}</span>
+            <span>Valor: {money(info.priceCents)}</span>
           </div>
           <p>{info.status==="agendado"?"Sua solicitação ainda aguarda confirmação do estabelecimento.":info.status==="confirmado"?"Seu horário foi confirmado pelo estabelecimento.":info.status==="cancelado"?"Esta solicitação foi cancelada.":"Consulte o estabelecimento em caso de dúvidas."}</p>
           <div className="booking-share-actions">
