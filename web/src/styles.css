@@ -122,7 +122,25 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .page-title-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 24px; }
 .page-title-row h1 { margin: 5px 0 0; color: #0f172a; font-size: 27px; font-weight: 650; letter-spacing: -.85px; line-height: 1.2; }
 .page-description { margin: 7px 0 0; color: #7a8798; font-size: 11px; }
-.page-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.page-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: flex-end; }
+.page-actions > .button { flex-shrink: 0; }
+.dashboard-action-button { width: 160px; min-height: 40px; }
+.dashboard-cash-status {
+  margin-bottom: 24px;
+  padding: 18px 20px;
+  border-left: 4px solid #d97706;
+}
+.dashboard-cash-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
+  align-items: center;
+  column-gap: 20px;
+  row-gap: 12px;
+}
+.dashboard-cash-copy { min-width: 0; }
+.dashboard-cash-action { display: flex; align-items: center; justify-content: flex-end; }
+.dashboard-cash-action .dashboard-action-button { width: 100%; }
+
 .button { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 9px; padding: 0 13px; font-size: 11px; font-weight: 600; transition: .15s ease; white-space: nowrap; }
 .button:disabled { cursor: not-allowed; opacity: .6; }
 .button-primary { background: #2563eb; color: #fff; box-shadow: 0 2px 5px rgba(37,99,235,.16); }
@@ -400,6 +418,11 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
   .overview-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
+  .dashboard-cash-content { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-cash-action { justify-content: flex-start; }
+  .dashboard-action-button { width: auto; min-width: 160px; }
+  .page-actions { justify-content: flex-start; }
+
   .sidebar { z-index: 55; width: 270px; transform: translateX(-105%); transition: transform .2s ease; }
   .sidebar-open { transform: translateX(0); }
   .sidebar-scrim { position: fixed; z-index: 50; inset: 0; border: 0; background: rgba(15,23,42,.35); }
