@@ -60,8 +60,8 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS clients_search_idx ON clients(tenant_id, name, phone);
-  CREATE UNIQUE INDEX IF NOT EXISTS clients_phone_idx
-    ON clients(tenant_id, phone) WHERE phone != '';
+  CREATE UNIQUE INDEX IF NOT EXISTS clients_phone_name_idx
+    ON clients(tenant_id, phone, name COLLATE NOCASE) WHERE phone != '';
   CREATE TABLE IF NOT EXISTS services (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -360,6 +360,8 @@ db.transaction(() => {
     }
   }
 })();
+// A contact number can belong to more than one person (for example, a family).
+db.exec("DROP INDEX IF EXISTS clients_phone_idx");
 ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
 ensureColumn("commission_payments", "batch_id", "TEXT");
 ensureColumn("whatsapp_notifications", "delivery_state", "TEXT NOT NULL DEFAULT 'pending'");

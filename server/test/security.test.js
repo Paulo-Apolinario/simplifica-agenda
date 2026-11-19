@@ -177,7 +177,7 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     });
     assert.equal(quickClient.status, 201);
     assert.equal((await request("/booking/clients", "POST", {
-      name: "Duplicada", phone: "85988887777",
+      name: "Cliente via profissional", phone: "85988887777",
     })).status, 409);
     const otherTenant = db.prepare("SELECT tenant_id AS tenantId FROM clients WHERE id = ?")
       .get(quickClient.body.client.id);
@@ -275,6 +275,18 @@ test("commercial setup, authenticated account and staff password rotation", asyn
       name: "Outro cliente", phone: "85977776665",
       serviceId: "unassigned-service", professionalId: staffId, startsAt: "2030-01-08T16:30:00",
     })).status, 409);
+    // Shared contact numbers must not replace a different customer's identity.
+    db.prepare("INSERT INTO users (id, tenant_id, name, email, password_hash, role) VALUES (?, ?, ?, ?, ?, 'profissional')")
+      .run("p-parallel", login.body.user.tenantId, "Outro profissional", "parallel@teste.local", "hash-irrelevante");
+    const sharedPhone = await request("/public/comercio-teste/appointments", "POST", {
+      name: "Outra pessoa", phone: "85977776666",
+      serviceId: "unassigned-service", professionalId: "p-parallel", startsAt: "2030-01-08T16:30:00",
+    });
+    assert.equal(sharedPhone.status, 201, JSON.stringify(sharedPhone.body));
+    const sharedReceipt = await request(`/public/manage/${sharedPhone.body.managementToken}`);
+    assert.equal(sharedReceipt.body.appointment.clientName, "Outra pessoa");
+    const reservedClients = db.prepare("SELECT client_id FROM appointments WHERE id IN (?, ?)").all(publicBooking.body.id, sharedPhone.body.id);
+    assert.notEqual(reservedClients[0].client_id, reservedClients[1].client_id);
     // Customer management link uses a secret token; the receipt is not a final confirmation.
     assert.match(publicBooking.body.managementToken, /^[a-f0-9]{64}$/);
     assert.equal(publicBooking.body.status, "agendado");
@@ -350,6 +362,11 @@ test("commercial setup, authenticated account and staff password rotation", asyn
       WHERE tenant_id = ? AND professional_id = ? AND weekday = 2`)
       .run(login.body.user.tenantId, staffId);
 
+    const daySchedule = await request("/schedule?from=2030-01-08T00:00:00&to=2030-01-09T00:00:00");
+    assert.ok(daySchedule.body.appointments.some(row => row.id === sharedPhone.body.id && row.clientName === "Outra pessoa"));
+    const corrected = await request(`/appointments/${sharedPhone.body.id}`, "PATCH", { clientId: clientId });
+    assert.equal(corrected.status, 200);
+    assert.equal(corrected.body.appointment.clientId, clientId);
     const newPublicRequests = await request("/requests");
     assert.equal(newPublicRequests.status, 200);
     assert.equal(newPublicRequests.body.requests.some(item => item.id === publicBooking.body.id && item.status === "agendado"), true);

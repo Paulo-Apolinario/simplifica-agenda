@@ -847,12 +847,20 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState(null);
+  const [clientId, setClientId] = useState(appointment.clientId);
+  const [clients, setClients] = useState([]);
+  const canChangeClient = !readOnly && ["agendado", "confirmado"].includes(appointment.status);
+  useEffect(() => {
+    if (canChangeClient) api("/clients").then(({clients}) => setClients(clients))
+      .catch((reason) => setError(reason.message));
+  }, [canChangeClient]);
   const save = async (patch) => {
     setSaving(true); setError("");
     try {
       const result = await api(`/appointments/${appointment.id}`, { method: "PATCH", body: patch });
-      if (needsManualWhatsApp(appointment, result.whatsappState)) {
-        setNotice({ ...appointment, status: patch.status, startsAt: patch.startsAt || appointment.startsAt });
+      const savedAppointment = result.appointment || appointment;
+      if (needsManualWhatsApp(savedAppointment, result.whatsappState)) {
+        setNotice({ ...savedAppointment, status: patch.status, startsAt: patch.startsAt || savedAppointment.startsAt });
       } else {
         onUpdated();
       }
@@ -896,6 +904,10 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
       <Button disabled={saving} onClick={completeOwn}><CheckCheck size={16}/> {saving ? "Concluindo..." : "Concluir serviço realizado"}</Button>
     </div>}
     {!readOnly && <div className="form-stack mt-5">
+      {canChangeClient && <SelectField label="Cliente do atendimento" value={clientId} onChange={(event) => setClientId(event.target.value)}>
+        <option value={appointment.clientId}>{appointment.clientName}</option>
+        {clients.filter((client) => client.id !== appointment.clientId).map((client) => <option key={client.id} value={client.id}>{client.name}{client.phone ? ` · ${client.phone}` : ""}</option>)}
+      </SelectField>}
       <Field label="Remarcar para" type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
       <div className="form-grid">
         <SelectField label="Status" value={status} onChange={(e) => setStatus(e.target.value)}>
@@ -910,7 +922,7 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
       <ErrorMessage>{error}</ErrorMessage>
       <div className="modal-actions modal-actions-split">
         {whatsApp && <a href={whatsApp} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={16} /> WhatsApp</a>}
-        <Button disabled={saving} onClick={() => save({ status, paymentMethod: method, priceCents: price, ...(startsAt !== appointment.startsAt.slice(0, 16) ? { startsAt } : {}) })}>{saving ? "Salvando..." : "Salvar alterações"}</Button>
+        <Button disabled={saving} onClick={() => save({ status, paymentMethod: method, priceCents: price, ...(clientId !== appointment.clientId ? { clientId } : {}), ...(startsAt !== appointment.startsAt.slice(0, 16) ? { startsAt } : {}) })}>{saving ? "Salvando..." : "Salvar alterações"}</Button>
       </div>
     </div>}
   </Modal>;
@@ -929,7 +941,7 @@ function AgendaGrid({ days, professionals, appointments, blocks, onOpen, onCreat
   const lastHour = Math.max(20, ...scheduledHours);
   const hours = Array.from({ length: lastHour - firstHour }, (_, index) =>
     `${String(firstHour + index).padStart(2, "0")}:00`);
-  const pixels = (value) => value * 64 / 60;
+  const pixels = (value) => value * 96 / 60;
   const geometry = (item, day) => ({
     top: pixels(Math.max(0, minutes(item.startsAt, day) - firstHour * 60)),
     height: pixels(minutes(item.endsAt, day) - Math.max(firstHour * 60, minutes(item.startsAt, day))),
@@ -962,7 +974,7 @@ function AgendaGrid({ days, professionals, appointments, blocks, onOpen, onCreat
             const label = `${item.startsAt.slice(11, 16)} · ${item.clientName} · ${item.serviceName}`;
             return <button key={item.id} className={`calendar-event event-${item.status}`}
               style={geometry(item, day)} title={label} aria-label={label} onClick={() => onOpen(item)}>
-              <b>{item.startsAt.slice(11, 16)} · {item.clientName}</b><span>{item.serviceName}</span>
+              <b>{item.startsAt.slice(11, 16)} · {item.clientName}</b><span>{item.serviceName} · {statusNames[item.status]}</span>
             </button>;
           })}
         </div>;
@@ -973,7 +985,6 @@ function AgendaGrid({ days, professionals, appointments, blocks, onOpen, onCreat
 
 function AgendaPage({ user }) {
   const [date, setDate] = useState(localDate());
-  const [view, setView] = useState("dia");
   const [professionals, setProfessionals] = useState([]);
   const [professionalId, setProfessionalId] = useState("");
   const [newSlot, setNewSlot] = useState(null);
@@ -982,15 +993,15 @@ function AgendaPage({ user }) {
   const [modal, setModal] = useState("");
   const [selected, setSelected] = useState(null);
   const [error, setError] = useState("");
-  const days = useMemo(() => {
-    const weekStart = shiftDate(date, -(new Date(`${date}T12:00:00`).getDay() + 6) % 7);
-    return view === "semana" ? Array.from({ length: 7 }, (_, index) => shiftDate(weekStart, index)) : [date];
-  }, [date, view]);
+  const days = useMemo(() => [date], [date]);
+  const refreshVersion = useRef(0);
   const refresh = useCallback(() => {
+    const version = ++refreshVersion.current;
     const from = `${days[0]}T00:00:00`;
     const to = `${shiftDate(days[days.length - 1], 1)}T00:00:00`;
-    api(`/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
-      .then(setData).catch((reason) => setError(reason.message));
+    return api(`/schedule?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`)
+      .then((result) => { if (version === refreshVersion.current) setData(result); })
+      .catch((reason) => { if (version === refreshVersion.current) setError(reason.message); });
   }, [days]);
   useEffect(() => { refresh(); }, [refresh]);
   useEffect(() => {
@@ -1008,15 +1019,15 @@ function AgendaPage({ user }) {
     setNewSlot({ day, hour, professional });
     setModal("new");
   };
-  const move = (offset) => setDate(shiftDate(date, offset * (view === "semana" ? 7 : 1)));
+  const move = (offset) => setDate(shiftDate(date, offset));
   return <>
     <PageTitle eyebrow="SUA ROTINA EM UM SÓ LUGAR" title="Agenda" description={dateLabel(date)}
       actions={<>{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => createAt(date, "09:00", professionalId)}><Plus size={17} /> Novo agendamento</Button>}</>} />
     <div className="agenda-toolbar">
       <div className="date-nav"><button className="icon-button" onClick={() => move(-1)} aria-label="Anterior"><ChevronLeft size={18} /></button>
         <button className="date-today" onClick={() => setDate(localDate())}>Hoje</button><button className="icon-button" onClick={() => move(1)} aria-label="Próximo"><ChevronRight size={18} /></button></div>
-      <div className="view-switch"><button className={view === "dia" ? "selected" : ""} onClick={() => setView("dia")}>Dia</button><button className={view === "semana" ? "selected" : ""} onClick={() => setView("semana")}>Semana</button></div>
-      <span className="agenda-current-label">{view === "semana" ? `${dateLabel(days[0], { day: "2-digit", month: "short" })} — ${dateLabel(days.at(-1), { day: "2-digit", month: "short" })}` : dateLabel(date, { weekday: "long", day: "2-digit", month: "long" })}</span>
+      <Field label="Data da agenda" type="date" value={date} onChange={(event) => { if (event.target.value) setDate(event.target.value); }} />
+      <span className="agenda-current-label">{dateLabel(date, { weekday: "long", day: "2-digit", month: "long" })}</span>
     </div>
     <ErrorMessage>{error}</ErrorMessage>
     {team.length > 1 && <div className="agenda-professional-filter">
@@ -1028,12 +1039,11 @@ function AgendaPage({ user }) {
     <AgendaGrid days={days} professionals={visibleTeam.length ? visibleTeam : [{ id: "", name: "Agenda" }]}
       appointments={appointments} blocks={blocks} onOpen={setSelected} onCreate={canEdit ? createAt : null} />
     <div className="agenda-list-panel panel">
-      <div className="panel-heading"><div><p className="eyebrow">{view === "dia" ? "DETALHES DO DIA" : "SEMANA"}</p><h2>Atendimentos</h2></div><span className="count-chip">{appointments.length} atendimento(s)</span></div>
+      <div className="panel-heading"><div><h2>Agendamentos do dia</h2><p className="panel-subtitle">{dateLabel(date)}</p></div><span className="count-chip">{appointments.length} atendimento(s)</span></div>
       {days.map((day) => {
         const events = appointments.filter((item) => item.startsAt.slice(0, 10) === day);
         const dayBlocks = blocks.filter((item) => item.startsAt < `${day}T24:00` && item.endsAt > `${day}T00:00`);
         return <div key={day} className="agenda-day-group">
-          {view === "semana" && <h3>{dateLabel(day, { weekday: "long", day: "2-digit", month: "long" })}</h3>}
           {events.length ? events.map((appointment) => <AppointmentCard key={appointment.id} appointment={appointment} onOpen={setSelected} />)
             : <p className="day-empty">Nenhum atendimento neste dia.</p>}
           {dayBlocks.map((block) => <div className="block-row" key={block.id}><CalendarX2 size={16} /> {block.professionalName || "Equipe"} · {block.reason || "Horário indisponível"} · Bloqueado por {block.createdByName || "Não identificado"}

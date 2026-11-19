@@ -733,3 +733,15 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
   .cash-section-nav a { flex: 1 1 auto; }
   .cash-receivables h2 { font-size: 18px; }
 }
+
+/* Agenda diária, com faixa de horário e coluna por profissional. */
+.operational-calendar .calendar-hour, .operational-calendar .time-column span { height: 96px; }
+.operational-calendar .calendar-day-heads, .operational-calendar .calendar-day-columns { grid-template-columns: repeat(var(--day-count), minmax(180px, 1fr)); }
+.operational-calendar .calendar-heading, .operational-calendar .calendar-body { min-width: calc(48px + var(--day-count) * 180px); }
+.operational-calendar .calendar-day-heads b { font-size: 13px; }
+.operational-calendar .calendar-event { padding: 4px 7px; gap: 2px; border-radius: 8px; box-shadow: 0 1px 2px #0f172a18; }
+.operational-calendar .calendar-event b { font-size: 12px; }
+.operational-calendar .calendar-event span { font-size: 11px; }
+.agenda-toolbar { flex-wrap: wrap; }
+.agenda-toolbar .field { min-width: 150px; }
+@media (max-width: 760px) { .agenda-toolbar .field { flex: 1; } }

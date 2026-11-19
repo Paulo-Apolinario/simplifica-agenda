@@ -137,12 +137,12 @@ function tenant(req) {
 }
 
 
-const auditFields = "id, status, starts_at AS startsAt, ends_at AS endsAt, price_cents AS priceCents, payment_method AS paymentMethod, paid_on AS paidOn, completed_on AS completedOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent";
+const auditFields = "id, client_id AS clientId, status, starts_at AS startsAt, ends_at AS endsAt, price_cents AS priceCents, payment_method AS paymentMethod, paid_on AS paidOn, completed_on AS completedOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent";
 function auditSnapshot(tenantId, appointmentId) {
   return db.prepare(`SELECT ${auditFields} FROM appointments WHERE tenant_id = ? AND id = ?`).get(tenantId, appointmentId) ?? null;
 }
 function auditSnapshotFromOriginal(row) {
-  return {id: row.id, status: row.status, startsAt: row.startsAt, endsAt: row.endsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod, paidOn: row.paidOn, completedOn: row.completedOn, commissionPercent: row.commissionPercent, houseSharePercent: row.houseSharePercent};
+  return {id: row.id, clientId: row.clientId, status: row.status, startsAt: row.startsAt, endsAt: row.endsAt, priceCents: row.priceCents, paymentMethod: row.paymentMethod, paidOn: row.paidOn, completedOn: row.completedOn, commissionPercent: row.commissionPercent, houseSharePercent: row.houseSharePercent};
 }
 function recordAppointmentAudit(tenantId, appointmentId, action, actor, before = null) {
   const after = auditSnapshot(tenantId, appointmentId);
@@ -620,7 +620,7 @@ app.post("/api/booking/clients", requireAuth, allowRoles("profissional"), (req, 
       .run(id, tenant(req), name, phone);
     res.status(201).json({ client: { id, name, phone } });
   } catch (error) {
-    if (error.code?.startsWith("SQLITE_CONSTRAINT")) return fail(res, 409, "Telefone já cadastrado. Selecione o cliente existente.");
+    if (error.code?.startsWith("SQLITE_CONSTRAINT")) return fail(res, 409, "Já existe um cliente com este nome e telefone. Selecione o cadastro existente.");
     throw error;
   }
 });
@@ -636,7 +636,7 @@ app.post("/api/clients", requireAuth, allowRoles("dono", "recepcao"), (req, res)
       .run(id, tenant(req), name, phone, email, notes);
     res.status(201).json({ client: db.prepare("SELECT id, name, phone, email, notes FROM clients WHERE id = ?").get(id) });
   } catch (error) {
-    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return fail(res, 409, "Já existe um cliente com este telefone.");
+    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return fail(res, 409, "Já existe um cliente com este nome e telefone.");
     throw error;
   }
 });
@@ -651,7 +651,7 @@ app.patch("/api/clients/:id", requireAuth, allowRoles("dono", "recepcao"), (req,
         String(req.body?.notes ?? "").trim(), req.params.id, tenant(req));
     res.json({ client: db.prepare("SELECT id, name, phone, email, notes FROM clients WHERE id = ?").get(req.params.id) });
   } catch (error) {
-    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return fail(res, 409, "Já existe um cliente com este telefone.");
+    if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return fail(res, 409, "Já existe um cliente com este nome e telefone.");
     throw error;
   }
 });
@@ -1277,7 +1277,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
 
 app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional", "recepcao"), async (req, res) => {
   const appointment = db.prepare(`
-    SELECT id, professional_id AS professionalId, service_id AS serviceId,
+    SELECT id, client_id AS clientId, professional_id AS professionalId, service_id AS serviceId,
       starts_at AS startsAt, ends_at AS endsAt, status, price_cents AS priceCents,
       payment_method AS paymentMethod, paid_on AS paidOn, completed_on AS completedOn, commission_percent AS commissionPercent, house_share_percent AS houseSharePercent, notes,
       booking_source AS bookingSource, (${completedEarlySql}) AS completedEarly
@@ -1293,6 +1293,19 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   if (db.prepare("SELECT 1 FROM commission_payments WHERE appointment_id = ? AND tenant_id = ?").get(appointment.id, tenant(req))) {
     return fail(res, 409, "Comissão já paga. Não é permitido alterar este serviço sem estorno auditado.");
   }
+  const clientId = req.body?.clientId ?? appointment.clientId;
+  if (typeof clientId !== "string" || !clientId) return fail(res, 400, "Cliente inválido.");
+  const clientChanged = clientId !== appointment.clientId;
+  if (clientChanged && !["agendado", "confirmado"].includes(appointment.status))
+    return fail(res, 409, "A troca de cliente está disponível para atendimentos agendados ou confirmados.");
+  const replacementClient = clientChanged
+    ? db.prepare("SELECT id, phone FROM clients WHERE id = ? AND tenant_id = ? AND notes != '__internal_anonymous__'").get(clientId, tenant(req))
+    : null;
+  if (clientChanged && !replacementClient) return fail(res, 400, "Cliente inválido.");
+  const previousPhone = clientChanged
+    ? db.prepare("SELECT phone FROM clients WHERE id = ? AND tenant_id = ?").get(appointment.clientId, tenant(req))?.phone
+    : null;
+  const resetConsent = clientChanged && appointment.bookingSource === "public" && replacementClient.phone !== previousPhone;
   const status = req.body?.status ?? appointment.status;
   const method = req.body?.paymentMethod === undefined ? appointment.paymentMethod : req.body.paymentMethod;
   const priceCents = req.body?.priceCents === undefined ? appointment.priceCents : Number(req.body.priceCents);
@@ -1343,13 +1356,14 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     })) return false;
     db.prepare(`
       UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?,
+        client_id = ?, whatsapp_opt_in = CASE WHEN ? THEN 0 ELSE whatsapp_opt_in END,
         completed_on = CASE WHEN ? != 'concluido' THEN NULL
            WHEN status != 'concluido' THEN ? ELSE completed_on END,
         payment_method = ?, paid_on = CASE WHEN payment_method = '' AND ? != '' THEN ? ELSE paid_on END,
         paid_at = CASE WHEN payment_method = '' AND ? != '' THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE paid_at END,
         price_cents = ?, notes = ?
       WHERE id = ? AND tenant_id = ?
-    `).run(startsAt, endsAt, status, status, cashDay(tenant(req)), method || "", method || "", cashDay(tenant(req)), method || "",
+    `).run(startsAt, endsAt, status, clientId, resetConsent ? 1 : 0, status, cashDay(tenant(req)), method || "", method || "", cashDay(tenant(req)), method || "",
       priceCents, req.body?.notes === undefined ? appointment.notes : String(req.body.notes),
       appointment.id, tenant(req));
     const updated = auditSnapshot(tenant(req), appointment.id);
@@ -1366,7 +1380,9 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   const whatsappState = result.noticeId
     ? await dispatchWhatsAppStatusChange(result.noticeId, tenant(req), appointment.id, status)
     : null;
-  res.json({ ok: true, whatsappState });
+  res.json({ ok: true, whatsappState, ...(clientChanged ? {
+    appointment: appointmentRows(tenant(req), "AND a.id = ?", [appointment.id])[0],
+  } : {}) });
 });
 
 app.post("/api/blocked-slots", requireAuth, allowRoles("dono", "recepcao", "profissional"), (req, res) => {
@@ -2042,8 +2058,8 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
     if (scheduleConflict(res, {
       tenantId: business.id, professionalId, startsAt: normalizedStart, endsAt,
     })) return false;
-    let client = db.prepare("SELECT id FROM clients WHERE tenant_id = ? AND phone = ?")
-      .get(business.id, phone);
+    let client = db.prepare("SELECT id FROM clients WHERE tenant_id = ? AND phone = ? AND name = ? COLLATE NOCASE")
+      .get(business.id, phone, name);
     if (!client) {
       const clientId = createId();
       db.prepare("INSERT INTO clients (id, tenant_id, name, phone) VALUES (?, ?, ?, ?)")
