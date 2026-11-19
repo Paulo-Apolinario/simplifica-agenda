@@ -364,6 +364,7 @@ db.transaction(() => {
 db.exec("DROP INDEX IF EXISTS clients_phone_idx");
 ensureColumn("appointments", "booking_source", "TEXT NOT NULL DEFAULT 'internal'");
 ensureColumn("commission_payments", "batch_id", "TEXT");
+ensureColumn("payout_batches", "receipt_snapshot_json", "TEXT");
 ensureColumn("whatsapp_notifications", "delivery_state", "TEXT NOT NULL DEFAULT 'pending'");
 ensureColumn("appointments", "management_token_hash", "TEXT");
 ensureColumn("appointments", "whatsapp_opt_in", "INTEGER NOT NULL DEFAULT 0");

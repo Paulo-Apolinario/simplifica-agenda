@@ -77,13 +77,35 @@ test("SaaS operator, individual commissions, settlement and WhatsApp notice stat
     db.prepare("UPDATE appointments SET status='concluido', completed_on='2026-10-10' WHERE id=?").run(booking.body.id);
     const preview=(await request("/settlements?period=2026-10-1")).body;
     assert.equal(preview.professionals[0].dueCents,8000);
-    const closed=await request("/settlements","POST",{professionalId:proId,period:"2026-10-1"});
+    assert.equal(preview.professionals[0].services[0].serviceName,"Corte");
+    assert.equal(preview.professionals[0].services[0].clientName,"Cliente");
+    assert.equal(preview.professionals[0].services[0].earnedCents,8000);
+    assert.equal((await request("/commissions/"+booking.body.id,"PATCH",{commissionPercent:85,houseSharePercent:10})).status,200);
+    assert.equal((await request("/settlements","POST",{professionalId:proId,period:"2026-10-1",expectedTotalCents:8000})).status,409);
+    const closed=await request("/settlements","POST",{professionalId:proId,period:"2026-10-1",expectedTotalCents:7500});
     assert.equal(closed.status,201,JSON.stringify(closed.body));
-    assert.equal(closed.body.batch.totalCents,8000);
+    assert.equal(closed.body.batch.totalCents,7500);
     assert.equal((await request("/settlements","POST",{professionalId:proId,period:"2026-10-1"})).status,409);
     const paid=(await request("/settlements?period=2026-10-1")).body;
     assert.equal(paid.professionals[0].dueCents,0);
     assert.equal(paid.batches.length,1);
+    assert.equal(paid.professionals[0].services[0].paid,true);
+    assert.equal(paid.professionals[0].services[0].paidCents,7500);
+    const pdfUrl=base+"/api/settlements/"+closed.body.batch.id+"/pdf";
+    const pdf=await fetch(pdfUrl,{headers:{Cookie:cookie}});
+    assert.equal(pdf.status,200);
+    assert.match(pdf.headers.get("content-type"),/application\/pdf/);
+    assert.match(pdf.headers.get("content-disposition"),/^inline/);
+    const bytes=Buffer.from(await pdf.arrayBuffer());
+    assert.match(bytes.toString("latin1"),/DEMONSTRATIVO DE REPASSE QUINZENAL/);
+    assert.match(bytes.toString("latin1"),/Corte/);
+    assert.match(bytes.toString("latin1"),/TOTAL REPASSADO AO PROFISSIONAL: R\$ 75,00/);
+    db.prepare("UPDATE services SET name='Corte renomeado' WHERE id=?").run(serviceId);
+    const downloaded=await fetch(pdfUrl+"?download=1",{headers:{Cookie:cookie}});
+    assert.match(downloaded.headers.get("content-disposition"),/^attachment/);
+    assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),bytes);
+    db.prepare("UPDATE services SET name='Corte' WHERE id=?").run(serviceId);
+    assert.equal((await fetch(pdfUrl)).status,401);
     const csv=await fetch(base+"/api/settlements/export.csv?period=2026-10-1",{
       headers:{Cookie:cookie},
     });

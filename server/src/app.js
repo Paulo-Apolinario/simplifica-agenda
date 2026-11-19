@@ -10,7 +10,7 @@ import { db, createId, allocateStaffCode, allocateLoginCode } from "./database.j
 import { allowRoles, publicUser, requireAuth } from "./auth.js";
 import { SQLiteSessionStore } from "./session-store.js";
 import { completedEarlySql, findScheduleConflict } from "./schedule.js";
-import { cashClosingPdf } from "./cash-closing-pdf.js";
+import { cashClosingPdf, textPdf } from "./cash-closing-pdf.js";
 
 const app = express();
 const sessionSecret = process.env.SESSION_SECRET ?? "desenvolvimento-local-chave-segura-32";
@@ -1104,6 +1104,7 @@ function fortnightServices(tenantId, period) {
   const window = fortnightWindow(period);
   if (!window) return null;
   const items = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
+    a.service_id AS serviceId, s.name AS serviceName, c.name AS clientName, a.booking_source AS bookingSource,
     a.price_cents AS priceCents, a.commission_percent AS commissionPercent,
     a.house_share_percent AS houseSharePercent, a.starts_at AS startsAt, a.payment_method AS paymentMethod,
     COALESCE(a.completed_on, substr(a.starts_at, 1, 10)) AS earnedOn,
@@ -1111,6 +1112,8 @@ function fortnightServices(tenantId, period) {
     CASE WHEN cp.transfer_confirmed = 0 THEN 1 ELSE 0 END AS legacyUnverified
     FROM appointments a
     JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
+    JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
+    JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
     LEFT JOIN commission_payments cp ON cp.appointment_id = a.id AND cp.tenant_id = a.tenant_id
     WHERE a.tenant_id = ? AND a.status = 'concluido'
       AND COALESCE(a.completed_on, substr(a.starts_at, 1, 10)) BETWEEN ? AND ?
@@ -1126,9 +1129,10 @@ app.get("/api/settlements", requireAuth, allowRoles("dono"), (req, res) => {
     const current = summaries.get(item.professionalId) || {
       professionalId: item.professionalId, professionalName: item.professionalName,
       completed: 0, pendingServices: 0, grossCents: 0, earnedCents: 0, paidCents: 0,
-      dueCents: 0, legacyUnverified: 0, receivedCents: 0, customerPendingCents: 0,
+      dueCents: 0, legacyUnverified: 0, receivedCents: 0, customerPendingCents: 0, services: [],
     };
     const earned = commissionCents(item);
+    current.services.push({...item, earnedCents:earned, paid:item.paidCents !== null});
     current.completed++;
     current.grossCents += item.priceCents;
     if (item.paymentMethod) current.receivedCents += item.priceCents;
@@ -1154,8 +1158,8 @@ app.get("/api/settlements/export.csv", requireAuth, allowRoles("dono"), (req, re
   const data = fortnightServices(tenant(req), period);
   if (!data) return fail(res, 400, "Quinzena inválida.");
   sendCsv(res, `saldos-profissionais-${period}.csv`,
-    ["Data do atendimento", "Data do crédito", "Profissional", "Valor bruto (centavos)", "Comissão líquida (centavos)", "Repasse confirmado", "Lançamento antigo a conferir"],
-    data.items.map(row => [row.startsAt, row.earnedOn, row.professionalName, row.priceCents,
+    ["Data do atendimento", "Data do crédito", "Profissional", "Serviço", "Cliente", "Valor bruto (centavos)", "Comissão efetiva (%)", "Comissão líquida (centavos)", "Repasse confirmado", "Lançamento antigo a conferir"],
+    data.items.map(row => [row.startsAt, row.earnedOn, row.professionalName, row.serviceName, row.clientName, row.priceCents, Math.max(0,row.commissionPercent-row.houseSharePercent),
       commissionCents(row), row.paidCents === null ? "Não" : "Sim", row.legacyUnverified ? "Sim" : "Não"]));
 });
 app.post("/api/settlements", requireAuth, allowRoles("dono"), (req, res) => {
@@ -1173,8 +1177,13 @@ app.post("/api/settlements", requireAuth, allowRoles("dono"), (req, res) => {
       .filter(row => row.professionalId === professionalId && row.paidCents === null);
     if (!pending.length) return null;
     const amount = pending.reduce((sum, row) => sum + commissionCents(row), 0);
-    db.prepare(`INSERT INTO payout_batches (id, tenant_id, professional_id, period, total_cents, created_by)
-      VALUES (?, ?, ?, ?, ?, ?)`).run(batchId, tenant(req), professionalId, period, amount, req.user.id);
+    if (req.body?.expectedTotalCents !== undefined && req.body.expectedTotalCents !== amount) return "changed";
+    const business = db.prepare("SELECT business_name AS name FROM business_settings WHERE tenant_id=?").get(tenant(req));
+    const snapshot = {businessName:business?.name || "Estabelecimento", professionalName:pending[0].professionalName,
+      administratorName:req.user.name, start:data.window.start, end:data.window.end, paidOn:cashDay(tenant(req)),
+      services:pending.map(row=>({...row,earnedCents:commissionCents(row)}))};
+    db.prepare(`INSERT INTO payout_batches (id, tenant_id, professional_id, period, total_cents, created_by, receipt_snapshot_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(batchId, tenant(req), professionalId, period, amount, req.user.id, JSON.stringify(snapshot));
     const add = db.prepare(`INSERT INTO commission_payments (appointment_id, tenant_id, professional_id, amount_cents, batch_id, transfer_confirmed)
       VALUES (?, ?, ?, ?, ?, 1)
       ON CONFLICT(appointment_id) DO UPDATE SET amount_cents = excluded.amount_cents,
@@ -1186,8 +1195,57 @@ app.post("/api/settlements", requireAuth, allowRoles("dono"), (req, res) => {
     }
     return { id: batchId, totalCents: amount, count: pending.length };
   })();
+  if (result === "changed") return fail(res, 409, "O saldo mudou. Atualize a conferência antes de confirmar o repasse.");
   if (!result) return fail(res, 409, "Sem saldo pendente para esse profissional na quinzena.");
   res.status(201).json({ batch: result, message: "Repasse efetivo confirmado e registrado; nenhuma transferência automática foi realizada." });
+});
+
+app.get("/api/settlements/:id/pdf", requireAuth, allowRoles("dono"), (req,res) => {
+  const batch = db.prepare(`SELECT b.id, b.period, b.total_cents AS totalCents, b.paid_at AS paidAt,
+    b.receipt_snapshot_json AS snapshotJson, b.professional_id AS professionalId,
+    u.name AS professionalName, admin.name AS administratorName
+    FROM payout_batches b JOIN users u ON u.id=b.professional_id AND u.tenant_id=b.tenant_id
+    JOIN users admin ON admin.id=b.created_by AND admin.tenant_id=b.tenant_id
+    WHERE b.id=? AND b.tenant_id=?`).get(req.params.id,tenant(req));
+  if (!batch) return fail(res,404,"Repasse não encontrado.");
+  const window = fortnightWindow(batch.period);
+  let snapshot;
+  if (batch.snapshotJson) snapshot = JSON.parse(batch.snapshotJson);
+  else {
+    const business = db.prepare("SELECT business_name AS name FROM business_settings WHERE tenant_id=?").get(tenant(req));
+    const services = db.prepare(`SELECT a.price_cents AS priceCents, a.commission_percent AS commissionPercent,
+      a.house_share_percent AS houseSharePercent, COALESCE(a.completed_on,substr(a.starts_at,1,10)) AS earnedOn,
+      s.name AS serviceName,c.name AS clientName, cp.amount_cents AS earnedCents
+      FROM commission_payments cp JOIN appointments a ON a.id=cp.appointment_id AND a.tenant_id=cp.tenant_id
+      JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id
+      JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
+      WHERE cp.batch_id=? AND cp.tenant_id=? AND cp.professional_id=? AND cp.transfer_confirmed=1
+      ORDER BY earnedOn,a.id`).all(batch.id,tenant(req),batch.professionalId);
+    snapshot = {businessName:business?.name || "Estabelecimento",professionalName:batch.professionalName,
+      administratorName:batch.administratorName,start:window.start,end:window.end,services};
+  }
+  const brl = cents => "R$ " + (Number(cents)/100).toFixed(2).replace(".",",");
+  const date = value => String(value).slice(0,10).split("-").reverse().join("/");
+  const gross = snapshot.services.reduce((sum,row)=>sum+row.priceCents,0);
+  const lines = ["SIMPLIFICA AGENDA | DEMONSTRATIVO DE REPASSE QUINZENAL",
+    "==========================================================================",
+    "Estabelecimento: "+snapshot.businessName,"Profissional: "+snapshot.professionalName,
+    "Periodo: "+date(snapshot.start)+" a "+date(snapshot.end),"Protocolo: "+batch.id,
+    "Pagamento registrado em: "+date(snapshot.paidOn || batch.paidAt),"Responsavel: "+snapshot.administratorName,
+    "--------------------------------------------------------------------------","SERVICOS INCLUIDOS NESTE REPASSE"];
+  for (const [i,row] of snapshot.services.entries()) {
+    lines.push((i+1)+". "+date(row.earnedOn)+" | "+row.serviceName+" | Cliente: "+row.clientName,
+      "   Valor: "+brl(row.priceCents)+" | Comissao: "+Math.max(0,row.commissionPercent-row.houseSharePercent)+"% | Repasse: "+brl(row.earnedCents),
+      "   Comissao base: "+row.commissionPercent+"% | Retencao: "+row.houseSharePercent+" pontos percentuais");
+  }
+  lines.push("--------------------------------------------------------------------------","Quantidade de servicos: "+snapshot.services.length,
+    "Valor bruto dos servicos: "+brl(gross),"TOTAL REPASSADO AO PROFISSIONAL: "+brl(batch.totalCents),
+    "Repasse confirmado pela administracao. O sistema nao realiza transferencias.",
+    ...(batch.snapshotJson?[]:["Registro anterior: nomes e detalhes reconstituidos do cadastro atual."]));
+  res.setHeader("Cache-Control","no-store");
+  res.setHeader("Content-Type","application/pdf");
+  res.setHeader("Content-Disposition",`${req.query.download==="1"?"attachment":"inline"}; filename="repasse-${batch.period}-${batch.id}.pdf"`);
+  res.send(textPdf(lines));
 });
 
 app.get("/api/professional/my-services", requireAuth, allowRoles("profissional"), (req, res) => {

@@ -2761,6 +2761,9 @@ function SettlementsPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
+  const [adjusting, setAdjusting] = useState(null);
+  const [adjustError, setAdjustError] = useState("");
+  const [savingAdjustment, setSavingAdjustment] = useState(false);
   const refresh = useCallback(() => api(`/settlements?period=${encodeURIComponent(period)}`)
     .then(result => { setData(result); setError(""); }).catch(err => setError(err.message)), [period]);
   useEffect(() => { refresh(); }, [refresh]);
@@ -2768,16 +2771,16 @@ function SettlementsPage() {
     if (!await confirmAction(`Confirma que o valor de ${money(professional.dueCents)} JÁ FOI REALMENTE TRANSFERIDO para ${professional.professionalName}? Esta ação registra pagamento efetivo e não realiza PIX.`)) return;
     setBusy(professional.professionalId); setError(""); setMessage("");
     try {
-      const result = await api("/settlements", {method:"POST", body:{period,professionalId:professional.professionalId}});
+      const result = await api("/settlements", {method:"POST", body:{period,professionalId:professional.professionalId,expectedTotalCents:professional.dueCents}});
       setMessage(`Repasse confirmado: ${money(result.batch.totalCents)} para ${professional.professionalName}.`);
       await refresh();
-    } catch (err) { setError(err.message); }
+    } catch (err) { await refresh(); setError(err.message); }
     finally { setBusy(""); }
   };
   const due = data.professionals.reduce((sum, item) => sum + item.dueCents, 0);
   const earned = data.professionals.reduce((sum, item) => sum + item.earnedCents, 0);
   const legacy = data.professionals.reduce((sum, item) => sum + item.legacyUnverified, 0);
-  const ended = Boolean(data.end && data.end < today);
+  const ended = Boolean(data.period === period && data.end && data.end < today);
   return <>
     <PageTitle eyebrow="GESTÃO FINANCEIRA" title="Saldos e repasses quinzenais"
       description="A empresa recebe os pagamentos dos clientes; a conclusão do serviço gera saldo para o profissional, mas não efetua repasse."/>
@@ -2800,26 +2803,61 @@ function SettlementsPage() {
     <section className="panel management-panel">
       <div className="panel-heading"><div><h2>Saldo por profissional</h2>
         <p className="panel-subtitle">Período: {data.start || "—"} até {data.end || "—"}. Confirme o repasse apenas quando o pagamento tiver acontecido fora do sistema.</p></div></div>
-      {data.professionals.length ? <div className="management-list">{data.professionals.map(pro =>
-        <article className="service-row request-item" key={pro.professionalId}>
+      {data.period === period && data.professionals.length ? <div className="management-list">{data.professionals.map(pro =>
+        <div key={pro.professionalId} className="panel management-panel">
+        <article className="service-row request-item">
           <span className="service-row-icon"><Wallet size={18}/></span>
           <div className="min-w-0 flex-1"><b>{pro.professionalName}</b>
             <small>{pro.completed} serviço(s) · produção {money(pro.grossCents)} · clientes pagaram {money(pro.receivedCents)} · clientes a pagar {money(pro.customerPendingCents)} · comissão gerada {money(pro.earnedCents)} · repasse confirmado {money(pro.paidCents)}</small>
           </div>
-          <strong>{money(pro.dueCents)} a receber</strong>
+          <strong>{money(pro.dueCents)} a repassar</strong>
           {pro.pendingServices > 0 && <Button disabled={busy === pro.professionalId || !ended}
             onClick={() => close(pro)}>{busy === pro.professionalId ? "Registrando..." : "Confirmar repasse"}</Button>}
-        </article>)}</div> : <EmptyState icon={Wallet} title="Nenhum serviço concluído" description="Os saldos dos serviços concluídos na quinzena aparecerão aqui."/>}
+        </article>
+        <details>
+          <summary className="button button-secondary" style={{width:"fit-content",cursor:"pointer"}}>Conferir {pro.completed} serviço(s)</summary>
+          <div className="management-list">
+            {(pro.services || []).map(item=><article className="service-row request-item" key={item.id}>
+              <div className="min-w-0 flex-1"><b>{item.serviceName} · {item.clientName}</b>
+                <small>{dateLabel(item.earnedOn)} · Serviço: {money(item.priceCents)} · Comissão: {Math.max(0,item.commissionPercent-item.houseSharePercent)}%</small>
+                <small>Cliente: {item.paymentMethod ? "Pagamento recebido" : "Pagamento pendente"}</small>
+              </div>
+              <div><small>{item.paid?"Repassado":"A repassar"}</small><br/><strong>{money(item.paid?item.paidCents:item.earnedCents)}</strong></div>
+              {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Confirmado</span> :
+                <Button variant="secondary" disabled={!!busy} onClick={()=>{setAdjustError("");setAdjusting({...item,reason:""});}}>Ajustar comissão</Button>}
+            </article>)}
+          </div>
+        </details>
+        </div>)}</div> : <EmptyState icon={Wallet} title="Nenhum serviço concluído" description="Os saldos dos serviços concluídos na quinzena aparecerão aqui."/>}
       {!ended && <p className="panel-subtitle">A quinzena ainda não terminou. O saldo pode ser consultado, mas o pagamento só poderá ser confirmado após o encerramento do período.</p>}
     </section>
     <section className="panel management-panel">
       <div className="panel-heading"><div><h2>Histórico de repasses confirmados</h2></div></div>
-      {data.batches.length ? <div className="management-list">{data.batches.map(batch =>
+      {data.period === period && data.batches.length ? <div className="management-list">{data.batches.map(batch =>
         <article className="service-row" key={batch.id}><CheckCheck size={18}/>
           <span className="min-w-0 flex-1"><b>{batch.professionalName}</b><small>{batch.paidAt} · protocolo {batch.id.slice(0, 8)}</small></span>
-          <strong>{money(batch.totalCents)}</strong></article>)}</div> :
+          <strong>{money(batch.totalCents)}</strong>
+          <a className="button button-secondary" href={`/api/settlements/${encodeURIComponent(batch.id)}/pdf`} target="_blank" rel="noreferrer">Abrir / imprimir</a>
+          <a className="button button-primary" href={`/api/settlements/${encodeURIComponent(batch.id)}/pdf?download=1`}><Download size={16}/> Baixar PDF</a>
+        </article>)}</div> :
         <p className="panel-subtitle">Nenhum repasse confirmado nesta quinzena.</p>}
     </section>
+    {adjusting && <Modal title="Ajustar comissão do serviço" onClose={()=>{if(!savingAdjustment)setAdjusting(null);}}>
+      <form className="form-stack" onSubmit={async e=>{
+        e.preventDefault();setSavingAdjustment(true);setAdjustError("");
+        try{await api(`/commissions/${adjusting.id}`,{method:"PATCH",body:{commissionPercent:Number(adjusting.commissionPercent),houseSharePercent:Number(adjusting.houseSharePercent||0),reason:adjusting.reason}});
+          setAdjusting(null);await refresh();}
+        catch(err){setAdjustError(err.message);}finally{setSavingAdjustment(false);}
+      }}>
+        <p className="panel-subtitle">{adjusting.professionalName} · {adjusting.serviceName} · {adjusting.clientName}</p>
+        <Field label="Comissão do profissional (%)" type="number" required min="0" max="100" step="any" value={adjusting.commissionPercent} onChange={e=>setAdjusting(v=>({...v,commissionPercent:e.target.value}))}/>
+        <Field label="Retenção de materiais (pontos percentuais)" type="number" required min="0" max="100" step="any" value={adjusting.houseSharePercent} onChange={e=>setAdjusting(v=>({...v,houseSharePercent:e.target.value}))}/>
+        <Field label="Motivo do ajuste (opcional)" maxLength={250} value={adjusting.reason} onChange={e=>setAdjusting(v=>({...v,reason:e.target.value}))}/>
+        <p className="booking-share-notice">Valor do serviço: {money(adjusting.priceCents)}<br/><b>Valor a repassar: {money(Math.round(adjusting.priceCents*Math.max(0,Number(adjusting.commissionPercent)-Number(adjusting.houseSharePercent))/100))}</b></p>
+        <ErrorMessage>{adjustError}</ErrorMessage>
+        <div className="modal-actions"><Button type="button" variant="secondary" disabled={savingAdjustment} onClick={()=>setAdjusting(null)}>Cancelar</Button><Button disabled={savingAdjustment}>{savingAdjustment?"Salvando...":"Salvar ajuste"}</Button></div>
+      </form>
+    </Modal>}
   </>;
 }
 

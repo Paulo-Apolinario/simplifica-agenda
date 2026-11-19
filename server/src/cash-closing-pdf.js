@@ -50,6 +50,10 @@ export function cashClosingPdf({ businessName, closing, opening, receipts, movem
   lines.push("Observacoes: " + (closing.notes || "Nenhuma"));
   lines.push("Documento gerado a partir do fechamento registrado.");
   if (!closing.receiptsSnapshotJson) lines.push("Registro historico: detalhes reconstituidos dos pagamentos atuais.");
+  return textPdf(lines);
+}
+
+export function textPdf(lines) {
   const perPage = 56;
   const wrapped = lines.flatMap(line => plain(line).match(/.{1,96}/g) || [""]);
   const pages = [];
