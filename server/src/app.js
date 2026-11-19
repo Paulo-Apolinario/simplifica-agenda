@@ -1347,7 +1347,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   const resetConsent = clientChanged && appointment.bookingSource === "public" && replacementClient.phone !== previousPhone;
   const status = req.body?.status ?? appointment.status;
   if (appointment.bookingSource === "direct" && (status !== "concluido" || (req.body?.startsAt !== undefined && req.body.startsAt !== appointment.startsAt)))
-    return fail(res, 409, "Serviço avulso não pode ser convertido em agendamento.");
+    return fail(res, 409, "Serviço registrado diretamente não pode ser convertido em agendamento.");
   const method = req.body?.paymentMethod === undefined ? appointment.paymentMethod : req.body.paymentMethod;
   const priceCents = req.body?.priceCents === undefined ? appointment.priceCents : Number(req.body.priceCents);
   if (!statuses.includes(status)) return fail(res, 400, "Status inválido.");

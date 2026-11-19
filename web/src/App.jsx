@@ -811,7 +811,7 @@ function AppointmentForm({ onClose, onSaved, initialDate = localDate(), initialH
     } catch (reason) { setError(reason.message); }
     finally { setSaving(false); }
   };
-  return <Modal title={direct ? "Registrar serviço avulso" : "Novo agendamento"} onClose={onClose}>
+  return <Modal title={direct ? "Registrar serviço" : "Novo agendamento"} onClose={onClose}>
     <form className="form-stack" onSubmit={submit}>
       {direct && <p className="booking-share-notice">Registre um serviço já realizado, sem reservar horário na agenda. A comissão será calculada automaticamente e o recebimento controlado pelo caixa.</p>}
       <SelectField label="Cliente (opcional)" value={quickClient ? "__new__" : values.clientId}
@@ -866,7 +866,7 @@ function AppointmentForm({ onClose, onSaved, initialDate = localDate(), initialH
       <div className="modal-actions">
         <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
         <Button disabled={saving || !services.length || !options.length}>
-          {saving ? "Salvando..." : direct ? "Registrar serviço realizado" : "Salvar agendamento"}
+          {saving ? "Salvando..." : direct ? "Registrar serviço" : "Salvar agendamento"}
         </Button>
       </div>
     </form>
@@ -1096,7 +1096,7 @@ function AgendaPage({ user }) {
   const move = (offset) => setDate(shiftDate(date, offset));
   return <>
     <PageTitle eyebrow="SUA ROTINA EM UM SÓ LUGAR" title="Agenda" description={dateLabel(date)}
-      actions={<>{canEdit && <Button variant="secondary" onClick={() => setModal("direct")}><Scissors size={16} /> Serviço avulso</Button>}{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => createAt(date, null, professionalId)}><Plus size={17} /> Novo agendamento</Button>}</>} />
+      actions={<>{canEdit && <Button variant="secondary" onClick={() => setModal("direct")}><Scissors size={16} /> Registrar serviço</Button>}{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => createAt(date, null, professionalId)}><Plus size={17} /> Novo agendamento</Button>}</>} />
     <div className="agenda-toolbar">
       <div className="date-nav"><button className="icon-button" onClick={() => move(-1)} aria-label="Anterior"><ChevronLeft size={18} /></button>
         <button className="date-today" onClick={() => setDate(localDate())}>Hoje</button><button className="icon-button" onClick={() => move(1)} aria-label="Próximo"><ChevronRight size={18} /></button></div>
@@ -1363,7 +1363,7 @@ function ProfessionalEarningsPage() {
           <article className="service-row" key={item.id}>
             <span className="service-row-icon"><Wallet size={18}/></span>
             <div className="min-w-0 flex-1"><b>{item.serviceName} · {item.clientName}</b>
-              <small>{dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Avulso" : "Agendado"} · {money(item.priceCents)} bruto · {Math.max(0,item.commissionPercent - (item.houseSharePercent || 0))}% líquido · Cliente {item.paymentMethod ? "pagou" : "a pagar"}</small></div>
+              <small>{dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Registro direto" : "Agendado"} · {money(item.priceCents)} bruto · {Math.max(0,item.commissionPercent - (item.houseSharePercent || 0))}% líquido · Cliente {item.paymentMethod ? "pagou" : "a pagar"}</small></div>
             <strong>{money(item.earnedCents)}</strong>
             <span className={`status-badge ${item.paid ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
               {item.paid ? "Pago" : "A receber"}</span>
@@ -1407,7 +1407,7 @@ function TeamCommissionsPage() {
         <article className="service-row" key={item.id}>
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
           <div className="min-w-0 flex-1"><b>{item.professionalName} · {item.serviceName}</b>
-            <small>{item.clientName} · {dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Avulso" : "Agendado"}</small>
+            <small>{item.clientName} · {dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Registro direto" : "Agendado"}</small>
             <small>Valor {money(item.priceCents)} · Comissão {item.commissionPercent}% − retenção {item.houseSharePercent || 0} p.p. = {Math.max(0,item.commissionPercent - (item.houseSharePercent || 0))}% · Cliente {item.paymentMethod ? "pagou" : "a pagar"}</small></div>
           <strong>{money(item.earnedCents)}</strong>
           {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Pago</span> : <>
@@ -1476,7 +1476,7 @@ function ProfessionalWorkPage({ user }) {
   return <>
     <PageTitle eyebrow="ÁREA DO PROFISSIONAL" title="Meus atendimentos"
       description="Visualize seus serviços e registre os que foram efetivamente realizados."
-      actions={<Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço avulso</Button>} />
+      actions={<Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button>} />
     <div className="month-filter"><label htmlFor="professional-month">Mês</label>
       <input id="professional-month" className="input month-input" type="month" value={month}
         onChange={e => setMonth(e.target.value)}/></div>
@@ -1494,14 +1494,14 @@ function ProfessionalWorkPage({ user }) {
         {data.services.map(item => <article className="service-row" key={item.id}>
           <span className="service-row-icon"><ClipboardCheck size={18}/></span>
           <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
-            <small>{dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Avulso" : "Agendado"} · {statusNames[item.status]}{item.status === "concluido" && item.completedOn ? ` · Realizado em ${dateLabel(item.completedOn)}` : ""}</small></div>
+            <small>{dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Registro direto" : "Agendado"} · {statusNames[item.status]}{item.status === "concluido" && item.completedOn ? ` · Realizado em ${dateLabel(item.completedOn)}` : ""}</small></div>
           <span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span>
           {canComplete(item) && <Button disabled={saving === item.id} onClick={() => complete(item.id)}>
             {saving === item.id ? "Salvando..." : "Concluir serviço"}
           </Button>}
         </article>)}
       </div> : <EmptyState icon={CalendarDays} title="Nenhum serviço neste mês"
-        description="Atendimentos agendados e serviços avulsos aparecerão aqui."/>}
+        description="Atendimentos agendados e serviços registrados aparecerão aqui."/>}
     </section>
     {direct && <AppointmentForm direct user={user} onClose={() => setDirect(false)} onSaved={(day) => { setDirect(false); if (day.slice(0,7) === month) refresh(); else setMonth(day.slice(0,7)); }} />}
   </>;
@@ -2014,7 +2014,7 @@ function ReceivablesPage({ user }) {
   const [direct, setDirect] = useState(false);
   return <>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
-    <div className="modal-actions"><Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço avulso</Button></div>
+    <div className="modal-actions"><Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button></div>
     {direct && <AppointmentForm direct user={user} onClose={() => setDirect(false)} onSaved={() => { setDirect(false); refresh(); setCashRevision(n => n + 1); }} />}
     {pending.length > 0 && <Link className="cash-pending-summary cash-pending-link" to={pendingPaymentsPath}>
       <Clock3 size={22}/><div><b>{pending.length} pagamento(s) pendente(s)</b>
@@ -2080,7 +2080,7 @@ function PendingPaymentsList({ user, pending, loaded, loadError, refresh }) {
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
           <div className="cash-payment-info"><b>{item.clientName} · {item.serviceName}</b>
             <small>Profissional: {item.professionalName}</small>
-            <small>{item.bookingSource === "direct" ? "Serviço avulso" : `Agendado: ${dateTimeLabel(item.startsAt)}`}{item.completedOn ? ` · Realizado: ${dateLabel(item.completedOn)}` : ""}</small></div>
+            <small>{item.bookingSource === "direct" ? "Registro direto" : `Agendado: ${dateTimeLabel(item.startsAt)}`}{item.completedOn ? ` · Realizado: ${dateLabel(item.completedOn)}` : ""}</small></div>
           <strong>{money(item.priceCents)}</strong>
           <label className="field cash-payment-method"><span className="field-label">Forma de pagamento</span>
             <select className="input" value={methods[item.id] || ""} onChange={event => setMethods(previous => ({ ...previous, [item.id]: event.target.value }))}>
@@ -2106,7 +2106,7 @@ function AppointmentAuditReport({ month }) {
       .catch(reason => { if (alive) setError(reason.message); });
     return () => { alive = false; };
   }, [month, action]);
-  const labels = { criacao: "Criado", servico_avulso: "Serviço avulso", confirmacao: "Confirmado", cancelamento: "Cancelado",
+  const labels = { criacao: "Criado", servico_avulso: "Serviço registrado", confirmacao: "Confirmado", cancelamento: "Cancelado",
     remarcacao: "Remarcado", conclusao: "Concluído", pagamento: "Pagamento", conciliacao: "Data do pagamento conciliada", status: "Status alterado",
     edicao: "Editado", comissao: "Comissão ajustada" };
   const detail = event => {
