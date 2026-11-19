@@ -543,6 +543,50 @@ function StatCard({ title, value, note, icon: Icon, tone = "blue" }) {
   </article>;
 }
 
+function usePendingPayments(enabled = true) {
+  const [pending, setPending] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState("");
+  const refreshVersion = useRef(0);
+  const refresh = useCallback(async () => {
+    if (!enabled) return;
+    const version = ++refreshVersion.current;
+    try {
+      const data = await api("/receivables/pending");
+      if (version === refreshVersion.current) {
+        setPending(data.receivables);
+        setLoaded(true);
+        setError("");
+      }
+    } catch (reason) {
+      if (version === refreshVersion.current) setError(reason.message);
+    }
+  }, [enabled]);
+  useEffect(() => {
+    if (!enabled) return;
+    refresh();
+    const interval = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refresh);
+    return () => { ++refreshVersion.current; window.clearInterval(interval); window.removeEventListener("focus", refresh); };
+  }, [enabled, refresh]);
+  return { pending, loaded, error, refresh };
+}
+
+const pendingPaymentsPath = "/recebimentos?aba=pendentes";
+
+function AttendanceWithPending({ value, note, user }) {
+  const {pending} = usePendingPayments(user.tenantId !== "tenant-salao-demo");
+  const Card = pending.length ? Link : "article";
+  return <Card className="stat-card attendance-payment-card" {...(pending.length ? {to: pendingPaymentsPath} : {})}>
+    <div className="stat-icon stat-blue"><CalendarDays size={19}/></div>
+    <div className="stat-copy"><span>Atendimentos hoje</span><strong>{value}</strong><small>{note}</small></div>
+    {pending.length > 0 && <span className="pending-dashboard-badge">
+      <Clock3 size={14}/><span>{pending.length} {pending.length === 1 ? "pagamento pendente" : "pagamentos pendentes"}</span>
+      <ArrowRight size={14}/>
+    </span>}
+  </Card>;
+}
+
 function AppointmentCard({ appointment, onOpen, compact = false }) {
   const message = `Olá, ${appointment.clientName}! Passando para confirmar seu horário de ${appointment.serviceName} no dia ${dateTimeLabel(appointment.startsAt)} com ${appointment.professionalName}. Podemos confirmar?`;
   const whatsapp = appointment.bookingSource !== "public" || appointment.whatsappOptIn
@@ -612,8 +656,7 @@ function ReceptionDashboard({ user }) {
     <ErrorMessage>{error}</ErrorMessage>
     <CashStatusBanner user={user}/>
     <section className="stats-grid">
-      <StatCard title="Atendimentos hoje" value={overview?.todayCount ?? "—"} icon={CalendarDays}
-        note="Agenda do estabelecimento"/>
+      <AttendanceWithPending value={overview?.todayCount ?? "—"} note="Agenda do estabelecimento" user={user}/>
       <StatCard title="Aguardando confirmação" value={waiting.length} icon={Clock3}
         tone="orange" note="Horários ainda agendados"/>
       <StatCard title="Confirmados hoje" value={confirmed.length} icon={CheckCheck}
@@ -667,7 +710,7 @@ function OverviewPage({ user }) {
         <StatCard title="Próximo atendimento" value={data?.upcoming?.[0] ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(data.upcoming[0].startsAt)) : "Livre"}
           note={data?.upcoming?.[0]?.clientName ?? "Sem próximos horários"} icon={Clock3} tone="orange"/>
       </> : <>
-        <StatCard title="Atendimentos hoje" value={data?.todayCount ?? "—"} note="Na agenda de hoje" icon={CalendarDays} />
+        <AttendanceWithPending value={data?.todayCount ?? "—"} note="Na agenda de hoje" user={user}/>
         <StatCard title={user.role === "dono" ? "Recebido no mês" : "Agendamentos no mês"}
           value={user.role === "dono" ? money(data?.monthRevenueCents) : data?.monthCount ?? "—"}
           note={user.role === "dono" ? "Por data de pagamento" : "Na agenda do negócio"}
@@ -917,8 +960,9 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
           onChange={(e) => setPrice(Math.round(Number(e.target.value) * 100))} />
       </div>
       <SelectField label="Forma de pagamento" value={method} onChange={(e) => setMethod(e.target.value)}>
-        <option value="">Ainda não pago</option>{Object.entries(paymentNames).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+        <option value="">Em aberto — pagar depois</option>{Object.entries(paymentNames).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
       </SelectField>
+      {status === "concluido" && !method && <p className="panel-subtitle">O serviço será concluído e permanecerá em Pagamentos pendentes até o recebimento.</p>}
       <ErrorMessage>{error}</ErrorMessage>
       <div className="modal-actions modal-actions-split">
         {whatsApp && <a href={whatsApp} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={16} /> WhatsApp</a>}
@@ -1902,7 +1946,7 @@ function FinancialHubPage({ user }) {
   const navigate = useNavigate();
   const requestedTab = new URLSearchParams(location.search).get("aba") || "caixa";
   const available = ["caixa", "comissoes", "regras", "fechamentos"];
-  const tab = user.role === "dono" && available.includes(requestedTab) ? requestedTab : "caixa";
+  const tab = requestedTab === "pendentes" ? "pendentes" : user.role === "dono" && available.includes(requestedTab) ? requestedTab : "caixa";
   const tabs = [
     {id:"caixa",title:"Caixa e recebimentos",icon:Wallet},
     {id:"comissoes",title:"Comissões da equipe",icon:CircleDollarSign},
@@ -1915,13 +1959,14 @@ function FinancialHubPage({ user }) {
         description="Caixa, comissões, regras e fechamentos em um único lugar." />
       <div className="settings-tab-bar" role="tablist" aria-label="Seções da gestão financeira">
         {tabs.map(item => <button key={item.id} type="button" role="tab"
-          aria-selected={tab === item.id} className={tab === item.id ? "active" : ""}
+          aria-selected={tab === item.id || (tab === "pendentes" && item.id === "caixa")} className={tab === item.id || (tab === "pendentes" && item.id === "caixa") ? "active" : ""}
           onClick={() => navigate(`/recebimentos?aba=${item.id}`)}>
           <item.icon size={16}/> {item.title}
         </button>)}
       </div>
     </>}
     {tab === "caixa" && <ReceivablesPage user={user}/>}
+    {tab === "pendentes" && <PendingPaymentsPage user={user}/>}
     {tab === "comissoes" && user.role === "dono" && <TeamCommissionsPage/>}
     {tab === "regras" && user.role === "dono" && <CommissionPoliciesPage/>}
     {tab === "fechamentos" && user.role === "dono" && <SettlementsPage/>}
@@ -1929,31 +1974,32 @@ function FinancialHubPage({ user }) {
 }
 
 function ReceivablesPage({ user }) {
-  const [pending, setPending] = useState([]);
-  const [loaded, setLoaded] = useState(false);
+  const { pending, loaded, error } = usePendingPayments();
+  const [cashRevision, setCashRevision] = useState(0);
+  return <>
+    <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
+    {pending.length > 0 && <Link className="cash-pending-summary cash-pending-link" to={pendingPaymentsPath}>
+      <Clock3 size={22}/><div><b>{pending.length} pagamento(s) pendente(s)</b>
+        <strong>{money(pending.reduce((sum, item) => sum + item.priceCents, 0))} a receber</strong></div>
+      <span className="cash-pending-action">Ver pendências <ArrowRight size={17}/></span>
+    </Link>}
+    <ErrorMessage>{error}</ErrorMessage>
+    <nav className="cash-section-nav" aria-label="Seções de caixa">
+      <Link to={pendingPaymentsPath}>Pagamentos pendentes{loaded ? ` (${pending.length})` : ""}</Link><a href="#caixa-do-dia">Caixa de hoje</a><a href="#pagamentos-do-dia">Pagamentos registrados</a>
+      {user.role === "dono" && <a href="#historico-do-caixa">Histórico de fechamentos</a>}
+    </nav>
+    <DailyCashClosing revision={cashRevision} user={user} onClosed={() => setCashRevision(n => n + 1)}>
+      <UnreconciledCash user={user} onChange={() => setCashRevision(n => n + 1)}/>
+    </DailyCashClosing>
+  </>;
+}
+
+function PendingPaymentsPage({ user }) {
+  const { pending, loaded, error: loadError, refresh } = usePendingPayments();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [cashRevision, setCashRevision] = useState(0);
   const [methods, setMethods] = useState({});
-  const refreshVersion = useRef(0);
-  const refresh = useCallback(async () => {
-    const version = ++refreshVersion.current;
-    try {
-      const data = await api("/receivables/pending");
-      if (version === refreshVersion.current) {
-        setPending(data.receivables);
-        setLoaded(true);
-      }
-    } catch (reason) {
-      if (version === refreshVersion.current) setError(reason.message);
-    }
-  }, []);
-  useEffect(() => {
-    refresh();
-    const interval = window.setInterval(refresh, 15000);
-    window.addEventListener("focus", refresh);
-    return () => { ++refreshVersion.current; window.clearInterval(interval); window.removeEventListener("focus", refresh); };
-  }, [refresh]);
   const receive = async (item) => {
     const method = methods[item.id];
     if (!method || busy) return;
@@ -1966,11 +2012,9 @@ function ReceivablesPage({ user }) {
     } catch (reason) { setError(reason.message); } finally { setBusy(""); }
   };
   return <>
+    <PageTitle title="Pagamentos pendentes" description="Confirme os recebimentos quando o cliente efetuar o pagamento."
+      actions={<Link className="button button-secondary" to="/recebimentos"><ArrowLeft size={16}/> Voltar ao caixa</Link>}/>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
-    <nav className="cash-section-nav" aria-label="Seções de caixa">
-      <a href="#pagamentos-pendentes">Pagamentos pendentes</a><a href="#caixa-do-dia">Caixa de hoje</a><a href="#pagamentos-do-dia">Pagamentos registrados</a>
-      {user.role === "dono" && <a href="#historico-do-caixa">Histórico de fechamentos</a>}
-    </nav>
     <section className="panel management-panel cash-pending" id="pagamentos-pendentes">
       <div className="panel-heading"><div><h2>Pagamentos pendentes</h2>
         <p className="panel-subtitle">Serviços concluídos que ainda aguardam pagamento, inclusive de dias anteriores.</p></div>
@@ -1978,7 +2022,7 @@ function ReceivablesPage({ user }) {
       </div>
       <div className="cash-pending-summary" role="status"><Clock3 size={22}/><div><b>{loaded ? `${pending.length} pagamento(s) pendente(s)` : "Consultando pagamentos..."}</b>
         <strong>{money(pending.reduce((sum, item) => sum + item.priceCents, 0))} a receber</strong></div></div>
-      <ErrorMessage>{error}</ErrorMessage>
+      <ErrorMessage>{error || loadError}</ErrorMessage>
       {pending.length ? <div className="management-list">{pending.map(item =>
         <article className="service-row cash-payment-row" key={item.id}>
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
@@ -1988,17 +2032,14 @@ function ReceivablesPage({ user }) {
           <strong>{money(item.priceCents)}</strong>
           <label className="field cash-payment-method"><span className="field-label">Forma de pagamento</span>
             <select className="input" value={methods[item.id] || ""} onChange={event => setMethods(previous => ({ ...previous, [item.id]: event.target.value }))}>
-              <option value="">Selecione</option>
+              <option value="">Em aberto — pagar depois</option>
               {Object.entries(paymentNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
             </select></label>
           <Button disabled={Boolean(busy) || !methods[item.id] || user.tenantId === "tenant-salao-demo"}
-            onClick={() => receive(item)}>{busy === item.id ? "Registrando..." : "Receber"}</Button>
+            onClick={() => receive(item)}>{busy === item.id ? "Registrando..." : methods[item.id] ? "Receber" : "Em aberto"}</Button>
         </article>)}</div> :
         loaded && <p className="report-empty">Nenhum pagamento pendente.</p>}
     </section>
-    <DailyCashClosing revision={cashRevision} user={user} onClosed={() => setCashRevision(n => n + 1)}>
-    <UnreconciledCash user={user} onChange={() => setCashRevision(n => n + 1)}/>
-    </DailyCashClosing>
   </>;
 }
 
