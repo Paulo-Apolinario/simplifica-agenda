@@ -762,14 +762,14 @@ function EmptyState({ icon: Icon = CalendarDays, title, description, action }) {
   return <div className="empty-state"><span className="empty-icon"><Icon size={22} /></span><b>{title}</b><p>{description}</p>{action}</div>;
 }
 
-function AppointmentForm({ onClose, onSaved, initialDate, initialHour = "09:00", initialProfessional = "", user }) {
+function AppointmentForm({ onClose, onSaved, initialDate, initialHour, initialProfessional = "", user }) {
   const isProfessional = user.role === "profissional";
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
   const [values, setValues] = useState({
     clientId: "", serviceId: "", professionalId: isProfessional ? user.id : initialProfessional,
-    startsAt: `${initialDate}T${initialHour}`, notes: "",
+    startsAt: initialHour ? `${initialDate}T${initialHour}` : initialDate === localDate() ? "" : `${initialDate}T09:00`, notes: "",
   });
   const [quickClient, setQuickClient] = useState(false);
   const [newClient, setNewClient] = useState({ name: "", phone: "" });
@@ -800,16 +800,14 @@ function AppointmentForm({ onClose, onSaved, initialDate, initialHour = "09:00",
       let clientId = values.clientId;
       if (quickClient) {
         if (!newClient.name.trim()) throw new Error("Informe o nome da cliente.");
-        if (isProfessional) {
-          const response = await api("/booking/clients", { method: "POST", body: newClient });
-          clientId = response.client.id;
-        } else {
-          const response = await api("/clients", { method: "POST", body: newClient });
-          clientId = response.client.id;
-        }
+        const response = await api(isProfessional ? "/booking/clients" : "/clients", { method: "POST", body: newClient });
+        clientId = response.client.id;
+        setClients(previous => [...previous, response.client]);
+        setValues(previous => ({ ...previous, clientId }));
+        setQuickClient(false);
       }
       await api("/appointments", { method: "POST", body: { ...values, clientId } });
-      onSaved();
+      onSaved(values.startsAt.slice(0, 10));
     } catch (reason) { setError(reason.message); }
     finally { setSaving(false); }
   };
@@ -834,12 +832,12 @@ function AppointmentForm({ onClose, onSaved, initialDate, initialHour = "09:00",
         <SelectField label="Serviço" required value={values.serviceId}
           onChange={event => setValues(v => ({
             ...v, serviceId: event.target.value,
-            professionalId: isProfessional ? user.id : "",
+            professionalId: isProfessional ? user.id : v.professionalId,
           }))}>
           <option value="">Selecione um serviço</option>
           {services.map(item => <option key={item.id} value={item.id}>{item.name} · {money(item.priceCents)}</option>)}
         </SelectField>
-        <SelectField label="Profissional" required value={values.professionalId}
+        <SelectField label="Profissional" required disabled={isProfessional} value={values.professionalId}
           onChange={event => setValues(v => ({ ...v, professionalId: event.target.value }))}>
           <option value="">Selecione</option>
           {options.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}
@@ -1073,7 +1071,7 @@ function AgendaPage({ user }) {
   const move = (offset) => setDate(shiftDate(date, offset));
   return <>
     <PageTitle eyebrow="SUA ROTINA EM UM SÓ LUGAR" title="Agenda" description={dateLabel(date)}
-      actions={<>{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => createAt(date, "09:00", professionalId)}><Plus size={17} /> Novo agendamento</Button>}</>} />
+      actions={<>{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => createAt(date, null, professionalId)}><Plus size={17} /> Novo agendamento</Button>}</>} />
     <div className="agenda-toolbar">
       <div className="date-nav"><button className="icon-button" onClick={() => move(-1)} aria-label="Anterior"><ChevronLeft size={18} /></button>
         <button className="date-today" onClick={() => setDate(localDate())}>Hoje</button><button className="icon-button" onClick={() => move(1)} aria-label="Próximo"><ChevronRight size={18} /></button></div>
@@ -1102,7 +1100,7 @@ function AgendaPage({ user }) {
         </div>;
       })}
     </div>
-    {modal === "new" && <AppointmentForm initialDate={newSlot.day} initialHour={newSlot.hour} initialProfessional={newSlot.professional} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
+    {modal === "new" && <AppointmentForm initialDate={newSlot.day} initialHour={newSlot.hour} initialProfessional={newSlot.professional} user={user} onClose={() => setModal("")} onSaved={(savedDate) => { setModal(""); if (savedDate === date) refresh(); else setDate(savedDate); }} />}
     {modal === "block" && <BlockForm initialDate={date} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {selected && <AppointmentDetails appointment={selected} readOnly={user.role === "profissional" || user.tenantId === "tenant-salao-demo"} canCompleteService={user.role === "profissional"} onClose={() => setSelected(null)} onUpdated={() => { setSelected(null); refresh(); }} />}
   </>;

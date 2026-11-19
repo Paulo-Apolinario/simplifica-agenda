@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 
-test("atendimento antecipado entra no caixa da empresa e gera saldo quinzenal sem repasse", async () => {
+test("atendimento antecipado entra no caixa da empresa e gera saldo quinzenal sem repasse", async (t) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "simplifica-fortnight-"));
   const keys = ["DATABASE_PATH", "INSTALL_TOKEN", "NODE_ENV", "DEMO_MODE"];
   const old = Object.fromEntries(keys.map(key => [key, process.env[key]]));
@@ -46,6 +46,18 @@ test("atendimento antecipado entra no caixa da empresa e gera saldo quinzenal se
       .run("service-1",tenant,"Corte",30,5000);
     db.prepare("INSERT INTO clients(id,tenant_id,name) VALUES(?,?,?)")
       .run("client-1",tenant,"Cliente");
+    // Scheduling reserves time only. Even today's booking is valid before the cash register opens.
+    db.prepare("UPDATE business_hours SET opens_at = '09:00', closes_at = '18:00' WHERE tenant_id = ?").run(tenant);
+    t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-19T13:00:00Z") });
+    try {
+      const reservation = await request("/appointments", "POST", {
+        clientId: "client-1", professionalId: "pro-1", serviceId: "service-1", startsAt: "2026-11-19T15:00:00",
+      });
+      assert.equal(reservation.status, 201);
+      assert.equal((await request("/appointments/" + reservation.body.id, "PATCH", {status:"concluido"})).status,409);
+    } finally {
+      t.mock.timers.reset();
+    }
     const current = (await request("/cash/daily")).body.today;
     const tomorrowDate = new Date(current + "T12:00:00Z");
     tomorrowDate.setUTCDate(tomorrowDate.getUTCDate()+1);
