@@ -114,7 +114,7 @@ function scheduleConflict(res, details) {
   const conflict = findScheduleConflict(db, details);
   if (!conflict) return false;
   fail(res, 409, conflict.type === "bloqueio"
-    ? "Este horário está bloqueado."
+    ? `Este horário está bloqueado. A duração do serviço coincide com o bloqueio de ${conflict.startsAt.slice(0, 16).replace("T", " ")} até ${conflict.endsAt.slice(0, 16).replace("T", " ")}. Escolha um horário em que o serviço termine antes do bloqueio ou comece após o intervalo.`
     : "Este profissional já tem um atendimento nesse horário.");
   return true;
 }
@@ -1386,19 +1386,23 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
 });
 
 app.post("/api/blocked-slots", requireAuth, allowRoles("dono", "recepcao", "profissional"), (req, res) => {
-  const startsAt = String(req.body?.startsAt ?? "");
-  const endsAt = String(req.body?.endsAt ?? "");
-  if (!validDateTime(startsAt) || !validDateTime(endsAt) || startsAt >= endsAt) {
+  const requestedStart = String(req.body?.startsAt ?? "");
+  const requestedEnd = String(req.body?.endsAt ?? "");
+  if (!validDateTime(requestedStart) || !validDateTime(requestedEnd)) {
     return fail(res, 400, "Informe um período de bloqueio válido.");
   }
+  const startsAt = requestedStart.length === 16 ? requestedStart + ":00" : requestedStart;
+  const endsAt = requestedEnd.length === 16 ? requestedEnd + ":00" : requestedEnd;
+  if (startsAt >= endsAt) return fail(res, 400, "O horário final do bloqueio deve ser posterior ao inicial.");
   if (startsAt < localNow(tenant(req))) return fail(res, 400, "Bloqueios só podem começar no presente ou futuro.");
   const professionalId = req.user.role === "profissional" ? req.user.id : (req.body?.professionalId || null);
   if (req.user.role === "profissional" && req.body?.professionalId && req.body.professionalId !== req.user.id) return fail(res, 403, "Você só pode bloquear a própria agenda.");
   if (professionalId && !db.prepare("SELECT id FROM users WHERE id = ? AND tenant_id = ? AND role = 'profissional'")
     .get(professionalId, tenant(req))) return fail(res, 400, "Profissional inválido.");
   const conflict = db.prepare(`
-    SELECT id FROM appointments WHERE tenant_id = ?
+    SELECT id FROM appointments a WHERE tenant_id = ?
       AND status NOT IN ('cancelado', 'faltou')
+      AND NOT (${completedEarlySql})
       AND (? IS NULL OR professional_id = ?)
       AND starts_at < ? AND ends_at > ? LIMIT 1
   `).get(tenant(req), professionalId, professionalId, endsAt, startsAt);

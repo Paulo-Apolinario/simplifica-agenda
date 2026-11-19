@@ -849,6 +849,9 @@ function AppointmentForm({ onClose, onSaved, initialDate, initialHour, initialPr
         <p className="booking-share-notice">Não há profissionais ativos disponíveis no estabelecimento. Solicite ao administrador que verifique a equipe.</p>}
       <Field label="Data e horário" type="datetime-local" required value={values.startsAt}
         onChange={event => setValues(v => ({ ...v, startsAt: event.target.value }))}/>
+      {selectedService && values.startsAt && <p className="booking-share-notice">
+        Duração: {selectedService.durationMinutes} min · Término previsto: {dateTimeLabel(new Date(new Date(values.startsAt).getTime() + selectedService.durationMinutes * 60000))}
+      </p>}
       <Field label="Observações" placeholder="Algum detalhe importante?" value={values.notes}
         onChange={event => setValues(v => ({ ...v, notes: event.target.value }))}/>
       <ErrorMessage>{error}</ErrorMessage>
@@ -864,12 +867,18 @@ function AppointmentForm({ onClose, onSaved, initialDate, initialHour, initialPr
 
 function BlockForm({ onClose, onSaved, initialDate, user }) {
   const [professionals, setProfessionals] = useState([]);
-  const [values, setValues] = useState({ professionalId: user.role === "profissional" ? user.id : "", startsAt: `${initialDate}T12:00`, endsAt: `${initialDate}T13:00`, reason: "" });
+  const [values, setValues] = useState({ professionalId: user.role === "profissional" ? user.id : "", startDate: initialDate, endDate: initialDate, startTime: "", endTime: "", reason: "" });
   const [error, setError] = useState("");
   useEffect(() => { api("/professionals").then(({ professionals: people }) => setProfessionals(people)); }, []);
   const submit = async (event) => {
     event.preventDefault(); setError("");
-    try { await api("/blocked-slots", { method: "POST", body: values }); onSaved(); }
+    const startsAt = `${values.startDate}T${values.startTime}`;
+    const endsAt = `${values.endDate}T${values.endTime}`;
+    if (!values.startTime || !values.endTime || startsAt >= endsAt) {
+      setError("Informe o início e o fim do bloqueio. O término deve ser posterior ao início.");
+      return;
+    }
+    try { await api("/blocked-slots", { method: "POST", body: { professionalId: values.professionalId, reason: values.reason, startsAt, endsAt } }); onSaved(); }
     catch (reason) { setError(reason.message); }
   };
   return <Modal title="Bloquear horário" onClose={onClose}>
@@ -878,8 +887,16 @@ function BlockForm({ onClose, onSaved, initialDate, user }) {
         <option value="">Toda a equipe</option>{professionals.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
       </SelectField>}
       {user.role === "profissional" && <p className="booking-share-notice">Este bloqueio vale apenas para seus próprios horários.</p>}
-      <Field label="Início" type="datetime-local" required value={values.startsAt} onChange={(e) => setValues({ ...values, startsAt: e.target.value })} />
-      <Field label="Fim" type="datetime-local" required value={values.endsAt} onChange={(e) => setValues({ ...values, endsAt: e.target.value })} />
+      <div className="form-grid">
+        <Field label="Data inicial" type="date" required value={values.startDate} onChange={(e) => {
+          const startDate = e.target.value;
+          setValues(previous => ({ ...previous, startDate, endDate: previous.endDate === previous.startDate || previous.endDate < startDate ? startDate : previous.endDate }));
+        }}/>
+        <Field label="Das (hora inicial)" type="time" required value={values.startTime} onChange={(e) => setValues({ ...values, startTime: e.target.value })}/>
+        <Field label="Data final" type="date" required min={values.startDate} value={values.endDate} onChange={(e) => setValues({ ...values, endDate: e.target.value })}/>
+        <Field label="Até (hora final)" type="time" required value={values.endTime} onChange={(e) => setValues({ ...values, endTime: e.target.value })}/>
+      </div>
+      <p className="panel-subtitle">Somente o intervalo informado ficará indisponível para agendamentos.</p>
       <Field label="Motivo / observação" placeholder="Ex.: almoço, saída para compromisso pessoal" value={values.reason} onChange={(e) => setValues({ ...values, reason: e.target.value })} />
       <ErrorMessage>{error}</ErrorMessage>
       <div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button>Bloquear horário</Button></div>
@@ -1017,7 +1034,7 @@ function AgendaGrid({ days, professionals, appointments, blocks, onOpen, onCreat
                 aria-label={`Novo agendamento às ${hour}, ${dateLabel(day)}, ${professional.name}`} />
             : <div key={hour} className="calendar-hour" />)}
           {dayBlocks.map((block) => <div key={block.id} className="calendar-block" style={geometry(block, day)}>
-            {block.reason || "Horário bloqueado"}
+            <b>{block.startsAt.slice(11, 16)} – {block.endsAt.slice(11, 16)}</b><br/>{block.reason || "Horário bloqueado"}
           </div>)}
           {events.map((item) => {
             const label = `${item.startsAt.slice(11, 16)} · ${item.clientName} · ${item.serviceName}`;

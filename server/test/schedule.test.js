@@ -72,6 +72,8 @@ test("reconhece bloqueio global ou individual do profissional", () => {
     );
     INSERT INTO blocked_slots VALUES
       ('global', 't', NULL, '2026-10-10T12:00:00', '2026-10-10T13:00:00', 'Almoço');
+    INSERT INTO blocked_slots VALUES
+      ('legacy', 't', 'p', '2026-10-11T12:00', '2026-10-11T13:00', 'Almoço');
   `);
 
   assert.equal(findScheduleConflict(db, {
@@ -80,6 +82,15 @@ test("reconhece bloqueio global ou individual do profissional", () => {
     startsAt: "2026-10-10T12:15:00",
     endsAt: "2026-10-10T12:45:00",
   }).type, "bloqueio");
+  // datetime-local historically saved blocks without seconds. Touching the boundary is valid.
+  const check = (start, end) => findScheduleConflict(db, {
+    tenantId: "t", professionalId: "p",
+    startsAt: "2026-10-11T" + start, endsAt: "2026-10-11T" + end,
+  });
+  assert.equal(check("11:30:00", "12:00:00"), null);
+  assert.equal(check("13:00:00", "13:30:00"), null);
+  assert.equal(check("11:45:00", "12:15:00")?.id, "legacy");
+  assert.equal(check("12:45:00", "13:15:00")?.id, "legacy");
 
   db.close();
 });

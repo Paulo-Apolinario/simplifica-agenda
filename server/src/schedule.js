@@ -32,8 +32,8 @@ export function findScheduleConflict(db, {
     FROM blocked_slots
     WHERE tenant_id = ?
       AND (professional_id IS NULL OR professional_id = ?)
-      AND starts_at < ?
-      AND ends_at > ?
+      AND datetime(starts_at) < datetime(?)
+      AND datetime(ends_at) > datetime(?)
     LIMIT 1
   `).get(tenantId, professionalId, endsAt, startsAt);
 
