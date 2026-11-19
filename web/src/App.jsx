@@ -3,7 +3,7 @@ import {
   ArrowDownToLine, ArrowLeft, ArrowRight, CalendarDays, Check, CheckCheck,
   ChevronLeft, ChevronRight, CircleDollarSign, Clock3, Download, ExternalLink, LayoutDashboard,
   LogOut, Menu, Moon, MoreHorizontal, Plus, Search, Settings, ShieldCheck, Sun, Users,
-  Wallet, X, Scissors, UserRound, CalendarClock, CalendarX2, Phone, Mail, Sparkles,
+  Wallet, X, Scissors, UserRound, CalendarClock, CalendarX2, Phone, Mail, Sparkles, RefreshCw, List, CalendarRange,
   Copy, QrCode, Share2, Link2, Smartphone, Info, ClipboardCheck, UserRoundCheck, Upload,
 } from "lucide-react";
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
@@ -1050,10 +1050,10 @@ function AgendaGrid({ days, professionals, appointments, blocks, onOpen, onCreat
   });
   return <section className="panel calendar-panel operational-calendar" aria-label="Grade de horários"
     style={{ "--day-count": columns.length }}>
-    <div className="calendar-heading"><div className="calendar-time-spacer" />
+    <div className="calendar-heading"><div className="calendar-time-spacer"><Clock3 size={17}/></div>
       <div className="calendar-day-heads">{columns.map(({day, professional}) => <div key={`${day}-${professional.id}`}>
-        <span>{dateLabel(day, { weekday: "short", day: "2-digit", month: "short" })}</span>
-        <b>{professional.name}</b>
+        <div className="calendar-prof-avatar">{professional.name.slice(0,1).toUpperCase()}</div>
+        <div className="calendar-prof-copy"><b>{professional.name}</b><span>{gridAppointments.filter(item=>item.professionalId===professional.id && item.startsAt.slice(0,10)===day).length} atendimento(s)</span></div>
       </div>)}</div>
     </div>
     <div className="calendar-body">
@@ -1064,7 +1064,7 @@ function AgendaGrid({ days, professionals, appointments, blocks, onOpen, onCreat
         const dayBlocks = blocks.filter((item) => item.startsAt < `${day}T24:00` && item.endsAt > `${day}T00:00`
           && (!item.professionalId || !professional.id || item.professionalId === professional.id));
         return <div className="calendar-day-column" key={`${day}-${professional.id}`}>
-          {hours.map((hour) => onCreate
+          {hours.flatMap(hour=>[hour,hour.replace(":00",":30")]).map((hour) => onCreate
             ? <button key={hour} type="button" className="calendar-hour"
                 onClick={() => onCreate(day, hour, professional.active ? professional.id : "")}
                 aria-label={`Novo agendamento às ${hour}, ${dateLabel(day)}, ${professional.name}`} />
@@ -1089,6 +1089,7 @@ function AgendaPage({ user }) {
   const [date, setDate] = useState(localDate());
   const [professionals, setProfessionals] = useState([]);
   const [professionalId, setProfessionalId] = useState("");
+  const [agendaView, setAgendaView] = useState(() => window.matchMedia("(max-width: 760px)").matches ? "lista" : "grade");
   const [newSlot, setNewSlot] = useState(null);
   const canEdit = user.tenantId !== "tenant-salao-demo";
   const [data, setData] = useState({ appointments: [], blockedSlots: [] });
@@ -1125,22 +1126,31 @@ function AgendaPage({ user }) {
   return <>
     <PageTitle eyebrow="SUA ROTINA EM UM SÓ LUGAR" title="Agenda" description={dateLabel(date)}
       actions={<>{canEdit && <Button variant="secondary" onClick={() => setModal("direct")}><Scissors size={16} /> Registrar serviço</Button>}{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => createAt(date, null, professionalId)}><Plus size={17} /> Novo agendamento</Button>}</>} />
-    <div className="agenda-toolbar">
+    <div className="agenda-day-summary" aria-label="Resumo do dia">
+      <div><span className="agenda-summary-icon blue"><CalendarDays size={20}/></span><div><small>Agendamentos</small><strong>{appointments.length}</strong></div></div>
+      <div><span className="agenda-summary-icon green"><CheckCheck size={20}/></span><div><small>Confirmados</small><strong>{appointments.filter(item=>item.status==="confirmado").length}</strong></div></div>
+      <div><span className="agenda-summary-icon purple"><ClipboardCheck size={20}/></span><div><small>Concluídos</small><strong>{appointments.filter(item=>item.status==="concluido").length}</strong></div></div>
+      <div><span className="agenda-summary-icon amber"><CalendarX2 size={20}/></span><div><small>Bloqueios</small><strong>{blocks.length}</strong></div></div>
+    </div>
+    <div className="agenda-toolbar premium-agenda-toolbar panel">
       <div className="date-nav"><button className="icon-button" onClick={() => move(-1)} aria-label="Anterior"><ChevronLeft size={18} /></button>
         <button className="date-today" onClick={() => setDate(localDate())}>Hoje</button><button className="icon-button" onClick={() => move(1)} aria-label="Próximo"><ChevronRight size={18} /></button></div>
       <Field label="Data da agenda" type="date" value={date} onChange={(event) => { if (event.target.value) setDate(event.target.value); }} />
-      <span className="agenda-current-label">{dateLabel(date, { weekday: "long", day: "2-digit", month: "long" })}</span>
-    </div>
-    <ErrorMessage>{error}</ErrorMessage>
-    {team.length > 1 && <div className="agenda-professional-filter">
+      {team.length > 1 && <div className="agenda-professional-filter">
       <SelectField label="Profissional" value={professionalId} onChange={(event) => setProfessionalId(event.target.value)}>
         <option value="">Todos os profissionais</option>
         {team.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
       </SelectField>
+      </div>}
+      <div className="agenda-view-control"><span className="field-label">Visualização</span><div className="view-switch"><button type="button" className={agendaView==="grade"?"selected":""} aria-pressed={agendaView==="grade"} onClick={()=>setAgendaView("grade")}><CalendarRange size={15}/> Grade</button><button type="button" className={agendaView==="lista"?"selected":""} aria-pressed={agendaView==="lista"} onClick={()=>setAgendaView("lista")}><List size={15}/> Lista</button></div></div>
+    </div>
+    <ErrorMessage>{error}</ErrorMessage>
+    {agendaView==="grade" && <div className="agenda-grid-wrapper">
+      <div className="agenda-grid-label"><div><b>Horários por profissional</b><small>{canEdit?"Clique em um horário livre para agendar.":"Consulte os horários disponíveis."}</small></div><div className="agenda-legend"><span data-status="agendado">Agendado</span><span data-status="confirmado">Confirmado</span><span data-status="concluido">Concluído</span><span data-status="bloqueado">Bloqueado</span></div></div>
+      <AgendaGrid days={days} professionals={visibleTeam.length ? visibleTeam : [{ id: "", name: "Agenda" }]}
+        appointments={appointments} blocks={blocks} onOpen={setSelected} onCreate={canEdit ? createAt : null} />
     </div>}
-    <AgendaGrid days={days} professionals={visibleTeam.length ? visibleTeam : [{ id: "", name: "Agenda" }]}
-      appointments={appointments} blocks={blocks} onOpen={setSelected} onCreate={canEdit ? createAt : null} />
-    <div className="agenda-list-panel panel">
+    <div className="agenda-list-panel panel premium-agenda-list">
       <div className="panel-heading"><div><h2>Agendamentos do dia</h2><p className="panel-subtitle">{dateLabel(date)}</p></div><span className="count-chip">{appointments.length} atendimento(s)</span></div>
       {days.map((day) => {
         const events = appointments.filter((item) => item.startsAt.slice(0, 10) === day);
@@ -2568,9 +2578,11 @@ function OnlineRequestsPage() {
   const [error,setError]=useState("");
   const [busy,setBusy]=useState("");
   const [notice,setNotice]=useState(null);
+  const [query,setQuery]=useState("");
+  const [loading,setLoading]=useState(true);
   const refresh=useCallback(()=>api("/requests")
     .then(result=>{setItems(result.requests);setError("");})
-    .catch(e=>setError(e.message)),[]);
+    .catch(e=>setError(e.message)).finally(()=>setLoading(false)),[]);
   useEffect(()=>{refresh();},[refresh]);
   const act=async(item,action)=>{
     const description=action==="confirm"?"confirmar":"recusar";
@@ -2584,39 +2596,45 @@ function OnlineRequestsPage() {
     }
     catch(e){setError(e.message);}finally{setBusy("");}
   };
-  const visible=items.filter(item=>filter==="all" || item.status===filter);
+  const normalizedQuery=query.trim().toLocaleLowerCase("pt-BR");
+  const visible=items.filter(item=>(filter==="all" || item.status===filter) && (!normalizedQuery || [item.clientName,item.serviceName,item.professionalName,item.clientPhone].some(value=>String(value||"").toLocaleLowerCase("pt-BR").includes(normalizedQuery))));
+  const categories=[{id:"agendado",label:"Aguardando confirmação",icon:Clock3,tone:"orange"},{id:"confirmado",label:"Confirmados",icon:CheckCheck,tone:"green"},{id:"cancelado",label:"Cancelados ou recusados",icon:X,tone:"rose"},{id:"all",label:"Todas as solicitações",icon:ClipboardCheck,tone:"blue"}];
   return <>
     <PageTitle eyebrow="CENTRAL DE AGENDAMENTOS" title="Solicitações online"
       description="Confirme ou recuse pedidos e abra um aviso pronto para envio manual pelo WhatsApp. A confirmação não envia mensagens sozinha." />
-    <div className="booking-queue-tools">
+    <section className="online-request-summary" aria-label="Resumo das solicitações">
+      {categories.map(({id,label,icon:Icon,tone})=><button type="button" className={`request-summary-card ${filter===id?"is-selected":""}`} data-tone={tone} key={id} aria-pressed={filter===id} onClick={()=>setFilter(id)}><span className="request-summary-icon"><Icon size={20}/></span><span><small>{label}</small><strong>{loading?"—":id==="all"?items.length:items.filter(item=>item.status===id).length}</strong></span><ChevronRight size={17} className="request-summary-arrow"/></button>)}
+    </section>
+    <div className="booking-queue-tools premium-request-tools panel">
       <SelectField label="Situação" value={filter} onChange={e=>setFilter(e.target.value)}>
         <option value="agendado">Aguardando confirmação</option><option value="confirmado">Confirmados</option>
         <option value="cancelado">Cancelados ou recusados</option><option value="all">Todos</option>
       </SelectField>
-      <Button type="button" variant="secondary" onClick={refresh}><Search size={15}/> Atualizar lista</Button>
+      <div className="request-search"><Field label="Buscar solicitação" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Cliente, serviço, profissional ou telefone"/></div>
+      <Button type="button" variant="secondary" onClick={()=>{setLoading(true);refresh();}} disabled={loading}><RefreshCw size={15}/> {loading?"Atualizando...":"Atualizar lista"}</Button>
     </div>
     <ErrorMessage>{error}</ErrorMessage>
-    <section className="panel management-panel">
+    <section className="panel management-panel premium-request-panel">
       <div className="panel-heading"><div><p className="eyebrow">PEDIDOS RECEBIDOS</p>
         <h2>{filter==="agendado"?"Aguardando confirmação":"Histórico de solicitações"}</h2></div>
         <span className="count-chip">{visible.length}</span></div>
-      {visible.length? <div className="management-list">{visible.map(item=>
-        <article className="service-row request-item" key={item.id}>
-          <span className="service-row-icon"><CalendarDays size={19}/></span>
-          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
-            <small>{dateTimeLabel(item.startsAt)} · {item.professionalName}</small>
-            <small>WhatsApp: {item.clientPhone} · {statusNames[item.status]||item.status}</small>
-          </div>
+      {loading && !items.length ? <Loading label="Carregando solicitações..."/> : visible.length? <div className="management-list premium-request-list">{visible.map(item=>
+        <article className="premium-request-card" key={item.id} data-status={item.status}>
+          <div className="request-card-main"><span className="request-avatar">{item.clientName.slice(0,1).toUpperCase()}</span>
+          <div className="min-w-0 flex-1"><b>{item.clientName}</b><small>{item.serviceName}</small></div><span className={`status-badge ${statusStyles[item.status]||""}`}>{statusNames[item.status]||item.status}</span></div>
+          <div className="request-card-details"><span><CalendarDays size={16}/> {dateTimeLabel(item.startsAt)}</span><span><UserRound size={16}/> {item.professionalName}</span><span><Phone size={16}/> {item.clientPhone || "Sem telefone"}</span></div>
+          <div className="request-card-actions">
           {item.status==="agendado"&&<>
             <Button disabled={busy===item.id} onClick={()=>act(item,"confirm")}>Confirmar</Button>
             <Button variant="secondary" disabled={busy===item.id} onClick={()=>act(item,"reject")}>Recusar</Button>
           </>}
-          {item.whatsappOptIn && item.clientPhone && <button type="button" className="button button-secondary" onClick={() =>
+          {Boolean(item.whatsappOptIn && item.clientPhone) && <button type="button" className="button button-secondary" onClick={() =>
             openAppointmentWhatsApp(item).then(refresh).catch((reason) => setError(reason.message))
           }><Phone size={16}/> Abrir WhatsApp ({item.status==="confirmado"?"confirmação":item.status==="cancelado"?"cancelamento":"solicitação"})</button>}
+          </div>
           {item.whatsappDeliveryState==="submitted" && <small>Enviado à API do WhatsApp — entrega ainda não verificada</small>}
           {item.whatsappDeliveryState==="failed" && <small>Envio automático não concluído — envie manualmente</small>}
-          {item.whatsappOptIn && item.whatsappOpenedAt && <small>Conversa aberta anteriormente — envio manual não verificado</small>}
+          {Boolean(item.whatsappOptIn && item.whatsappOpenedAt) && <small>Conversa aberta anteriormente — envio manual não verificado</small>}
         </article>)}</div>:
         <EmptyState icon={ClipboardCheck} title="Nenhuma solicitação nesta situação"
           description="Pedidos de clientes pelo link público aparecerão aqui." />}
