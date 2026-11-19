@@ -1041,7 +1041,8 @@ app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const rows = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
-    a.starts_at AS startsAt, a.price_cents AS priceCents, a.booking_source AS bookingSource, a.payment_method AS paymentMethod, c.name AS clientName,
+    a.starts_at AS startsAt, COALESCE(a.completed_on, substr(a.starts_at, 1, 10)) AS completedOn, a.service_id AS serviceId,
+    a.price_cents AS priceCents, a.booking_source AS bookingSource, a.payment_method AS paymentMethod, c.name AS clientName,
     a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent, s.name AS serviceName,
     CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents, cp.paid_at AS paidAt
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
@@ -1065,7 +1066,7 @@ app.patch("/api/commissions/:id", requireAuth, allowRoles("dono"), (req, res) =>
   const reason = String(req.body?.reason ?? "").trim();
   if (![percentage, house].every(v => Number.isFinite(v) && v >= 0 && v <= 100))
     return fail(res, 400, "Percentuais devem estar entre 0% e 100%.");
-  if (reason.length < 5 || reason.length > 250) return fail(res, 400, "Informe o motivo do ajuste (5 a 250 caracteres).");
+  if (reason.length > 250) return fail(res, 400, "A observação deve ter até 250 caracteres.");
   const beforeAudit = auditSnapshot(tenant(req), appointment.id);
   db.transaction(() => {
     db.prepare("UPDATE appointments SET commission_percent = ?, house_share_percent = ? WHERE id = ? AND tenant_id = ?")
@@ -1232,6 +1233,7 @@ app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("
 function serviceTerms(tenantId, serviceId, professionalId) {
   return db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
+      CASE WHEN psc.professional_id IS NOT NULL THEN 'personalizada' WHEN s.commission_mode = 'custom' THEN 'servico' ELSE 'profissional' END AS ruleSource,
       COALESCE(psc.commission_percent, CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END) AS commission,
       COALESCE(psc.house_share_percent,s.house_share_percent) AS houseShare
     FROM services s
@@ -1240,6 +1242,13 @@ function serviceTerms(tenantId, serviceId, professionalId) {
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
   `).get(tenantId, serviceId, professionalId);
 }
+
+app.get("/api/commission-preview", requireAuth, allowRoles("dono"), (req, res) => {
+  const terms = serviceTerms(tenant(req), String(req.query.serviceId ?? ""), String(req.query.professionalId ?? ""));
+  if (!terms) return fail(res, 404, "Serviço ou profissional ativo não encontrado.");
+  res.json({ priceCents: terms.price, commissionPercent: terms.commission, houseSharePercent: terms.houseShare,
+    ruleSource: terms.ruleSource, earnedCents: commissionCents({priceCents:terms.price,commissionPercent:terms.commission,houseSharePercent:terms.houseShare}) });
+});
 
 app.post("/api/direct-services", requireAuth, allowRoles("dono", "profissional", "recepcao"), (req, res) => {
   const { clientId, professionalId, serviceId } = req.body ?? {};
@@ -1619,7 +1628,7 @@ function cashClosing(tenantId, date) {
 function cashDaySummary(tenantId, date) {
   const methods = Object.fromEntries(paymentMethods.map(method => [method, 0]));
   const rows = db.prepare(`SELECT a.id, a.price_cents AS priceCents, a.payment_method AS paymentMethod,
-    a.paid_at AS paidAt, a.paid_on AS paidOn, a.starts_at AS startsAt,
+    a.paid_at AS paidAt, a.paid_on AS paidOn, a.starts_at AS startsAt, a.completed_on AS completedOn, a.booking_source AS bookingSource,
     c.name AS clientName, s.name AS serviceName, u.name AS professionalName
     FROM appointments a
     JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
@@ -1918,7 +1927,10 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
     HAVING date(max(COALESCE(a.completed_on, substr(a.starts_at, 1, 10)))) <= date(?, '-30 days')
     ORDER BY lastVisit
   `).all(tenant(req), localNow(tenant(req)).slice(0, 10));
+  const productionCents = byService.reduce((sum, item) => sum + item.revenueCents, 0);
+  const commissionTotalCents = byProfessional.reduce((sum, item) => sum + item.commissionCents, 0);
   res.json({ month, revenueCents: revenue.revenue_cents, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,
+    productionCents, commissionTotalCents, establishmentShareCents: productionCents - commissionTotalCents,
     byService, byProfessional, inactiveClients });
 });
 
