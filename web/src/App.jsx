@@ -1219,41 +1219,65 @@ function QuickClientForm({ onClose, onSaved }) {
 function ClientsPage({ user }) {
   const [clients, setClients] = useState([]);
   const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [loading, setLoading] = useState(true);
+  const refreshVersion = useRef(0);
   const [modal, setModal] = useState(null);
   const [history, setHistory] = useState(null);
   const [error, setError] = useState("");
-  const refresh = useCallback(() => api(`${user.role === "profissional" ? "/booking/clients" : "/clients"}?search=${encodeURIComponent(search)}`).then(({ clients: list }) => setClients(list)).catch((reason) => setError(reason.message)), [search, user.role]);
+  const refresh = useCallback(() => {
+    const version=++refreshVersion.current;
+    setLoading(true);
+    return api(`${user.role === "profissional" ? "/booking/clients" : "/clients"}?search=${encodeURIComponent(search)}`)
+      .then(({clients:list})=>{if(version===refreshVersion.current){setClients(list);setError("");}})
+      .catch(reason=>{if(version===refreshVersion.current)setError(reason.message);})
+      .finally(()=>{if(version===refreshVersion.current)setLoading(false);});
+  }, [search, user.role]);
   useEffect(() => { refresh(); }, [refresh]);
   const showHistory = async (client) => {
     try { const result = await api(`/clients/${client.id}/history`); setHistory({ client, appointments: result.history }); }
     catch (reason) { setError(reason.message); }
   };
+  const isProfessional=user.role==="profissional";
+  const visible=clients.filter(client=>filter==="all" || (filter==="visited"&&client.lastVisit) || (filter==="new"&&!client.lastVisit) || (filter==="contactless"&&!client.phone));
+  const historyCompleted=history?.appointments.filter(item=>item.status==="concluido")||[];
   return <>
-    <PageTitle eyebrow="RELACIONAMENTO QUE FIDELIZA" title="Clientes" description="Conheça melhor quem confia no seu trabalho."
+    <PageTitle eyebrow="CRM • RELACIONAMENTO" title="Clientes" description="Gerencie contatos, acompanhe visitas e conheça o histórico de atendimento."
       actions={user.tenantId !== "tenant-salao-demo" && <Button onClick={() => setModal({})}><Plus size={17} /> Novo cliente</Button>} />
     <ErrorMessage>{error}</ErrorMessage>
-    <section className="panel clients-panel">
-      <div className="table-toolbar"><label className="search-field"><Search size={17} /><input placeholder="Buscar por nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} /></label>
-        <span className="count-chip">{clients.length} clientes</span>{user.role !== "profissional" && <a className="button button-secondary export-button" href="/api/export/clients.csv"><Download size={15} /> Exportar CSV</a>}</div>
-      {clients.length ? <div className="table-scroll client-records"><table role="table" aria-label="Clientes"><thead><tr><th>CLIENTE</th><th>CONTATO</th>{user.role !== "profissional" && <><th>ATENDIMENTOS</th><th>ÚLTIMA VISITA</th></>}<th> </th></tr></thead>
-        <tbody role="rowgroup">{clients.map((client) => <tr role="row" key={client.id}>
-          <td role="cell" className="client-record-name"><div className="table-person"><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><b>{client.name}</b><small>{user.role === "profissional" ? "Cliente do estabelecimento" : client.email || client.notes || "Cliente Simplifica"}</small></div></div></td>
+    <section className="stats-grid directory-stats">
+      <StatCard title={search?"Clientes encontrados":"Clientes na lista"} value={loading?"—":clients.length} note={isProfessional?"Diretório de contatos":"Cadastros do estabelecimento"} icon={Users}/>
+      {!isProfessional && <><StatCard title="Já foram atendidos" value={loading?"—":clients.filter(c=>c.lastVisit).length} note="Com visita concluída" icon={CheckCheck} tone="green"/>
+      <StatCard title="Ainda sem visita" value={loading?"—":clients.filter(c=>!c.lastVisit).length} note="Sem atendimento concluído" icon={CalendarClock} tone="purple"/></>}
+      <StatCard title="Sem telefone" value={loading?"—":clients.filter(c=>!c.phone).length} note="Na lista atual" icon={Phone} tone="orange"/>
+    </section>
+    <section className="panel clients-panel premium-directory">
+      <div className="directory-heading"><div><p className="eyebrow">BASE DE RELACIONAMENTO</p><h2>Carteira de clientes</h2></div><span className="count-chip">{visible.length} resultado(s)</span></div>
+      <div className="table-toolbar"><label className="search-field"><Search size={17} /><input aria-label="Buscar cliente" placeholder="Buscar por nome ou telefone..." value={search} onChange={(e) => setSearch(e.target.value)} /></label>
+        <SelectField label="Filtrar clientes" value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">Todos</option>{!isProfessional&&<><option value="visited">Já atendidos</option><option value="new">Sem visita</option></>}<option value="contactless">Sem telefone</option></SelectField>
+        {user.role !== "profissional" && user.tenantId!=="tenant-salao-demo" && <a className="button button-secondary export-button" href="/api/export/clients.csv"><Download size={15} /> Exportar CSV</a>}</div>
+      {loading ? <Loading label="Carregando clientes..."/> : visible.length ? <div className="table-scroll client-records"><table role="table" aria-label="Clientes"><thead><tr><th>CLIENTE</th><th>CONTATO</th>{user.role !== "profissional" && <><th>ATENDIMENTOS</th><th>ÚLTIMA VISITA</th></>}<th>AÇÕES</th></tr></thead>
+        <tbody role="rowgroup">{visible.map((client) => <tr role="row" key={client.id}>
+          <td role="cell" className="client-record-name"><div className="table-person"><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><b>{client.name}</b><small>{user.role === "profissional" ? "Cliente do estabelecimento" : client.email || "Cliente cadastrado"}</small></div></div></td>
           <td role="cell" data-label="Contato">{client.phone || "Sem telefone"}</td>{user.role !== "profissional" && <td role="cell" data-label="Atendimentos"><span className="count-chip">{client.appointmentCount}</span></td>}
           {user.role !== "profissional" && <td role="cell" data-label="Última visita">{client.lastVisit ? dateLabel(client.lastVisit.slice(0, 10)) : "Ainda sem visita"}</td>}
-          <td role="cell" className="client-record-actions"><div className="row-actions">{user.role !== "profissional" && <button className="text-link" onClick={() => showHistory(client)}>Histórico</button>}
-            {user.role !== "profissional" && <button className="icon-button compact" onClick={() => setModal(client)} aria-label="Editar cliente"><MoreHorizontal size={18} /></button>}
-            {client.phone && <a className="icon-button compact" aria-label="Enviar mensagem" href={whatsappUrl(client.phone, `Olá, ${client.name}! Tudo bem?`) } target="_blank" rel="noreferrer"><Phone size={15} /></a>}</div></td>
+          <td role="cell" className="client-record-actions"><div className="row-actions">{user.role !== "profissional" && <button className="button button-secondary" onClick={() => showHistory(client)}>Histórico</button>}
+            {user.role !== "profissional" && user.tenantId!=="tenant-salao-demo" && <button className="icon-button compact" onClick={() => setModal(client)} aria-label="Editar cliente" title="Editar cliente"><MoreHorizontal size={18} /></button>}
+            {client.phone && <a className="icon-button compact client-contact-button" aria-label="Enviar mensagem" title="Enviar mensagem" href={whatsappUrl(client.phone, `Olá, ${client.name}! Tudo bem?`) } target="_blank" rel="noreferrer"><Phone size={15} /></a>}</div></td>
         </tr>)}</tbody></table></div>
-        : <EmptyState icon={Users} title="Sua lista começa aqui" description="Cadastre seus clientes e acompanhe cada visita." action={user.tenantId !== "tenant-salao-demo" && <Button onClick={() => setModal({})}><Plus size={15} /> Cadastrar cliente</Button>} />}
+        : <EmptyState icon={Users} title={search||filter!=="all"?"Nenhum cliente encontrado":"Sua lista começa aqui"} description={search||filter!=="all"?"Altere a busca ou o filtro para encontrar outros clientes.":"Cadastre seus clientes e acompanhe cada visita."} action={search||filter!=="all"?<Button variant="secondary" onClick={()=>{setSearch("");setFilter("all");}}>Limpar filtros</Button>:user.tenantId !== "tenant-salao-demo" && <Button onClick={() => setModal({})}><Plus size={15} /> Cadastrar cliente</Button>} />}
     </section>
     {modal && (user.role === "profissional" ?
       <QuickClientForm onClose={() => setModal(null)} onSaved={() => { setModal(null); refresh(); }}/> :
       <ClientForm client={modal.id ? modal : null} onClose={() => setModal(null)} onSaved={() => { setModal(null); refresh(); }}/>)}
     {history && <Modal title={`Histórico de ${history.client.name}`} onClose={() => setHistory(null)} wide>
-      <p className="mb-4 text-sm text-slate-500">{history.client.notes || "Sem observações sobre este cliente."}</p>
-      {history.appointments.length ? <div className="appointments-list">{history.appointments.map((item) => <div className="history-item" key={item.id}><span>{item.status === "concluido" && item.completedOn ? <>
-        Agendado para {dateTimeLabel(item.startsAt)}<br />Realizado em {dateLabel(item.completedOn)}
-      </> : dateTimeLabel(item.startsAt)}</span><b>{item.serviceName}</b><span>{item.professionalName}</span><span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span></div>)}</div>
+      <div className="crm-profile-header"><span className="table-avatar">{history.client.name.slice(0,1).toUpperCase()}</span><div><b>{history.client.name}</b><small>{history.client.phone||"Sem telefone"} · {history.client.email||"Sem e-mail"}</small></div></div>
+      <div className="crm-profile-summary"><div><small>Atendimentos concluídos</small><b>{historyCompleted.length}</b></div><div><small>Valor dos serviços realizados</small><b>{money(historyCompleted.reduce((sum,item)=>sum+item.priceCents,0))}</b></div><div><small>Última visita</small><b>{history.client.lastVisit?dateLabel(history.client.lastVisit.slice(0,10)):"Nenhuma"}</b></div></div>
+      <div className="crm-profile-notes"><b>Observações</b><p>{history.client.notes || "Sem observações sobre este cliente."}</p></div>
+      <h3 className="crm-history-title">Histórico de atendimentos</h3>
+      {history.appointments.length ? <div className="appointments-list crm-history-list">{history.appointments.map((item) => <div className="history-item" key={item.id}><span>{item.status === "concluido" && item.completedOn ? <>
+        {item.bookingSource==="direct"?"Registro direto":`Agendado: ${dateTimeLabel(item.startsAt)}`}<br />Realizado em {dateLabel(item.completedOn)}
+      </> : dateTimeLabel(item.startsAt)}</span><div><b>{item.serviceName}</b><small>{item.professionalName}</small></div><span>{money(item.priceCents)}</span><span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span></div>)}</div>
         : <EmptyState icon={CalendarDays} title="Nenhum atendimento ainda" description="Os atendimentos deste cliente aparecerão aqui." />}
     </Modal>}
   </>;
@@ -1579,14 +1603,28 @@ function ServicesPage({ user, section = "services" }) {
   const [activationIssued, setActivationIssued] = useState(null);
   const [editPerson, setEditPerson] = useState(null);
   const [error, setError] = useState("");
-  const refresh = useCallback(() => Promise.all([
+  const [query,setQuery]=useState("");
+  const [statusFilter,setStatusFilter]=useState("all");
+  const [roleFilter,setRoleFilter]=useState("all");
+  const [loading,setLoading]=useState(true);
+  const directoryVersion=useRef(0);
+  const refresh = useCallback(() => {
+    const version=++directoryVersion.current;
+    setLoading(true);
+    return Promise.all([
     api("/services"),
     api("/professionals"),
     user.role === "dono" && user.tenantId !== "tenant-salao-demo" && section === "team" ? api("/team-members") : Promise.resolve(null),
   ])
-    .then(([s, p, people]) => { setServices(s.services); setProfessionals(p.professionals); setTeam(people?.team ?? p.professionals); })
-    .catch((reason) => setError(reason.message)), []);
+    .then(([s, p, people]) => { if(version===directoryVersion.current){setServices(s.services);setProfessionals(p.professionals);setTeam(people?.team ?? p.professionals);setError("");} })
+    .catch((reason) => {if(version===directoryVersion.current)setError(reason.message);}).finally(()=>{if(version===directoryVersion.current)setLoading(false);});
+  }, [user.role,user.tenantId,section]);
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(()=>{setQuery("");setStatusFilter("all");setRoleFilter("all");},[section]);
+  const term=query.trim().toLocaleLowerCase("pt-BR");
+  const matchesStatus=item=>statusFilter==="all" || (statusFilter==="active" ? Boolean(item.active) : !item.active);
+  const filteredServices=services.filter(item=>matchesStatus(item)&&(!term||item.name.toLocaleLowerCase("pt-BR").includes(term)));
+  const filteredTeam=team.filter(person=>matchesStatus(person)&&(roleFilter==="all"||person.role===roleFilter)&&(!term||[person.name,person.jobTitle,person.email,person.phone].some(value=>String(value||"").toLocaleLowerCase("pt-BR").includes(term))));
   return <>
     <PageTitle eyebrow="GESTÃO DO ESTABELECIMENTO"
       title={section === "team" ? "Equipe e acessos" : "Serviços"}
@@ -1595,18 +1633,35 @@ function ServicesPage({ user, section = "services" }) {
         ? <Button onClick={() => setModal("team")}><UserRound size={16} /> Adicionar funcionário</Button>
         : <Button onClick={() => setModal("service")}><Plus size={16} /> Novo serviço</Button>)} />
     <ErrorMessage>{error}</ErrorMessage>
+    {section==="services" ? <section className="stats-grid directory-stats">
+      <StatCard title="Serviços cadastrados" value={loading?"—":services.length} note="Catálogo completo" icon={Scissors}/>
+      <StatCard title="Serviços ativos" value={loading?"—":services.filter(s=>s.active).length} note="Disponíveis para atendimento" icon={CheckCheck} tone="green"/>
+      <StatCard title="Agendamento online" value={loading?"—":services.filter(s=>s.active&&s.publicEnabled).length} note="Visíveis no link público" icon={CalendarDays} tone="purple"/>
+      <StatCard title="Serviços inativos" value={loading?"—":services.filter(s=>!s.active).length} note="Indisponíveis no catálogo" icon={X} tone="orange"/>
+    </section>:<section className="stats-grid directory-stats">
+      <StatCard title="Equipe cadastrada" value={loading?"—":team.length} note="Todos os colaboradores" icon={Users}/>
+      <StatCard title="Colaboradores ativos" value={loading?"—":team.filter(p=>p.active).length} note="Cadastro ativo" icon={CheckCheck} tone="green"/>
+      <StatCard title="Profissionais" value={loading?"—":team.filter(p=>p.role==="profissional"&&p.active).length} note="Profissionais ativos com agenda" icon={Scissors} tone="purple"/>
+      <StatCard title="Recepção e apoio" value={loading?"—":team.filter(p=>p.role!=="profissional"&&p.active).length} note="Colaboradores ativos" icon={UserRound} tone="orange"/>
+    </section>}
     <div className="management-grid">
-      {section === "services" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">SERVIÇOS OFERECIDOS</p><h2>Serviços</h2></div><span className="count-chip">{services.length}</span></div>
-        {services.length ? <div className="management-list">{services.map((service) => <article className="service-row" key={service.id}>
-          <span className="service-row-icon"><Scissors size={18} /></span><div className="min-w-0 flex-1"><b>{service.name}</b><small>{service.durationMinutes} min · {service.commissionMode === "custom" ? `Repasse ${service.serviceCommissionPercent}%` : "Comissão padrão da equipe"} · Retenção ${service.houseSharePercent || 0}%</small></div>
-          <span className={`status-badge ${service.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{service.active ? "Ativo" : "Inativo"}</span>
-          <strong>{money(service.priceCents)}</strong>{user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <button className="icon-button compact" onClick={() => setModal(service)} aria-label="Editar serviço"><MoreHorizontal size={18} /></button>}
-        </article>)}</div> : <EmptyState icon={Scissors} title="Nenhum serviço cadastrado" description="Adicione seu primeiro serviço." />}</section>}
-      {section === "team" && <section className="panel management-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe</h2></div><span className="count-chip">{team.filter((person) => person.active).length} ativos</span></div>
-        {team.length ? <div className="management-list">{team.map((person) => <article className="professional-row" key={person.id}>
-          <span className="table-avatar">{person.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
-          <div className="min-w-0 flex-1"><b>{person.name}</b><small>{person.jobTitle || (person.role === "recepcao" ? "Recepção" : person.role === "sem_acesso" ? "Apoio" : "Profissional")}</small><small>{person.role === "profissional" ? `Acesso ${person.loginCode || person.staffCode || "—"} · Comissão padrão ${person.commissionPercent}%` : person.role === "recepcao" ? `${person.email} · Recepção` : "Sem login"}</small></div>
-          {person.active ? <span className="status-badge bg-emerald-50 text-emerald-700">Ativa</span> : <span className="status-badge bg-slate-100 text-slate-500">Inativa</span>}
+      {section === "services" && <section className="panel management-panel catalog-panel"><div className="panel-heading"><div><p className="eyebrow">SERVIÇOS OFERECIDOS</p><h2>Catálogo de serviços</h2></div><span className="count-chip">{filteredServices.length} resultado(s)</span></div>
+        <div className="directory-filters"><Field label="Buscar serviço" placeholder="Nome do serviço" value={query} onChange={e=>setQuery(e.target.value)}/><SelectField label="Situação" value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option value="all">Todos</option><option value="active">Ativos</option><option value="inactive">Inativos</option></SelectField></div>
+        {loading?<Loading label="Carregando catálogo..."/>:filteredServices.length ? <div className="catalog-grid">{filteredServices.map((service) => <article className="catalog-card" key={service.id}>
+          <div className="catalog-card-head"><span className="catalog-icon"><Scissors size={23}/></span><span className={`status-badge ${service.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>{service.active?"Ativo":"Inativo"}</span></div>
+          <h3>{service.name}</h3><div className="catalog-price">{money(service.priceCents)}</div>
+          <div className="catalog-detail"><span><Clock3 size={15}/> {service.durationMinutes} min</span><span><CalendarDays size={15}/> {service.active&&service.publicEnabled?"Online disponível":"Sem oferta online"}</span></div>
+          <div className="catalog-commission"><small>Regra de comissão</small><b>{service.commissionMode === "custom" ? `${service.serviceCommissionPercent}% do serviço` : "Padrão do profissional"}</b><small>Retenção: {service.houseSharePercent||0} pontos percentuais</small></div>
+          {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={()=>setModal(service)} aria-label="Editar serviço"><Settings size={15}/> Editar serviço</Button>}
+        </article>)}</div> : <EmptyState icon={Scissors} title={services.length?"Nenhum serviço encontrado":"Nenhum serviço cadastrado"} description={services.length?"Altere os filtros para encontrar outros serviços.":"Adicione seu primeiro serviço."} />}</section>}
+      {section === "team" && <section className="panel management-panel catalog-panel"><div className="panel-heading"><div><p className="eyebrow">QUEM FAZ ACONTECER</p><h2>Equipe do estabelecimento</h2></div><span className="count-chip">{filteredTeam.length} resultado(s)</span></div>
+        <div className="directory-filters"><Field label="Buscar colaborador" placeholder="Nome, cargo ou contato" value={query} onChange={e=>setQuery(e.target.value)}/><SelectField label="Função" value={roleFilter} onChange={e=>setRoleFilter(e.target.value)}><option value="all">Todas</option><option value="profissional">Profissional</option><option value="recepcao">Recepção</option><option value="sem_acesso">Apoio</option></SelectField><SelectField label="Situação" value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option value="all">Todos</option><option value="active">Ativos</option><option value="inactive">Inativos</option></SelectField></div>
+        {loading?<Loading label="Carregando equipe..."/>:filteredTeam.length ? <div className="catalog-grid team-catalog-grid">{filteredTeam.map((person) => <article className="team-catalog-card" key={person.id}>
+          <div className="team-card-head"><span className="team-card-avatar" data-role={person.role}>{person.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
+          <div className="min-w-0 flex-1"><h3>{person.name}</h3><small>{person.jobTitle || (person.role === "recepcao" ? "Recepção" : person.role === "sem_acesso" ? "Apoio" : "Profissional")}</small></div></div>
+          <div className="team-card-badges"><span className="count-chip">{person.role==="profissional"?"Profissional":person.role==="recepcao"?"Recepção":"Apoio"}</span>{person.active ? <span className="status-badge bg-emerald-50 text-emerald-700">Ativo</span> : <span className="status-badge bg-slate-100 text-slate-500">Inativo</span>}</div>
+          <div className="team-card-details"><span><Phone size={15}/>{person.phone||"Sem telefone"}</span>
+          {person.role==="profissional"?<><span><ShieldCheck size={15}/> Acesso: {person.loginCode||person.staffCode||"—"}</span><span><Wallet size={15}/> Comissão padrão: {person.commissionPercent}%</span></>:person.role==="recepcao"?<span><Mail size={15}/> {person.email||"Sem e-mail"}</span>:<span><ShieldCheck size={15}/> Sem acesso ao painel</span>}</div>
           {user.role === "dono" && user.tenantId !== "tenant-salao-demo" && <details className="row-action-menu">
             <summary className="button button-secondary" aria-label={`Ações de ${person.name}`}><MoreHorizontal size={17}/> Ações</summary>
             <div className="row-action-options">
@@ -1625,7 +1680,7 @@ function ServicesPage({ user, section = "services" }) {
           }} aria-label={person.active ? "Desativar pessoa da equipe" : "Ativar pessoa da equipe"}><ShieldCheck size={16} />{person.active ? "Desativar" : "Ativar"}</button>}
             </div>
           </details>}
-        </article>)}</div> : <EmptyState icon={UserRound} title="Só você por enquanto" description="Adicione profissionais para compartilhar a agenda." />}</section>}
+        </article>)}</div> : <EmptyState icon={UserRound} title={team.length?"Nenhum colaborador encontrado":"Só você por enquanto"} description={team.length?"Altere os filtros para encontrar outros colaboradores.":"Adicione profissionais para compartilhar a agenda."} />}</section>}
     </div>
     {modal === "team" && <TeamMemberForm services={services} businessSlug={user.slug} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {(modal === "service" || modal?.id) && <ServiceForm service={modal?.id ? modal : null} professionals={professionals} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
