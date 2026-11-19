@@ -2531,18 +2531,9 @@ function FinancePage({user}) {
     return ()=>{active=false;};
   }, [month]);
   const loaded=report?.month===month;
-  const downloadBackup = async () => {
-    try {
-      const blob = await api("/export/backup");
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url; link.download = "simplifica-agenda-backup.sqlite"; link.click();
-      URL.revokeObjectURL(url);
-    } catch (reason) { setError(reason.message); }
-  };
   return <div className="premium-reports">
     <PageTitle eyebrow="INTELIGÊNCIA DO NEGÓCIO" title="Financeiro e relatórios" description="Acompanhe desempenho, recebimentos, serviços e comissões com dados reais do estabelecimento."
-      actions={<><a className="button button-secondary" href="/api/export/appointments.csv"><Download size={16} /> Exportar todos atendimentos</a><Button onClick={downloadBackup}><ArrowDownToLine size={16} /> Backup do banco</Button></>} />
+      actions={<><a className="button button-secondary" href="/api/export/appointments.csv"><Download size={16} /> Exportar todos atendimentos</a><Link className="button button-secondary" to="/configuracoes?aba=security"><ShieldCheck size={16}/> Segurança e dados</Link></>} />
     <div className="panel report-period-bar"><div><b>Período de análise</b><small>Os indicadores e gráficos de serviços são referentes ao mês selecionado.</small></div><div className="month-filter"><label htmlFor="report-month">Mês de referência</label><input id="report-month" className="input month-input" type="month" value={month} onChange={(e) => {if(e.target.value)setMonth(e.target.value);}} /></div></div>
     <ErrorMessage>{error}</ErrorMessage>
     {!loaded ? !error&&<Loading label="Carregando relatórios..."/> : <>
@@ -2593,7 +2584,7 @@ function SettingsPage({ user, onUserUpdated }) {
   const [settings, setSettings] = useState(null);
   const [hours, setHours] = useState([]);
   const requestedTab=new URLSearchParams(location.search).get("aba");
-  const tab=["business","hours","booking","account","whatsapp","link"].includes(requestedTab)?requestedTab:"business";
+  const tab=["business","hours","booking","account","whatsapp","link","security"].includes(requestedTab)?requestedTab:"business";
   const setTab=value=>navigate("/configuracoes?aba="+value);
   const [booking, setBooking] = useState(null);
   const [message, setMessage] = useState("");
@@ -2674,6 +2665,7 @@ function SettingsPage({ user, onUserUpdated }) {
         onClick={() => { setTab("booking"); setError(""); setMessage(""); }}><span className="settings-tab-icon"><CalendarClock size={20}/></span><span>Agendamento online<small>Regras de reserva</small></span></button>
       <button type="button" role="tab" aria-selected={tab==="link"} className={tab==="link"?"active":""} onClick={()=>setTab("link")}><span className="settings-tab-icon"><QrCode size={20}/></span><span>Link de agendamento<small>Divulgação e QR Code</small></span></button>
       <button type="button" role="tab" aria-selected={tab==="whatsapp"} className={tab==="whatsapp"?"active":""} onClick={()=>setTab("whatsapp")}><span className="settings-tab-icon"><Phone size={20}/></span><span>WhatsApp<small>Mensagens e lembretes</small></span></button>
+      <button type="button" role="tab" aria-selected={tab==="security"} className={tab==="security"?"active":""} onClick={()=>setTab("security")}><span className="settings-tab-icon"><ShieldCheck size={20}/></span><span>Segurança e dados<small>Exportações e privacidade</small></span></button>
       <button type="button" role="tab" aria-selected={tab === "account"} className={tab === "account" ? "active" : ""}
         onClick={() => { setTab("account"); setError(""); setMessage(""); }}><span className="settings-tab-icon"><ShieldCheck size={20}/></span><span>Minha conta<small>Perfil e segurança</small></span></button>
     </div>
@@ -2769,6 +2761,7 @@ function SettingsPage({ user, onUserUpdated }) {
     </div>}
     {tab==="link"&&<BookingSharePage user={user} embedded/>}
     {tab==="whatsapp"&&<WhatsAppCenter user={user} configOnly/>}
+    {tab==="security"&&<section className="panel expense-list"><div className="panel-heading"><div><h2>Segurança e dados</h2><p className="panel-subtitle">Exporte somente os registros do seu estabelecimento. A exportação contém dados pessoais; guarde-a em local protegido.</p></div></div><div className="expense-row"><div className="expense-row-details"><b>Dados operacionais</b><small>Agenda, clientes, equipe, financeiro, produtos e pacotes, sem credenciais de acesso.</small></div><a className="button button-primary" href="/api/export/business-data"><Download size={16}/> Exportar dados (JSON)</a></div><div className="expense-row"><div className="expense-row-details"><b>Clientes e atendimentos</b><small>Arquivos CSV para consulta e organização.</small></div><div className="expense-row-actions"><a className="button button-secondary" href="/api/export/clients.csv">Clientes</a><a className="button button-secondary" href="/api/export/appointments.csv">Atendimentos</a></div></div><div className="expense-row"><div className="expense-row-details"><b>Backups completos</b><small>Gerenciados pelos operadores da plataforma na Central SaaS. Não é possível restaurar pela conta do estabelecimento.</small></div></div></section>}
   </div>;
 }
 function PublicBooking({ slug }) {
@@ -3340,6 +3333,34 @@ function SaasOperatorsPanel({operators,operator,call,refresh}){
   return <section className="panel expense-list"><div className="panel-heading"><div><h2>Operadores da plataforma</h2><p className="panel-subtitle">Acesso individual, separado das contas de estabelecimentos. Sessões expiram em oito horas.</p></div>{(operator||!operators.length)&&<Button onClick={()=>{setError("");setForm({name:"",email:"",password:""});}}>Novo operador</Button>}</div>{operators.map(o=><div className="expense-row" key={o.id}><div className="expense-row-details"><b>{o.name}</b><small>{o.email} · {o.active?"Ativo":"Inativo"}</small></div>{operator&&o.id!==operator.id&&<Button variant="secondary" onClick={()=>change(o)}>{o.active?"Desativar":"Reativar"}</Button>}</div>)}<ErrorMessage>{error}</ErrorMessage>{!operators.length&&<p className="panel-subtitle">Crie a primeira conta usando a chave de recuperação e depois entre com o e-mail e senha.</p>}
   {form&&<Modal title="Novo operador" onClose={()=>{if(!busy)setForm(null);}}><form className="expense-form" onSubmit={save}><Field label="Nome" required value={form.name} onChange={e=>setForm(v=>({...v,name:e.target.value}))}/><Field label="E-mail" type="email" required value={form.email} onChange={e=>setForm(v=>({...v,email:e.target.value}))}/><Field label="Senha administrativa" type="password" minLength={12} maxLength={72} required value={form.password} onChange={e=>setForm(v=>({...v,password:e.target.value}))}/><ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" disabled={busy} onClick={()=>setForm(null)}>Cancelar</Button><Button disabled={busy}>Criar conta</Button></div></form></Modal>}</section>;
 }
+function SaasBackupPanel({operator,call}){
+  const [data,setData]=useState(null),[error,setError]=useState(""),[notice,setNotice]=useState(""),[busy,setBusy]=useState(false);
+  const refresh=useCallback(()=>call("/backups").then(setData).catch(e=>setError(e.message)),[call]);
+  useEffect(()=>{if(operator)refresh();},[operator,refresh]);
+  const act=async(name,action)=>{
+    if(busy)return;setBusy(true);setError("");setNotice("");
+    try{
+      if(action==="create"){await call("/backups","POST");setNotice("Cópia criada e validada.");}
+      else if(action==="verify"){await call("/backups/"+encodeURIComponent(name)+"/verify","POST");setNotice("Integridade confirmada.");}
+      else{
+        const blob=await call("/backups/"+encodeURIComponent(name)+"/download");
+        const url=URL.createObjectURL(blob),a=document.createElement("a");
+        a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000);
+        setNotice("Download iniciado.");
+      }
+      await refresh();
+    }catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  if(!operator)return <section className="panel expense-list"><h2>Backup e segurança</h2><p className="panel-subtitle">Entre com uma conta administrativa individual para acessar as cópias completas da plataforma.</p></section>;
+  return <div className="expenses-page"><section className="panel expense-list"><div className="panel-heading"><div><h2>Backup e segurança</h2><p className="panel-subtitle">Cópias completas incluem dados de todos os estabelecimentos. Armazene os arquivos em local protegido. Sessões e convites de ativação são removidos da cópia.</p></div><Button disabled={busy||data?.running} onClick={()=>act(null,"create")}><Plus size={16}/> Criar backup</Button></div>
+    <ErrorMessage>{error}</ErrorMessage>{notice&&<p className="success-message">{notice}</p>}
+    {data?.lastFailure&&<p className="booking-share-notice">{data.lastFailure.message} · {cashTimestamp(data.lastFailure.at)}</p>}
+    {data&&<section className="stats-grid finance-stats"><StatCard title="Cópias disponíveis" value={data.backups.length} icon={Package}/><StatCard title="Espaço utilizado" value={(data.totalBytes/1048576).toFixed(2)+" MB"} icon={Wallet}/><StatCard title="Rotina automática" value={data.intervalHours?data.intervalHours+" h":"Desativada"} icon={Clock3}/></section>}
+    <Button variant="secondary" disabled={busy} onClick={refresh}>Atualizar lista</Button>
+    {data?.backups.map(b=><div className="expense-row" key={b.name}><div className="expense-row-details"><b>{cashTimestamp(b.createdAt)} · {b.source==="automatic"?"Automático":"Manual"}</b><small>{(b.sizeBytes/1048576).toFixed(2)} MB · Validado na criação</small><small>SHA-256: {b.sha256}</small></div><div className="expense-row-actions"><Button variant="secondary" disabled={busy} onClick={()=>act(b.name,"verify")}>Validar</Button><Button disabled={busy} onClick={()=>act(b.name,"download")}><Download size={15}/> Baixar</Button></div></div>)}
+    {data&&!data.backups.length&&<EmptyState icon={Package} title="Nenhuma cópia disponível" description="Crie o primeiro backup para verificar a rotina."/>}
+    </section><section className="panel expense-list"><h2>Recuperação segura</h2><p className="panel-subtitle">Valide a cópia, guarde uma versão externa e teste a recuperação em ambiente isolado. A substituição do banco ativo exige manutenção administrativa com o servidor desligado. Esta tela nunca sobrescreve dados de produção.</p></section></div>;
+}
 function SaasAdminPage() {
   const [key,setKey]=useState("");
   const [loginMode,setLoginMode]=useState("key"),[email,setEmail]=useState(""),[password,setPassword]=useState(""),[token,setToken]=useState(""),[operator,setOperator]=useState(null);
@@ -3355,7 +3376,7 @@ function SaasAdminPage() {
       method,headers:{...(token?{Authorization:"Bearer "+token}:{"X-Saas-Admin-Key":key}),...(body?{"Content-Type":"application/json"}:{})},
       ...(body?{body:JSON.stringify(body)}:{}),credentials:"same-origin",
     });
-    const data=await response.json();
+    const data=response.headers.get("content-type")?.includes("application/json")?await response.json():await response.blob();
     if(!response.ok)throw new Error(data.error||"Falha na Central SaaS.");
     return data;
   },[key,token]);
@@ -3406,7 +3427,8 @@ function SaasAdminPage() {
         }}>Encerrar acesso à central</Button></div>
         <ErrorMessage>{error}</ErrorMessage>
         <section className="stats-grid finance-stats"><StatCard title="Estabelecimentos ativos" value={active.length} icon={Users}/><StatCard title="Suspensos" value={commercial.length-active.length} icon={ShieldCheck} tone="orange"/><StatCard title="Vencidos" value={late.length} note="Sem bloqueio automático" icon={Clock3} tone="orange"/><StatCard title="MRR contratado" value={money(mrr)} note="Ativos com mensalidade definida, sem teste" icon={Wallet}/><StatCard title="Recebido neste mês" value={money(received)} note="Mensalidades registradas" icon={CheckCheck} tone="green"/></section>
-        <div className="settings-tab-bar" role="tablist" aria-label="Central SaaS">{[["businesses","Estabelecimentos"],["plans","Planos"],["payments","Mensalidades"],["operators","Operadores"],["audit","Histórico administrativo"]].map(([k,v])=><button key={k} role="tab" type="button" aria-selected={tab===k} className={tab===k?"active":""} onClick={()=>{setTab(k);setError("");}}>{v}</button>)}</div>
+        <div className="settings-tab-bar" role="tablist" aria-label="Central SaaS">{[["businesses","Estabelecimentos"],["plans","Planos"],["payments","Mensalidades"],["operators","Operadores"],["audit","Histórico administrativo"],["backups","Backup e segurança"]].map(([k,v])=><button key={k} role="tab" type="button" aria-selected={tab===k} className={tab===k?"active":""} onClick={()=>{setTab(k);setError("");}}>{v}</button>)}</div>
+        {tab==="backups"&&<SaasBackupPanel operator={operator} call={call}/>}
         {tab==="plans"&&<SaasPlansPanel plans={plans} call={call} refresh={refresh}/>}
         {tab==="payments"&&<SaasPaymentsPanel businesses={commercial} payments={payments} today={today} call={call} refresh={refresh}/>}
         {tab==="operators"&&<SaasOperatorsPanel operators={operators} operator={operator} call={call} refresh={refresh}/>}

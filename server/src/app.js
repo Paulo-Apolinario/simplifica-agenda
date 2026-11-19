@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
@@ -12,6 +11,7 @@ import { SQLiteSessionStore } from "./session-store.js";
 import { completedEarlySql, findScheduleConflict } from "./schedule.js";
 import { cashClosingPdf, textPdf } from "./cash-closing-pdf.js";
 import {getPlanAccess,planFeatures,professionalLimitReached} from "./saas-plans.js";
+import {backupStatus,createBackup,verifyBackup,startBackupSchedule} from "./backups.js";
 
 const app = express();
 const sessionSecret = process.env.SESSION_SECRET ?? "desenvolvimento-local-chave-segura-32";
@@ -23,6 +23,13 @@ const paymentMethods = ["dinheiro", "pix", "cartao_credito", "cartao_debito", "t
 const statuses = ["agendado", "confirmado", "concluido", "cancelado", "faltou"];
 
 app.disable("x-powered-by");
+app.use((_req,res,next)=>{
+  res.setHeader("X-Content-Type-Options","nosniff");
+  res.setHeader("X-Frame-Options","DENY");
+  res.setHeader("Referrer-Policy","no-referrer");
+  next();
+});
+app.use("/api",(_req,res,next)=>{res.setHeader("Cache-Control","no-store");next();});
 app.use(express.json({ limit: "1mb" }));
 app.use(session({
   name: "simplifica.sid",
@@ -492,6 +499,22 @@ app.post("/api/saas/businesses/:id/payments",requireSaasAdmin,(req,res)=>{
   if(typeof result==="string")return fail(res,409,result);res.status(201).json(result);
 });
 app.get("/api/saas/audit",requireSaasAdmin,(_req,res)=>res.json({events:db.prepare("SELECT id,actor_name AS actorName,action,target_id AS targetId,details_json AS detailsJson,created_at AS createdAt FROM saas_audit ORDER BY created_at DESC LIMIT 300").all()}));
+function requireBackupOperator(req,res,next){
+  if(!req.saasOperator)return fail(res,403,"Entre com sua conta administrativa individual para gerenciar backups completos.");
+  next();
+}
+app.get("/api/saas/backups",requireSaasAdmin,requireBackupOperator,(_req,res)=>res.json(backupStatus()));
+app.post("/api/saas/backups",requireSaasAdmin,requireBackupOperator,async(req,res)=>{
+  const result=await createBackup("manual");saasAudit(req,"backup_criado",null,{name:result.name});res.status(201).json(result);
+});
+app.post("/api/saas/backups/:name/verify",requireSaasAdmin,requireBackupOperator,async(req,res)=>{
+  const {meta}=await verifyBackup(req.params.name);
+  saasAudit(req,"backup_validado",null,{name:meta.name});res.json({ok:true,verifiedAt:new Date().toISOString()});
+});
+app.get("/api/saas/backups/:name/download",requireSaasAdmin,requireBackupOperator,async(req,res)=>{
+  const {file,meta}=await verifyBackup(req.params.name);
+  saasAudit(req,"backup_baixado",null,{name:meta.name});res.download(file,meta.name);
+});
 
 
 
@@ -2530,24 +2553,21 @@ app.get("/api/export/appointments.csv", requireAuth, allowRoles("dono", "recepca
       a.status, a.priceCents, a.paymentMethod]));
 });
 
-app.get("/api/export/backup", requireAuth, allowRoles("dono"), async (_req, res, next) => {
-  if (isDemoTenant(_req.user.tenantId)) return fail(res, 403, "Backup indisponível na demonstração.");
-  if (db.prepare("SELECT count(*) AS total FROM tenants").get().total > 1) {
-    return fail(res, 403, "Backup completo indisponível em instalação com vários comércios. Use o procedimento administrativo isolado.");
-  }
-  const backupPath = path.join(os.tmpdir(), `simplifica-agenda-${crypto.randomUUID()}.sqlite`);
-  try {
-    await db.backup(backupPath);
-    res.download(backupPath, "simplifica-agenda-backup.sqlite", (error) => {
-      fs.rm(backupPath, { force: true }, (cleanupError) => {
-        if (cleanupError) console.error("Falha ao remover arquivo temporário de backup:", cleanupError);
-      });
-      if (error && !res.headersSent) next(error);
-    });
-  } catch (error) {
-    fs.rm(backupPath, { force: true }, () => {});
-    next(error);
-  }
+app.get("/api/export/backup", requireAuth, allowRoles("dono"), (_req,res)=>fail(res,403,"Backup completo disponível apenas para operadores da Central SaaS."));
+app.get("/api/export/business-data",requireAuth,allowRoles("dono"),(req,res)=>{
+  const id=tenant(req);
+  if(isDemoTenant(id))return fail(res,403,"Exportação indisponível na demonstração.");
+  const tables=["business_settings","clients","services","professional_services","business_hours","professional_hours","blocked_slots","commission_payments","support_employees","commission_adjustments","professional_service_commissions","payout_batches","appointment_audit","daily_cash_closings","daily_cash_openings","daily_cash_movements","operating_expenses","inventory_products","product_sales","inventory_movements","service_packages","package_purchases","package_redemptions","loyalty_settings","loyalty_redemptions","whatsapp_preferences"];
+  const data=db.transaction(()=>{
+    const result=Object.fromEntries(tables.map(t=>[t,db.prepare("SELECT * FROM "+t+" WHERE tenant_id=?").all(id)]));
+    result.appointments=db.prepare("SELECT * FROM appointments WHERE tenant_id=?").all(id).map(({management_token_hash, ...row})=>row);
+    result.users=db.prepare("SELECT id,name,role,phone,commission_percent,active,job_title FROM users WHERE tenant_id=?").all(id);
+    result.product_sale_items=db.prepare("SELECT i.* FROM product_sale_items i JOIN product_sales s ON s.id=i.sale_id WHERE s.tenant_id=?").all(id);
+    result.service_package_items=db.prepare("SELECT i.* FROM service_package_items i JOIN service_packages p ON p.id=i.package_id WHERE p.tenant_id=?").all(id);
+    result.package_purchase_items=db.prepare("SELECT i.* FROM package_purchase_items i JOIN package_purchases p ON p.id=i.purchase_id WHERE p.tenant_id=?").all(id);
+    return result;
+  })();
+  res.attachment("simplifica-dados-"+cashDay(id)+".json");res.json({version:1,exportedAt:new Date().toISOString(),tenantId:id,data});
 });
 
 function bookingPolicy(tenantId) {
@@ -3056,3 +3076,4 @@ app.use((error, _req, res, _next) => {
 });
 
 export default app;
+startBackupSchedule();
