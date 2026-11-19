@@ -1443,6 +1443,7 @@ function TeamCommissionsPage({ user }) {
   const [adjusting, setAdjusting] = useState(null);
   const [direct, setDirect] = useState(false);
   const [professionalId, setProfessionalId] = useState("");
+  const [payoutFilter,setPayoutFilter]=useState("all");
   const [adjustError, setAdjustError] = useState("");
   const [loadingRule, setLoadingRule] = useState(false);
   const refresh = useCallback(async () => {
@@ -1454,6 +1455,7 @@ function TeamCommissionsPage({ user }) {
   useEffect(() => { refresh(); }, [refresh]);
   const filtered = items.filter(item => !professionalId || item.professionalId === professionalId);
   const unpaid = filtered.filter(item => !item.paid);
+  const visible=filtered.filter(item=>payoutFilter==="all"||(payoutFilter==="paid"?item.paid:!item.paid));
   const gross = filtered.reduce((sum,item)=>sum+item.priceCents,0);
   const earned = filtered.reduce((sum,item)=>sum+item.earnedCents,0);
   const professionals = [...new Map(items.map(item=>[item.professionalId,item.professionalName])).entries()];
@@ -1462,14 +1464,15 @@ function TeamCommissionsPage({ user }) {
       description="Registre serviços realizados e confira o valor que cada profissional tem direito a receber. Não lance novamente serviços já concluídos na agenda."
       actions={<Button onClick={()=>setDirect(true)}><Plus size={16}/> Registrar serviço</Button>}/>
     {direct && <AppointmentForm direct user={user} initialProfessional={professionalId} onClose={()=>setDirect(false)} onSaved={day=>{setDirect(false);if(day.slice(0,7)===month)refresh();else setMonth(day.slice(0,7));}}/>}
-    <div className="booking-queue-tools">
+    <div className="booking-queue-tools panel finance-filter-bar">
     <div className="month-filter"><label htmlFor="commissions-month">Mês</label>
       <input id="commissions-month" className="input month-input" type="month" value={month}
         onChange={event => {setMonth(event.target.value);setProfessionalId("");}}/></div>
     <SelectField label="Profissional" value={professionalId} onChange={e=>setProfessionalId(e.target.value)}><option value="">Todos os profissionais</option>{professionals.map(([id,name])=><option key={id} value={id}>{name}</option>)}</SelectField>
+    <SelectField label="Situação do repasse" value={payoutFilter} onChange={e=>setPayoutFilter(e.target.value)}><option value="all">Todos</option><option value="pending">A repassar</option><option value="paid">Repassados</option></SelectField>
     </div>
     <ErrorMessage>{error}</ErrorMessage>
-    <section className="stats-grid finance-stats">
+    <section className="stats-grid finance-stats commission-overview">
       <StatCard title="Serviços realizados" value={money(gross)} note="Valor bruto dos serviços" icon={Scissors}/>
       <StatCard title="Comissão dos profissionais" value={money(earned)} note="Total devido pelos serviços do período" icon={CircleDollarSign}/>
       <StatCard title="Parcela do estabelecimento" value={money(gross-earned)} note="Antes das demais despesas" icon={Wallet}/>
@@ -1478,22 +1481,22 @@ function TeamCommissionsPage({ user }) {
       <StatCard title="Já repassado" value={money(filtered.filter(item=>item.paid).reduce((sum,item)=>sum+item.paidCents,0))}
         note="Repasses confirmados destes serviços" icon={CheckCheck} tone="green"/>
     </section>
-    <section className="panel management-panel">
+    <section className="panel management-panel finance-ledger">
       <div className="panel-heading"><div><h2>Serviços lançados</h2>
         <p className="panel-subtitle">O recebimento do cliente é separado do repasse ao profissional. Confirme os repasses em Fechamentos quinzenais.</p></div></div>
-      {filtered.length ? <div className="management-list">{filtered.map(item =>
+      {visible.length ? <div className="management-list">{visible.map(item =>
         <article className="service-row" key={item.id}>
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
           <div className="min-w-0 flex-1"><b>{item.professionalName} · {item.serviceName}</b>
             <small>{item.clientName} · Realizado em {dateLabel(item.completedOn)} · {item.bookingSource === "direct" ? "Registro direto" : "Agendado"}</small>
             <small>Serviço: {money(item.priceCents)} · Comissão efetiva: {Math.max(0,item.commissionPercent - (item.houseSharePercent || 0))}% · Estabelecimento: {money(item.priceCents-item.earnedCents)}</small>
             <small>Cliente: {item.paymentMethod ? "Pagamento recebido" : "Pagamento pendente"} · Repasse: {item.paid ? "Confirmado" : "Pendente"}</small></div>
-          <div><small>Profissional recebe</small><br/><strong>{money(item.earnedCents)}</strong></div>
+          <div className="finance-amount"><small>Profissional recebe</small><strong>{money(item.earnedCents)}</strong></div>
           {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Repassado</span> : <>
             <Button variant="secondary" onClick={()=>{setAdjustError("");setAdjusting({...item, reason:""});}}>Ajustar comissão</Button>
           </>}
-        </article>)}</div> : <EmptyState icon={Wallet} title="Sem comissões neste mês"
-          description="Conclua os atendimentos para registrar comissões."/>}
+        </article>)}</div> : <EmptyState icon={Wallet} title="Nenhum lançamento neste filtro"
+          description="Altere o filtro ou conclua atendimentos para registrar comissões."/>}
     </section>
     {adjusting && <Modal title="Ajustar comissão do serviço" onClose={()=>setAdjusting(null)}>
       <form className="form-stack" onSubmit={async event=>{
@@ -1869,12 +1872,12 @@ function CashOpeningPanel({ revision, onOpened }) {
   const isUnopened = status === "unopened";
   const isOpen = status === "open";
   const isClosed = status === "closed";
-  return <section className="panel management-panel" style={{marginBottom:20}}>
+  return <section className="panel management-panel premium-cash-opening" data-state={status||"loading"}>
     <div className="panel-heading"><div>
       <p className="eyebrow">INÍCIO DO EXPEDIENTE</p>
-      <h2>Abertura do caixa</h2>
+      <h2><Wallet size={20}/> Abertura do caixa</h2>
       <p className="panel-subtitle">Acompanhe a situação do caixa e registre o dinheiro inicial antes de iniciar as operações financeiras.</p>
-    </div><span className="count-chip">{isOpen ? "Caixa aberto" : isClosed ? "Caixa encerrado" : isUnopened ? "Aguardando abertura" : "Consultando..."}</span></div>
+    </div><span className="cash-state-pill"><span/>{isOpen ? "Caixa aberto" : isClosed ? "Caixa encerrado" : isUnopened ? "Aguardando abertura" : "Consultando..."}</span></div>
     <ErrorMessage>{error}</ErrorMessage>
     {isOpen && <div className="panel-subtitle" role="status">
       Caixa do dia aberto por {state.opening?.openedByName || "usuário autorizado"}, com saldo inicial de {money(state.opening?.openingCashCents || 0)}. As movimentações do dia estão liberadas.
@@ -1979,7 +1982,7 @@ function DailyCashClosing({ revision, user, children, onClosed }) {
   };
   const methods = summary?.closing?.methods || summary?.methods || {};
   return <>
-  <section className="panel management-panel cash-daily" id="caixa-do-dia">
+  <section className="panel management-panel cash-daily premium-cash-daily" id="caixa-do-dia">
     <div className="panel-heading cash-daily-heading">
       <div><p className="eyebrow">CONFERÊNCIA DIÁRIA</p><h2>{summary?.today && date !== summary.today ? "Caixa da data selecionada" : "Caixa de hoje"}</h2>
         <p className="panel-subtitle">Recebimentos da data selecionada, antes das comissões. A gaveta inclui apenas dinheiro físico, saldo inicial e movimentações.</p></div>
@@ -1993,6 +1996,10 @@ function DailyCashClosing({ revision, user, children, onClosed }) {
         <StatCard title="Dinheiro esperado na gaveta" value={money(summary.closing ? summary.closing.openingCashCents + summary.closing.expectedCashCents + (summary.closing.supplyCents || 0) - (summary.closing.withdrawalCents || 0) : summary.expectedDrawerCashCents)} note="Saldo inicial + dinheiro recebido + suprimentos − sangrias" icon={CircleDollarSign} tone="blue"/>
         <StatCard title="Situação" value={summary.cashState === "closed" ? "Fechado" : summary.opening ? "Aberto" : "Não aberto"} note={summary.closing ? `Por ${summary.closing.closedByName}` : summary.opening ? `Por ${summary.opening.openedByName}` : "Registre a abertura"} icon={CheckCheck} tone={summary.cashState === "closed" ? "green" : "orange"}/>
       </div>
+      <section className="cash-method-overview" aria-label="Resumo por forma de pagamento">
+        <h3>Total por forma de pagamento</h3>
+        <div className="cash-method-grid">{Object.entries(paymentNames).map(([key,label])=><div key={key} className="cash-method-tile"><Wallet size={19}/><small>{label}</small><b>{money(methods[key]||0)}</b></div>)}</div>
+      </section>
       {summary.opening && <div className="panel" style={{marginTop:16}}>
         <b>Abertura registrada por {summary.opening.openedByName}</b>
         <p className="panel-subtitle">Saldo inicial em espécie: {money(summary.opening.openingCashCents)} · {cashTimestamp(summary.opening.openedAt, summary.timezone)}</p>
@@ -2047,14 +2054,6 @@ function DailyCashClosing({ revision, user, children, onClosed }) {
           <strong>{money(movement.amountCents)}</strong>
         </article>)}
       </div>
-      <div className="management-list cash-detail-section">
-        <h3>Total por forma de pagamento</h3>
-        {Object.entries(paymentNames).map(([key,label]) => <div className="service-row" key={key}>
-          <span className="service-row-icon"><Wallet size={18}/></span>
-          <div className="min-w-0 flex-1"><b>{label}</b></div>
-          <strong>{money(methods[key] || 0)}</strong>
-        </div>)}
-      </div>
       {summary.cashState === "closed" && !summary.closing ? <p className="panel-subtitle">Caixa encerrado. Histórico e PDF exclusivos do administrador.</p> : summary.closing ? <div className="panel" style={{marginTop:16}}>
         <b>Fechado por {summary.closing.closedByName}</b>
         <p className="panel-subtitle">Saldo inicial: {money(summary.closing.openingCashCents)} · Dinheiro recebido: {money(summary.closing.expectedCashCents)}</p>
@@ -2062,7 +2061,8 @@ function DailyCashClosing({ revision, user, children, onClosed }) {
         <p className="panel-subtitle">Dinheiro contado: {money(summary.closing.countedCashCents)} · Diferença: {money(summary.closing.differenceCents)}</p>
         {summary.closing.notes && <p className="panel-subtitle">Observação: {summary.closing.notes}</p>}
       </div> : summary.opening ? <>
-        <div className="cash-form-grid cash-detail-section">
+        <div className="cash-form-grid cash-detail-section premium-cash-close-form">
+          <div className="cash-form-wide"><h3>Conferência final do caixa</h3><p className="panel-subtitle">Confira o dinheiro físico antes de encerrar a data. O fechamento bloqueia alterações.</p></div>
           <label className="field" htmlFor="counted-cash"><span className="field-label">Dinheiro contado (R$)</span>
           <input id="counted-cash" className="input" inputMode="decimal"
             value={counted} onChange={e => setCounted(e.target.value)} placeholder="0,00"/></label>
@@ -2077,7 +2077,7 @@ function DailyCashClosing({ revision, user, children, onClosed }) {
     </>}
   </section>
     {children}
-    {isOwner && <section className="panel management-panel" id="historico-do-caixa">
+    {isOwner && <section className="panel management-panel finance-ledger" id="historico-do-caixa">
     <div className="panel-heading"><div><h2>Histórico de fechamentos</h2><p className="panel-subtitle">Últimos 60 fechamentos registrados.</p></div></div>
     {closings.length ? <div className="management-list">{closings.map(item =>
       <article className="service-row" key={item.id}>
@@ -2104,15 +2104,15 @@ function FinancialHubPage({ user }) {
     {id:"regras",title:"Regras de comissão",icon:Settings},
     {id:"fechamentos",title:"Fechamentos quinzenais",icon:CalendarDays},
   ];
-  return <>
+  return <div className="premium-finance">
     {user.role === "dono" && <>
       <PageTitle eyebrow="CENTRAL FINANCEIRA" title="Gestão financeira"
         description="Caixa, comissões, regras e fechamentos em um único lugar." />
-      <div className="settings-tab-bar" role="tablist" aria-label="Seções da gestão financeira">
+      <div className="settings-tab-bar premium-finance-tabs" role="tablist" aria-label="Seções da gestão financeira">
         {tabs.map(item => <button key={item.id} type="button" role="tab"
           aria-selected={tab === item.id || (tab === "pendentes" && item.id === "caixa")} className={tab === item.id || (tab === "pendentes" && item.id === "caixa") ? "active" : ""}
           onClick={() => navigate(`/recebimentos?aba=${item.id}`)}>
-          <item.icon size={16}/> {item.title}
+          <span className="finance-tab-icon"><item.icon size={21}/></span><span>{item.title}</span><ChevronRight size={15} className="finance-tab-arrow"/>
         </button>)}
       </div>
     </>}
@@ -2121,7 +2121,7 @@ function FinancialHubPage({ user }) {
     {tab === "comissoes" && user.role === "dono" && <TeamCommissionsPage user={user}/>}
     {tab === "regras" && user.role === "dono" && <CommissionPoliciesPage/>}
     {tab === "fechamentos" && user.role === "dono" && <SettlementsPage/>}
-  </>;
+  </div>;
 }
 
 function ReceivablesPage({ user }) {
@@ -2130,7 +2130,7 @@ function ReceivablesPage({ user }) {
   const [direct, setDirect] = useState(false);
   return <>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
-    <div className="modal-actions"><Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button></div>
+    <div className="finance-cash-actions"><div><b>Operação do caixa</b><small>Registre serviços e acompanhe os recebimentos.</small></div><Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button></div>
     {direct && <AppointmentForm direct user={user} onClose={() => setDirect(false)} onSaved={() => { setDirect(false); refresh(); setCashRevision(n => n + 1); }} />}
     {pending.length > 0 && <Link className="cash-pending-summary cash-pending-link" to={pendingPaymentsPath}>
       <Clock3 size={22}/><div><b>{pending.length} pagamento(s) pendente(s)</b>
@@ -2793,13 +2793,13 @@ function CommissionPoliciesPage() {
   return <>
     <PageTitle eyebrow="POLÍTICAS DE REPASSE" title="Comissões por profissional e serviço"
       description="Defina quanto cada profissional recebe por um serviço específico."/>
-    <section className="panel management-panel">
+    <section className="panel management-panel finance-rule-guide">
       <h2>Qual regra o sistema utiliza?</h2>
-      <p className="panel-subtitle">1. Regra personalizada para profissional + serviço (maior prioridade). 2. Comissão própria do serviço, se configurada. 3. Comissão padrão do profissional.</p>
+      <div className="finance-rule-steps"><div><span>1</span><b>Profissional + serviço</b><small>Maior prioridade</small></div><div><span>2</span><b>Comissão do serviço</b><small>Se configurada</small></div><div><span>3</span><b>Comissão padrão</b><small>Do profissional</small></div></div>
       <p className="panel-subtitle">A retenção de materiais é descontada em pontos percentuais da comissão. Exemplo: R$ 100,00 × (60% − 10 pontos) = R$ 50,00 para o profissional e R$ 50,00 para o estabelecimento.</p>
       <p className="panel-subtitle">Vale para novos agendamentos internos, online e registros diretos. Serviços anteriores preservam os valores registrados; para atualizar uma comissão ainda não repassada, use Lançamentos dos profissionais → Ajustar comissão → Usar regra de comissão atual.</p>
     </section>
-    <form className="panel management-panel settings-single-section" onSubmit={save}>
+    <form className="panel management-panel settings-single-section finance-rule-form" onSubmit={save}>
       <div className="panel-heading"><div><h2>Nova regra personalizada</h2>
         <p className="panel-subtitle">Tem prioridade sobre a taxa do serviço e a comissão padrão do profissional. Não altera agendamentos já registrados.</p></div></div>
       <div className="form-grid">
@@ -2820,7 +2820,7 @@ function CommissionPoliciesPage() {
       <ErrorMessage>{error}</ErrorMessage>{message&&<p className="success-message">{message}</p>}
       <div className="modal-actions"><Button>Salvar regra</Button></div>
     </form>
-    <section className="panel management-panel">
+    <section className="panel management-panel finance-ledger">
       <div className="panel-heading"><div><h2>Regras cadastradas</h2>
         <p className="panel-subtitle">Exceções aplicáveis a novos agendamentos e registros de serviço.</p></div></div>
       {data.rules.length?<div className="management-list">{data.rules.map(rule=>
@@ -2861,14 +2861,17 @@ function SettlementsPage() {
     } catch (err) { await refresh(); setError(err.message); }
     finally { setBusy(""); }
   };
+  const currentPeriod=data.period===period;
   const due = data.professionals.reduce((sum, item) => sum + item.dueCents, 0);
   const earned = data.professionals.reduce((sum, item) => sum + item.earnedCents, 0);
+  const paid=data.professionals.reduce((sum,item)=>sum+item.paidCents,0);
+  const gross=data.professionals.reduce((sum,item)=>sum+item.grossCents,0);
   const legacy = data.professionals.reduce((sum, item) => sum + item.legacyUnverified, 0);
   const ended = Boolean(data.period === period && data.end && data.end < today);
   return <>
     <PageTitle eyebrow="GESTÃO FINANCEIRA" title="Saldos e repasses quinzenais"
       description="A empresa recebe os pagamentos dos clientes; a conclusão do serviço gera saldo para o profissional, mas não efetua repasse."/>
-    <div className="booking-queue-tools">
+    <div className="booking-queue-tools panel finance-filter-bar">
       <div className="month-filter"><label>Mês</label><input type="month" className="input month-input" value={month} onChange={event => setMonth(event.target.value)}/></div>
       <div className="month-filter"><label>Quinzena</label><select className="input" value={half} onChange={event => setHalf(event.target.value)}>
         <option value="1">1ª quinzena (01–15)</option><option value="2">2ª quinzena (16–último dia)</option>
@@ -2877,30 +2880,39 @@ function SettlementsPage() {
         <Download size={16}/> Exportar saldos CSV
       </a>
     </div>
-    <section className="stats-grid finance-stats">
-      <StatCard title="Saldo a pagar" value={money(due)} icon={Wallet} tone="orange" note="Crédito dos profissionais ainda não repassado"/>
-      <StatCard title="Comissões geradas" value={money(earned)} icon={CircleDollarSign} note="Serviços concluídos na quinzena"/>
+    <section className="stats-grid finance-stats settlement-overview">
+      <StatCard title="Produção da quinzena" value={currentPeriod?money(gross):"—"} icon={Scissors} note="Valor bruto dos serviços realizados"/>
+      <StatCard title="Comissões geradas" value={currentPeriod?money(earned):"—"} icon={CircleDollarSign} tone="purple" note="Serviços concluídos na quinzena"/>
+      <StatCard title="Repasses confirmados" value={currentPeriod?money(paid):"—"} icon={CheckCheck} tone="green" note="Pagamentos aos profissionais"/>
+      <StatCard title="Saldo a pagar" value={currentPeriod?money(due):"—"} icon={Wallet} tone="orange" note="Crédito ainda não repassado"/>
     </section>
     <ErrorMessage>{error}</ErrorMessage>
     {message && <p className="success-message">{message}</p>}
     {legacy > 0 && <p className="panel-subtitle">Existem {legacy} lançamento(s) antigos marcados como pagos, mas sem confirmação de transferência. Eles permanecem como saldo pendente para conferência.</p>}
-    <section className="panel management-panel">
+    <section className="panel management-panel finance-ledger">
       <div className="panel-heading"><div><h2>Saldo por profissional</h2>
         <p className="panel-subtitle">Período: {data.start || "—"} até {data.end || "—"}. Confirme o repasse apenas quando o pagamento tiver acontecido fora do sistema.</p></div></div>
       {data.period === period && data.professionals.length ? <div className="management-list">{data.professionals.map(pro =>
-        <div key={pro.professionalId} className="panel management-panel">
-        <article className="service-row request-item">
-          <span className="service-row-icon"><Wallet size={18}/></span>
+        <div key={pro.professionalId} className="settlement-professional-card">
+        <article className="service-row request-item settlement-professional-head">
+          <span className="settlement-avatar">{pro.professionalName.slice(0,1).toUpperCase()}</span>
           <div className="min-w-0 flex-1"><b>{pro.professionalName}</b>
-            <small>{pro.completed} serviço(s) · produção {money(pro.grossCents)} · clientes pagaram {money(pro.receivedCents)} · clientes a pagar {money(pro.customerPendingCents)} · comissão gerada {money(pro.earnedCents)} · repasse confirmado {money(pro.paidCents)}</small>
+            <small>{pro.completed} serviço(s) realizados na quinzena</small>
           </div>
-          <strong>{money(pro.dueCents)} a repassar</strong>
+          <div className="finance-amount"><small>Valor a repassar</small><strong>{money(pro.dueCents)}</strong></div>
           {pro.pendingServices > 0 && <Button disabled={busy === pro.professionalId || !ended}
             onClick={() => close(pro)}>{busy === pro.professionalId ? "Registrando..." : "Confirmar repasse"}</Button>}
         </article>
+        <div className="settlement-breakdown">
+          <div><small>Produção</small><b>{money(pro.grossCents)}</b></div>
+          <div><small>Clientes pagaram</small><b>{money(pro.receivedCents)}</b></div>
+          <div><small>Clientes a pagar</small><b>{money(pro.customerPendingCents)}</b></div>
+          <div><small>Comissão gerada</small><b>{money(pro.earnedCents)}</b></div>
+          <div><small>Já repassado</small><b>{money(pro.paidCents)}</b></div>
+        </div>
         <details>
           <summary className="button button-secondary" style={{width:"fit-content",cursor:"pointer"}}>Conferir {pro.completed} serviço(s)</summary>
-          <div className="management-list">
+          <div className="management-list settlement-detail">
             {(pro.services || []).map(item=><article className="service-row request-item" key={item.id}>
               <div className="min-w-0 flex-1"><b>{item.serviceName} · {item.clientName}</b>
                 <small>{dateLabel(item.earnedOn)} · Serviço: {money(item.priceCents)} · Comissão: {Math.max(0,item.commissionPercent-item.houseSharePercent)}%</small>
@@ -2915,7 +2927,7 @@ function SettlementsPage() {
         </div>)}</div> : <EmptyState icon={Wallet} title="Nenhum serviço concluído" description="Os saldos dos serviços concluídos na quinzena aparecerão aqui."/>}
       {!ended && <p className="panel-subtitle">A quinzena ainda não terminou. O saldo pode ser consultado, mas o pagamento só poderá ser confirmado após o encerramento do período.</p>}
     </section>
-    <section className="panel management-panel">
+    <section className="panel management-panel finance-ledger">
       <div className="panel-heading"><div><h2>Histórico de repasses confirmados</h2></div></div>
       {data.period === period && data.batches.length ? <div className="management-list">{data.batches.map(batch =>
         <article className="service-row" key={batch.id}><CheckCheck size={18}/>
