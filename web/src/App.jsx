@@ -50,7 +50,6 @@ function confirmAction(message, title = "Confirmar ação") {
     header.appendChild(heading);
     const description = document.createElement("p");
     description.className = "panel-subtitle";
-    description.style.margin = "20px 0";
     description.style.whiteSpace = "pre-wrap";
     description.textContent = message;
     const actions = document.createElement("div");
@@ -64,14 +63,17 @@ function confirmAction(message, title = "Confirmar ação") {
     confirm.className = "button button-primary";
     confirm.textContent = "Confirmar";
     actions.append(cancel, confirm);
-    panel.append(header, description, actions);
+    const body=document.createElement("div");
+    body.className="modal-body confirmation-body";
+    body.append(description,actions);
+    panel.append(header, body);
     backdrop.appendChild(panel);
     document.body.appendChild(backdrop);
     const previousFocus = document.activeElement;
     const finish = accepted => {
       document.removeEventListener("keydown", onKey);
       backdrop.remove();
-      if (previousFocus instanceof HTMLElement) previousFocus.focus();
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
       resolve(accepted);
     };
     const onKey = event => {
@@ -154,7 +156,7 @@ function Field({ label, className = "", children, ...props }) {
 
 function SelectField({ label, children, ...props }) {
   return <Field label={label}>
-    <select className="input" {...props}>{children}</select>
+    <select className="input" aria-label={typeof label==="string"?label:undefined} {...props}>{children}</select>
   </Field>;
 }
 
@@ -390,9 +392,10 @@ function AccountPage({ user, onUserUpdated, embedded = false }) {
   return <>
     {!embedded && <PageTitle eyebrow="SEGURANÇA E PERFIL" title="Minha conta"
       description="Atualize seus dados de acesso e proteja sua conta." />}
-    <section className="panel management-panel" style={{ maxWidth: embedded ? undefined : 620 }}>
-      <div className="panel-heading"><div><h2>Dados e segurança</h2><p className="panel-subtitle">Perfil: {user.role === "dono" ? "Proprietário" : user.role === "recepcao" ? "Recepção" : "Profissional"}</p></div></div>
-      <form className="form-stack" onSubmit={submit} style={{ padding: 24 }}>
+    <section className="panel management-panel premium-account" style={{ maxWidth: embedded ? undefined : 760 }}>
+      <div className="account-profile-banner"><span className="profile-avatar">{user.name.slice(0,1).toUpperCase()}</span><div><b>{user.name}</b><small>Perfil: {user.role === "dono" ? "Proprietário" : user.role === "recepcao" ? "Recepção" : "Profissional"}</small></div><ShieldCheck size={23}/></div>
+      <div className="panel-heading"><div><h2>Dados e segurança</h2><p className="panel-subtitle">Confira seus dados e altere a senha quando necessário.</p></div></div>
+      <form className="form-stack" onSubmit={submit}>
         <Field label="Nome" required maxLength={120} value={values.name}
           onChange={(e) => setValues({ ...values, name: e.target.value })}/>
         {user.role === "profissional" ? <Field label="Código de acesso" disabled value={user.staffCode || ""}/> : <Field label="E-mail de acesso" type="email" disabled value={user.email}/>}
@@ -1776,7 +1779,7 @@ function BookingSharePage({ user }) {
   return <>
     <PageTitle eyebrow="AGENDAMENTO PARA CLIENTES" title="Divulgar meu agendamento"
       description="Compartilhe sua página pública sem dar acesso ao painel administrativo."/>
-    <div className="management-grid booking-sharing-grid">
+    <div className="management-grid booking-sharing-grid premium-booking-share">
       <section className="panel management-panel booking-share-panel">
         <div className="panel-heading">
           <div><p className="eyebrow">LINK EXCLUSIVO</p><h2>Sua página de agendamento</h2>
@@ -2376,12 +2379,17 @@ function SettingsPage({ user, onUserUpdated }) {
   const [saving, setSaving] = useState(false);
   const [logoBusy, setLogoBusy] = useState(false);
   const [logoError, setLogoError] = useState("");
+  const savedTheme=useRef(null);
   useEffect(() => {
+    let active=true;
     api("/settings").then(data => {
+      if(!active)return;
+      savedTheme.current=data.settings.theme;
       setSettings(data.settings);
       setHours(data.hours);
       setBooking({ ...data.settings, bookingAllowCancellation: Boolean(data.settings.bookingAllowCancellation) });
-    }).catch(reason => setError(reason.message));
+    }).catch(reason => {if(active)setError(reason.message);});
+    return ()=>{active=false;if(savedTheme.current)document.documentElement.classList.toggle("dark",savedTheme.current==="escuro");};
   }, []);
   const updateHour = (weekday, key, value) =>
     setHours(current => current.map(hour => hour.weekday === weekday ? { ...hour, [key]: value } : hour));
@@ -2390,6 +2398,7 @@ function SettingsPage({ user, onUserUpdated }) {
     setSaving(true); setError(""); setMessage("");
     try {
       await api("/settings", { method: "PUT", body: { ...settings, hours } });
+      savedTheme.current=settings.theme;
       setMessage("Alterações salvas com sucesso.");
     } catch (reason) { setError(reason.message); }
     finally { setSaving(false); }
@@ -2431,18 +2440,18 @@ function SettingsPage({ user, onUserUpdated }) {
     finally { setLogoBusy(false); }
   };
   if (!settings) return error ? <ErrorMessage>{error}</ErrorMessage> : <Loading />;
-  return <>
+  return <div className="premium-settings">
     <PageTitle eyebrow="PERSONALIZAÇÃO E GESTÃO" title="Configurações do estabelecimento"
       description="Organize os dados comerciais, os horários e a segurança da sua conta." />
-    <div className="settings-tab-bar" role="tablist" aria-label="Seções das configurações">
+    <div className="settings-tab-bar premium-settings-tabs" role="tablist" aria-label="Seções das configurações">
       <button type="button" role="tab" aria-selected={tab === "business"} className={tab === "business" ? "active" : ""}
-        onClick={() => { setTab("business"); setError(""); setMessage(""); }}><Settings size={16}/> Estabelecimento</button>
+        onClick={() => { setTab("business"); setError(""); setMessage(""); }}><span className="settings-tab-icon"><Settings size={20}/></span><span>Estabelecimento<small>Identidade e contato</small></span></button>
       <button type="button" role="tab" aria-selected={tab === "hours"} className={tab === "hours" ? "active" : ""}
-        onClick={() => { setTab("hours"); setError(""); setMessage(""); }}><Clock3 size={16}/> Horários</button>
+        onClick={() => { setTab("hours"); setError(""); setMessage(""); }}><span className="settings-tab-icon"><Clock3 size={20}/></span><span>Horários<small>Funcionamento</small></span></button>
       <button type="button" role="tab" aria-selected={tab === "booking"} className={tab === "booking" ? "active" : ""}
-        onClick={() => { setTab("booking"); setError(""); setMessage(""); }}><CalendarClock size={16}/> Agendamento online</button>
+        onClick={() => { setTab("booking"); setError(""); setMessage(""); }}><span className="settings-tab-icon"><CalendarClock size={20}/></span><span>Agendamento online<small>Regras de reserva</small></span></button>
       <button type="button" role="tab" aria-selected={tab === "account"} className={tab === "account" ? "active" : ""}
-        onClick={() => { setTab("account"); setError(""); setMessage(""); }}><ShieldCheck size={16}/> Minha conta</button>
+        onClick={() => { setTab("account"); setError(""); setMessage(""); }}><span className="settings-tab-icon"><ShieldCheck size={20}/></span><span>Minha conta<small>Perfil e segurança</small></span></button>
     </div>
     {tab === "business" && <form onSubmit={save} className="settings-single-section">
       <section className="panel settings-panel">
@@ -2476,10 +2485,11 @@ function SettingsPage({ user, onUserUpdated }) {
               onChange={event => setSettings({ ...settings, whatsapp: event.target.value })}/>
           </div>
           <p className="panel-subtitle">O WhatsApp abre uma conversa com o cliente, mas não envia mensagens automáticas.</p>
+          <div className="settings-appearance"><div><p className="eyebrow">PREFERÊNCIAS VISUAIS</p><h3>Aparência do sistema</h3><p className="panel-subtitle">Confira a prévia e salve para aplicar a preferência ao estabelecimento.</p></div>
           <SelectField label="Aparência" value={settings.theme} onChange={event => {
             setSettings({ ...settings, theme: event.target.value });
             document.documentElement.classList.toggle("dark", event.target.value === "escuro");
-          }}><option value="claro">Modo claro</option><option value="escuro">Modo escuro</option></SelectField>
+          }}><option value="claro">Modo claro</option><option value="escuro">Modo escuro</option></SelectField></div>
         </div>
       </section>
       <div className="settings-save"><ErrorMessage>{error}</ErrorMessage>{message && <span className="success-message">{message}</span>}
@@ -2495,9 +2505,9 @@ function SettingsPage({ user, onUserUpdated }) {
             <label className="hours-check"><input type="checkbox" checked={!!hour.opensAt && !!hour.closesAt}
               onChange={event => setHours(previous => previous.map(item => item.weekday === hour.weekday ?
                 { ...item, opensAt: event.target.checked ? "09:00" : "", closesAt: event.target.checked ? "18:00" : "" } : item))}/> Aberto</label>
-            {hour.opensAt && <><input className="input hours-input" type="time" value={hour.opensAt}
+            {hour.opensAt && <><input className="input hours-input" aria-label={`Abertura ${weekdays[hour.weekday]}`} type="time" value={hour.opensAt}
               onChange={event => updateHour(hour.weekday, "opensAt", event.target.value)}/>
-              <span>às</span><input className="input hours-input" type="time" value={hour.closesAt}
+              <span>às</span><input className="input hours-input" aria-label={`Fechamento ${weekdays[hour.weekday]}`} type="time" value={hour.closesAt}
               onChange={event => updateHour(hour.weekday, "closesAt", event.target.value)}/></>}
           </div>)}</div>
       </section>
@@ -2533,7 +2543,7 @@ function SettingsPage({ user, onUserUpdated }) {
     {tab === "account" && <div className="settings-single-section">
       <AccountPage user={user} onUserUpdated={onUserUpdated} embedded/>
     </div>}
-  </>;
+  </div>;
 }
 function PublicBooking({ slug }) {
   const [data, setData] = useState(null);
@@ -3173,6 +3183,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [installation, setInstallation] = useState(null);
   const location = useLocation();
+  const publicRoute=location.pathname.startsWith("/agendar/")||location.pathname.startsWith("/acompanhar/")||location.pathname==="/central-saas";
   useEffect(() => {
     if (location.pathname.startsWith("/agendar/") || location.pathname.startsWith("/acompanhar/") || location.pathname === "/central-saas") { setLoading(false); return; }
     Promise.all([
@@ -3182,8 +3193,11 @@ export default function App() {
       .catch(() => setUser(null)).finally(() => setLoading(false));
   }, [location.pathname]);
   useEffect(() => {
-    api("/settings").then(({ settings }) => document.documentElement.classList.toggle("dark", settings?.theme === "escuro")).catch(() => {});
-  }, [user]);
+    let active=true;
+    if(!user || publicRoute){document.documentElement.classList.remove("dark");return;}
+    api("/settings").then(({ settings }) => {if(active)document.documentElement.classList.toggle("dark", settings?.theme === "escuro");}).catch(() => {});
+    return ()=>{active=false;};
+  }, [user,publicRoute]);
   if (location.pathname.startsWith("/acompanhar/")) {
     const token=decodeURIComponent(location.pathname.slice("/acompanhar/".length).split("/")[0]);
     return <PublicRequestPage token={token}/>;

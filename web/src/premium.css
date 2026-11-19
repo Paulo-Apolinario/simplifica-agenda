@@ -706,6 +706,113 @@
   .professional-stats .stat-icon svg {width:16px;height:16px;}
   .professional-stats .stat-copy > span {font-size:11px;}
 }
+
+/* Final shared polish: settings, dialogs, forms and contrast. */
+.premium-settings {display:grid;gap:17px;min-width:0;}
+.premium-settings > .page-title-row {margin-bottom:0;}
+.premium-settings-tabs {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0;padding:0;}
+.premium-settings-tabs [role="tab"] {display:flex;min-width:0;min-height:84px;align-items:center;justify-content:flex-start;gap:10px;padding:13px;text-align:left;border-color:var(--line);border-radius:14px;background:var(--surface);color:var(--text);box-shadow:var(--premium-shadow);}
+.premium-settings-tabs [role="tab"] > span:nth-child(2) {display:grid;gap:4px;min-width:0;overflow-wrap:anywhere;}
+.premium-settings-tabs small {color:var(--muted);font-size:10px;font-weight:400;}
+.settings-tab-icon {display:grid;place-items:center;width:37px;height:37px;flex:0 0 37px;border-radius:10px;background:#edf3ff;color:#2563eb;}
+.premium-settings-tabs [role="tab"].active {color:#fff;border-color:#2256cc;background:#2256cc;}
+.premium-settings-tabs .active small {color:#dbe9ff;}
+.premium-settings-tabs .active .settings-tab-icon {background:#ffffff25;color:#fff;}
+.premium-settings .settings-single-section {max-width:100%;width:100%;gap:17px;}
+.premium-settings .settings-panel .panel-heading {padding-bottom:15px;border-bottom:1px solid var(--line);}
+.premium-settings .settings-logo-upload {padding:18px;background:var(--soft);border-color:var(--line);border-radius:14px;}
+.premium-settings .settings-logo-upload > img {width:84px;height:84px;border:1px solid var(--line);}
+.premium-settings .settings-logo-content > b {font-size:14px;color:var(--text);}
+.premium-settings .settings-logo-content > small {font-size:12px;color:var(--muted);}
+.settings-appearance {display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--soft);}
+.settings-appearance > div:first-child {flex:1 1 230px;min-width:0;}
+.settings-appearance h3 {font-size:15px;font-weight:700;color:var(--text);margin-top:5px;}
+.settings-appearance .field {flex:0 1 195px;}
+.premium-settings .business-hours-list {gap:8px;}
+.premium-settings .hours-row {grid-template-columns:minmax(115px,1fr) minmax(80px,.7fr) minmax(90px,1fr) 20px minmax(90px,1fr);gap:10px;border:1px solid var(--line);border-radius:11px;padding:12px;background:var(--soft);font-size:12px;}
+.premium-settings .hours-row b,.premium-settings .hours-check {font-size:12px;color:var(--text);}
+.premium-settings .hours-check input {width:16px;height:16px;}
+.premium-settings .hours-input {min-height:40px;font-size:13px;}
+.settings-save {padding:13px 16px;background:var(--surface);border:1px solid var(--line);border-radius:13px;box-shadow:var(--premium-shadow);}
+.settings-save .button {min-height:43px;}
+.app-shell .field-label,.modal-panel .field-label {font-size:12px;color:var(--text);font-weight:600;}
+.app-shell .input,.modal-panel .input {min-height:43px;border-color:var(--line);background:var(--surface);color:var(--text);font-size:13px;border-radius:10px;padding-inline:12px;}
+.app-shell .input:focus,.modal-panel .input:focus {border-color:#7ba5ed;box-shadow:0 0 0 3px #2563eb14;}
+.app-shell textarea.input,.modal-panel textarea.input {padding:11px 12px;min-height:82px;}
+.app-shell .choice-option,.modal-panel .choice-option {border-color:var(--line);background:var(--soft);color:var(--text);padding:10px 12px;font-size:12px;line-height:1.5;border-radius:10px;}
+.app-shell .choice-option input,.modal-panel .choice-option input {flex:0 0 16px;width:16px;height:16px;}
+.modal-backdrop {background:#0b16365c;backdrop-filter:blur(5px);}
+body:has(.modal-backdrop) {overflow:hidden;}
+.modal-panel {max-height:min(90dvh,880px);border-radius:20px;border-color:var(--line);background:var(--surface);color:var(--text);box-shadow:0 24px 80px #0b16364d;animation:modal-appear .18s ease-out;}
+@keyframes modal-appear {from{opacity:0;transform:translateY(7px) scale(.99);}to{opacity:1;transform:none;}}
+.modal-header {padding:17px 21px;border-color:var(--line);}
+.modal-header h2 {font-size:17px;font-weight:700;color:var(--text);overflow-wrap:anywhere;}
+.modal-header .icon-button {border-color:var(--line);background:var(--soft);color:var(--muted);}
+.modal-body {padding:21px;}
+.modal-body .form-stack {gap:16px;}
+.modal-body .form-grid {gap:14px;}
+.modal-body .modal-actions {margin-top:10px;flex-wrap:wrap;}
+.confirmation-body {display:grid;gap:18px;}
+.confirmation-body .panel-subtitle {font-size:14px;line-height:1.65;}
+.form-error {padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:9px;color:#b91c1c;font-size:12px;line-height:1.5;}
+.success-message {padding:9px 12px;background:#ecfdf5;border:1px solid #bbf7d0;border-radius:9px;color:#047857;font-size:12px;}
+.settings-save .form-error,.settings-save .success-message {flex:1 1 auto;}
+.account-profile-banner {display:flex;align-items:center;gap:14px;padding:16px;background:var(--soft);border:1px solid var(--line);border-radius:13px;margin-bottom:19px;color:var(--muted);}
+.account-profile-banner .profile-avatar {width:50px;height:50px;font-size:20px;background:#eaf0ff;color:#245ed6;}
+.account-profile-banner > div {display:grid;gap:4px;flex:1;min-width:0;}
+.account-profile-banner b {color:var(--text);font-size:15px;overflow-wrap:anywhere;}
+.account-profile-banner small {font-size:12px;color:var(--muted);}
+.premium-account .panel-heading {border-bottom:1px solid var(--line);padding-bottom:13px;}
+.premium-account .form-stack {gap:16px;}
+.premium-booking-share .panel-heading {border-bottom:1px solid var(--line);padding-bottom:14px;}
+.premium-booking-share .booking-url-box {background:var(--soft);border:1px solid var(--line);border-radius:12px;padding:12px;}
+.premium-booking-share .booking-qr-image {border:1px solid var(--line);border-radius:15px;width:fit-content;margin:15px auto;padding:20px;background:#fff;}
+.premium-booking-share .booking-qr-caption {color:var(--muted);font-size:12px;line-height:1.6;text-align:center;}
+.premium-booking-share .success-message {margin-top:12px;}
+.dark .account-profile-banner .profile-avatar {background:#213c65;color:#b1cdff;}
+.detail-summary b,.app-shell .panel b,.modal-panel .detail-summary b {color:var(--text);}
+.detail-summary span {color:var(--muted);font-size:11px;}
+.modal-panel .detail-summary b {font-size:13px;}
+.dark .settings-tab-icon {background:#213c65;color:#b1cdff;}
+.dark .premium-settings-tabs .active .settings-tab-icon {background:#ffffff25;color:#fff;}
+.dark .settings-logo-upload,.dark .settings-save {background:var(--surface);border-color:var(--line);}
+.dark .modal-header h2,.dark .modal-panel b,.dark .detail-summary b {color:var(--text);}
+.dark .button-secondary,.dark .button-quiet,.dark .icon-button {color:#c6d5ed;border-color:var(--line);}
+.dark .button-secondary:hover,.dark .button-quiet:hover,.dark .icon-button:hover {background:var(--soft);color:#b1cdff;}
+.dark .text-link,.dark .appointment-time {color:#a5c7ff;}
+.dark .booking-share-notice {background:#213c65;color:#c2d7fc;}
+.dark .form-error {color:#fecaca;background:#421c29;border-color:#7f3643;}
+.dark .success-message {color:#9debc9;background:#143a32;border-color:#23594b;}
+.dark .calendar-event.event-agendado {background:#213c65;color:#c2d7fc;}
+.dark .calendar-event.event-confirmado {background:#174b42;color:#9debc9;}
+.dark .calendar-event.event-concluido {background:#293b53;color:#dce6f5;}
+.dark .calendar-block,.dark .block-row {background:#3c2e19;color:#ffcf83;border-color:#92642a;}
+.dark .block-row span,.dark .block-row .icon-button {color:#ffcf83;}
+.dark .empty-icon {background:#213c65;color:#a5c7ff;}
+.dark .report-empty,.dark .day-empty,.dark .inactive-row small,.dark .report-row small {color:var(--muted);}
+@media(max-width:1120px){.premium-settings-tabs {grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:760px){
+  .premium-settings {gap:12px;}
+  .premium-settings-tabs [role="tab"] {flex-direction:row;min-height:73px;padding:10px;font-size:11px;}
+  .settings-tab-icon {width:31px;height:31px;flex-basis:31px;}
+  .premium-settings-tabs small {font-size:10px;}
+  .premium-settings .hours-row {grid-template-columns:minmax(0,1fr) 20px minmax(0,1fr);gap:8px;padding:10px;}
+  .premium-settings .hours-row > b {grid-column:1/3;}
+  .premium-settings .hours-check {grid-column:3/-1;justify-self:end;}
+  .premium-settings .hours-row .hours-input:first-of-type {grid-column:1/2;}
+  .premium-settings .hours-row .hours-input {min-width:0;padding:0 5px;font-size:12px;}
+  .settings-appearance .field {flex:1 1 100%;}
+  .settings-save {flex-wrap:wrap;bottom:calc(65px + env(safe-area-inset-bottom));}
+  .settings-save > .button {width:100%;min-height:44px;}
+  .settings-save .form-error,.settings-save .success-message {flex:1 1 100%;}
+  .app-shell .input,.modal-panel .input {min-height:44px;font-size:16px;}
+  .modal-panel {max-height:92dvh;border-radius:20px 20px 0 0;}
+  .modal-header {padding:14px 17px;}
+  .modal-body {padding:17px;}
+  .modal-body .form-grid {grid-template-columns:1fr;}
+  .modal-body .modal-actions .button {flex:1 1 auto;min-height:44px;}
+}
+@media(prefers-reduced-motion:reduce){.modal-panel{animation:none;}}
 @media(max-width:1120px){
   .premium-finance .premium-finance-tabs,.commission-overview,.settlement-overview {grid-template-columns:repeat(2,minmax(0,1fr));}
   .cash-method-grid,.settlement-breakdown {grid-template-columns:repeat(3,minmax(0,1fr));}
