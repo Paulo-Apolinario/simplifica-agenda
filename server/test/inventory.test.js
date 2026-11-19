@@ -1,0 +1,60 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {randomBytes} from "node:crypto";
+
+test("estoque, consumo, venda idempotente e fechamento por data real",async()=>{
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),"agenda-inventory-"));
+  process.env.DATABASE_PATH=path.join(temp,"app.sqlite");
+  process.env.INSTALL_TOKEN=randomBytes(32).toString("hex");
+  process.env.NODE_ENV="test";process.env.DEMO_MODE="false";
+  const {default:app}=await import("../src/app.js"),{db}=await import("../src/database.js");
+  const server=app.listen(0,"127.0.0.1");await new Promise(r=>server.once("listening",r));
+  let cookie="";
+  const call=async(route,method="GET",body)=>{
+    const response=await fetch("http://127.0.0.1:"+server.address().port+"/api"+route,{method,headers:{...(body?{"Content-Type":"application/json"}:{}),...(cookie?{Cookie:cookie}:{})},body:body?JSON.stringify(body):undefined});
+    const next=response.headers.get("set-cookie");if(next)cookie=next.split(";")[0];
+    return {status:response.status,body:await response.json()};
+  };
+  try{
+    assert.equal((await call("/installation/setup","POST",{businessName:"Salão",slug:"stock-test",ownerName:"Dono",ownerEmail:"owner@stock.local",password:"Senha-Forte-Estoque-123",installToken:process.env.INSTALL_TOKEN})).status,201);
+    const login=await call("/auth/login","POST",{email:"owner@stock.local",password:"Senha-Forte-Estoque-123"});
+    assert.equal(login.status,200);const tenant=login.body.user.tenantId;
+    const today=(await call("/cash/daily")).body.today,month=today.slice(0,7);
+    const fields={name:"Shampoo",category:"Cabelo",vendor:"Fornecedor",purpose:"ambos",unit:"un",costCents:1000,priceCents:2500,minimum:3};
+    const create=await call("/inventory/products","POST",fields);assert.equal(create.status,201);const p=create.body.id;
+    const move=(type,quantity)=>call("/inventory/products/"+p+"/movements","POST",{type,quantity,reason:"Teste de estoque"});
+    assert.equal((await move("entrada",10)).status,201);
+    assert.equal((await move("consumo",2)).status,201);
+    assert.equal((await move("saida",9)).status,409);
+    assert.equal((await call("/inventory/products/"+p,"PATCH",{...fields,unit:"g"})).status,409);
+    const sale={requestId:"test-sale-0000000001",clientName:"Cliente",paymentMethod:"dinheiro",items:[{productId:p,quantity:3,priceCents:2500}]};
+    assert.equal((await call("/inventory/sales","POST",sale)).status,409);
+    assert.equal((await call("/cash/openings","POST",{date:today,openingCashCents:1000})).status,201);
+    assert.equal((await call("/inventory/sales","POST",{...sale,items:[{productId:p,quantity:3,priceCents:1}]})).status,409);
+    const sold=await call("/inventory/sales","POST",sale);assert.equal(sold.status,201);assert.equal(sold.body.totalCents,7500);
+    const retry=await call("/inventory/sales","POST",sale);assert.equal(retry.status,200);assert.equal(retry.body.id,sold.body.id);
+    assert.equal((await call("/inventory/sales","POST",{...sale,items:[{productId:p,quantity:1,priceCents:2500}]})).status,409);
+    const stock=(await call("/inventory?month="+month)).body;assert.equal(stock.products[0].quantity,5);
+    assert.equal(stock.movements.length,3);assert.equal(stock.sales.length,1);
+    assert.deepEqual(stock.summary,{revenueCents:7500,costCents:3000,count:1,marginCents:4500});
+    const day=(await call("/cash/daily")).body;assert.equal(day.expectedDrawerCashCents,8500);assert.equal(day.receipts[0].bookingSource,"product_sale");
+    const report=(await call("/reports?month="+month)).body;assert.equal(report.revenueCents,7500);assert.equal(report.cashFlow.receivedCents,7500);assert.equal(report.commissionTotalCents,0);
+    assert.equal(report.daily.find(d=>d.date===today).receivedCents,7500);
+    assert.equal(report.paymentBreakdown[0].cents,7500);
+    assert.equal((await call("/overview")).body.monthRevenueCents,7500);
+    assert.equal((await call("/cash/closings","POST",{date:today,countedCashCents:8500})).status,201);
+    assert.equal((await call("/inventory/sales","POST",{...sale,requestId:"test-sale-0000000002"})).status,409);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM product_sales WHERE tenant_id=?").get(tenant).n,1);
+    const ownerHash=db.prepare("SELECT password_hash FROM users WHERE tenant_id=? AND role='dono'").get(tenant).password_hash;
+    db.prepare("INSERT INTO users(id,tenant_id,name,email,password_hash,role) VALUES(?,?,?,?,?,'recepcao')").run("stock-reception",tenant,"Recepção","reception@stock.local",ownerHash);
+    assert.equal((await call("/auth/login","POST",{email:"reception@stock.local",password:"Senha-Forte-Estoque-123"})).status,200);
+    const reception=(await call("/inventory")).body;
+    assert.equal(reception.products[0].costCents,undefined);assert.equal(reception.sales[0].costCents,undefined);assert.equal(reception.summary,null);
+    assert.equal((await call("/inventory/products","POST",fields)).status,403);
+    assert.equal((await move("entrada",1)).status,403);
+    assert.equal((await move("consumo",1)).status,201);
+  }finally{await new Promise(r=>server.close(r));db.close();fs.rmSync(temp,{recursive:true,force:true});}
+});

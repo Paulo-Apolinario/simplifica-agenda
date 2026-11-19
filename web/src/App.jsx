@@ -4,7 +4,7 @@ import {
   ChevronLeft, ChevronRight, CircleDollarSign, Clock3, Download, ExternalLink, LayoutDashboard,
   LogOut, Menu, Moon, MoreHorizontal, Plus, Search, Settings, ShieldCheck, Sun, Users,
   Wallet, X, Scissors, UserRound, CalendarClock, CalendarX2, Phone, Mail, Sparkles, RefreshCw, List, CalendarRange, Eye, EyeOff,
-  Copy, QrCode, Share2, Link2, Smartphone, Info, ClipboardCheck, UserRoundCheck, Upload,
+  Copy, QrCode, Share2, Link2, Smartphone, Info, ClipboardCheck, UserRoundCheck, Upload, Package,
 } from "lucide-react";
 import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import QRCode from "react-qr-code";
@@ -425,6 +425,7 @@ const navItems = [
   { to: "/solicitacoes", label: "Solicitações online", icon: ClipboardCheck },
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços", icon: Scissors },
+  { to: "/estoque", label: "Estoque e produtos", icon: Package },
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
@@ -466,7 +467,7 @@ function Shell({ user, onLogout, children }) {
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
     if (user.role === "recepcao") return !["/financeiro", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos"].includes(item.to);
-    if (isDemo && ["/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
+    if (isDemo && ["/estoque", "/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
     return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
   useEffect(() => {
@@ -2034,8 +2035,8 @@ function DailyCashClosing({ revision, user, children, onClosed }) {
           {summary.receipts.map(item => <article className="service-row cash-payment-row" key={item.id}>
             <span className="service-row-icon"><Check size={18}/></span>
             <div className="cash-payment-info"><b>{item.clientName} · {item.serviceName}</b>
-              <small>Profissional: {item.professionalName}</small>
-              <small>{item.bookingSource === "direct" ? "Registro direto" : `Agendado: ${dateTimeLabel(item.startsAt)}`}{item.completedOn ? ` · Realizado: ${dateLabel(item.completedOn)}` : ""}{item.paidAt ? ` · Recebido: ${cashTimestamp(item.paidAt, summary.timezone)}` : item.paidOn ? ` · Recebido: ${dateLabel(item.paidOn)}` : ""}</small></div>
+              <small>{item.bookingSource==="product_sale"?"Vendedor":"Profissional"}: {item.professionalName}</small>
+              <small>{item.bookingSource==="product_sale"?"Venda de produtos":item.bookingSource === "direct" ? "Registro direto" : `Agendado: ${dateTimeLabel(item.startsAt)}`}{item.completedOn ? ` · Realizado: ${dateLabel(item.completedOn)}` : ""}{item.paidAt ? ` · Recebido: ${cashTimestamp(item.paidAt, summary.timezone)}` : item.paidOn ? ` · Recebido: ${dateLabel(item.paidOn)}` : ""}</small></div>
             <span className="cash-method-chip">{paymentNames[item.paymentMethod] || item.paymentMethod}</span>
             <strong>{money(item.priceCents)}</strong>
           </article>)}
@@ -2147,6 +2148,60 @@ function FinancialHubPage({ user }) {
   </div>;
 }
 
+const inventoryPurposes={venda:"Venda",consumo:"Uso interno",ambos:"Venda e uso interno"};
+const inventoryTypes={entrada:"Entrada",saida:"Saída",ajuste:"Ajuste de saldo",consumo:"Consumo interno",venda:"Venda"};
+function InventoryPage({user}){
+  const owner=user.role==="dono",location=useLocation(),navigate=useNavigate();
+  const tab=new URLSearchParams(location.search).get("aba")||"produtos";
+  const [month,setMonth]=useState(localDate().slice(0,7)),[data,setData]=useState(null),[error,setError]=useState(""),[rev,setRev]=useState(0),[search,setSearch]=useState(""),[modal,setModal]=useState(null);
+  useEffect(()=>{let active=true;setData(null);setError("");api("/inventory?month="+month).then(d=>{if(active)setData(d);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[month,rev]);
+  const products=data?.products||[],low=products.filter(p=>p.quantity<=p.minimum);
+  return <div className="expenses-page inventory-page">
+    <PageTitle eyebrow="GESTÃO DE PRODUTOS" title="Estoque e produtos" description="Controle materiais, vendas e saldos de estoque." actions={<>{owner&&<Button variant="secondary" onClick={()=>setModal({mode:"product"})}><Plus size={16}/> Novo produto</Button>}<Button onClick={()=>setModal({mode:"sale"})}><Package size={16}/> Registrar venda</Button></>}/>
+    <div className="panel expense-filters"><Field label="Mês do histórico" type="month" value={month} onChange={e=>e.target.value&&setMonth(e.target.value)}/><Button variant="secondary" onClick={()=>setRev(n=>n+1)}>Atualizar</Button></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    {!data?!error&&<Loading label="Carregando estoque..."/>:<>
+      <section className="stats-grid finance-stats"><StatCard title="Produtos cadastrados" value={products.length} icon={Package}/><StatCard title="Estoque mínimo" value={low.length} note="Produtos no limite ou abaixo" icon={Clock3} tone="orange"/><StatCard title="Vendas no mês" value={data.sales.length} icon={Wallet} tone="green"/>{owner&&<StatCard title="Margem bruta estimada" value={money(data.summary.marginCents)} icon={CircleDollarSign} note="Receita menos custo dos produtos vendidos"/>}</section>
+      <div className="settings-tab-bar" role="tablist" aria-label="Estoque">{[["produtos","Produtos"],["movimentos","Movimentações"],["vendas","Vendas registradas"]].map(([key,label])=><button type="button" role="tab" key={key} aria-selected={tab===key} className={tab===key?"active":""} onClick={()=>navigate("/estoque?aba="+key)}>{label}</button>)}</div>
+      {tab==="produtos"&&<section className="panel expense-list"><div className="panel-heading"><div><h2>Catálogo e saldo atual</h2><p className="panel-subtitle">As movimentações de estoque não registram pagamentos a fornecedores; lance essas despesas no financeiro.</p></div></div><Field label="Buscar produto" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nome ou categoria"/>
+        {products.filter(p=>(p.name+" "+p.category).toLowerCase().includes(search.toLowerCase())).map(p=><div className="expense-row" key={p.id}><div className="expense-row-details"><b>{p.name}</b><small>{p.category||"Sem categoria"} · {inventoryPurposes[p.purpose]}</small><small>Venda: {money(p.priceCents)} por {p.unit}{owner?" · Custo: "+money(p.costCents)+" por "+p.unit:""}</small></div><div className="expense-row-money"><strong>{p.quantity} {p.unit}</strong><span className={p.quantity<=p.minimum?"expense-status vencido":"expense-status pago"}>{p.quantity<=p.minimum?"Estoque baixo":"Disponível"}</span><small>Mínimo: {p.minimum}</small></div><div className="expense-row-actions">{(owner||p.purpose!=="venda")&&<Button onClick={()=>setModal({mode:"movement",product:p})}>Movimentar</Button>}{owner&&<Button variant="secondary" onClick={()=>setModal({mode:"product",product:p})}>Editar</Button>}</div></div>)}
+        {!products.length&&<EmptyState icon={Package} title="Nenhum produto cadastrado" description="Cadastre materiais e produtos para iniciar o controle."/>}</section>}
+      {tab==="movimentos"&&<section className="panel expense-list"><h2>Histórico de movimentações</h2>{data.movements.map(m=><div className="expense-row" key={m.id}><div className="expense-row-details"><b>{m.productName} · {inventoryTypes[m.type]}</b><small>{dateLabel(m.movedOn)} · {m.actorName} · {m.reason}</small></div><div className="expense-row-money"><strong>{m.delta>0?"+":""}{m.delta} {m.unit}</strong><small>Saldo: {m.balance} {m.unit}</small></div></div>)}{!data.movements.length&&<EmptyState icon={Package} title="Sem movimentações no mês" description="Entradas e saídas aparecerão aqui."/>}</section>}
+      {tab==="vendas"&&<section className="panel expense-list"><h2>Vendas registradas</h2><p className="panel-subtitle">Somente vendas efetivamente pagas; não geram comissões de serviços.</p>{data.sales.map(s=><div className="expense-row" key={s.id}><div className="expense-row-details"><b>{s.clientName} · {paymentNames[s.paymentMethod]}</b><small>{s.items.map(i=>i.quantity+" × "+i.name).join(", ")}</small><small>{dateLabel(s.paidOn)} · Registrado por {s.sellerName}</small></div><div className="expense-row-money"><strong>{money(s.totalCents)}</strong>{owner&&<small>Margem: {money(s.totalCents-s.costCents)}</small>}</div></div>)}{!data.sales.length&&<EmptyState icon={Wallet} title="Nenhuma venda no mês" description="Registre uma venda para acompanhar os recebimentos."/>}</section>}
+    </>}
+    {modal&&<InventoryForm key={modal.mode+String(modal.product?.id)} {...modal} owner={owner} products={products} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);setRev(n=>n+1);}}/>}
+  </div>;
+}
+function InventoryForm({mode,product,owner,products,onClose,onSaved}){
+  const [form,setForm]=useState({name:product?.name||"",category:product?.category||"",vendor:product?.vendor||"",purpose:product?.purpose||"ambos",unit:product?.unit||"un",cost:(product?.costCents||0)/100,price:(product?.priceCents||0)/100,minimum:product?.minimum||0,type:owner?"entrada":"consumo",quantity:1,reason:"",clientName:"",paymentMethod:"",productId:""});
+  const [cart,setCart]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const [requestId]=useState(()=>globalThis.crypto?.randomUUID?.()||Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,"0")).join(""));
+  const set=(k,v)=>setForm(f=>({...f,[k]:v})),close=()=>{if(!busy)onClose();};
+  const add=()=>{const p=products.find(p=>p.id===form.productId),n=Number(form.quantity),existing=cart.find(i=>i.productId===p?.id);if(!p||!Number.isSafeInteger(n)||n<=0||n+(existing?.quantity||0)>p.quantity){setError("Confira a quantidade disponível.");return;}setError("");setCart(c=>existing?c.map(i=>i.productId===p.id?{...i,quantity:i.quantity+n}:i):[...c,{productId:p.id,name:p.name,unit:p.unit,priceCents:p.priceCents,quantity:n}]);};
+  const total=cart.reduce((s,i)=>s+i.priceCents*i.quantity,0);
+  const submit=async e=>{e.preventDefault();if(busy)return;setBusy(true);setError("");try{
+    if(mode==="product"){await api("/inventory/products"+(product?"/"+product.id:""),{method:product?"PATCH":"POST",body:{...form,costCents:Math.round(Number(form.cost)*100),priceCents:Math.round(Number(form.price)*100),minimum:Number(form.minimum)}});}
+    else if(mode==="movement")await api("/inventory/products/"+product.id+"/movements",{method:"POST",body:{type:form.type,quantity:Number(form.quantity),reason:form.reason}});
+    else {if(!cart.length)throw new Error("Adicione pelo menos um produto.");await api("/inventory/sales",{method:"POST",body:{requestId,clientName:form.clientName,paymentMethod:form.paymentMethod,items:cart}});}
+    onSaved();
+  }catch(e){setError(e.message);}finally{setBusy(false);}};
+  return <Modal title={mode==="sale"?"Registrar venda":mode==="movement"?"Movimentar estoque":product?"Editar produto":"Novo produto"} onClose={close}><form className="expense-form" onSubmit={submit}>
+    {mode==="product"?<>
+      <Field label="Nome" required maxLength={120} value={form.name} onChange={e=>set("name",e.target.value)}/>
+      <Field label="Categoria" maxLength={100} value={form.category} onChange={e=>set("category",e.target.value)}/><Field label="Fornecedor" maxLength={120} value={form.vendor} onChange={e=>set("vendor",e.target.value)}/>
+      <div className="expense-form-grid"><SelectField label="Finalidade" value={form.purpose} onChange={e=>set("purpose",e.target.value)}>{Object.entries(inventoryPurposes).map(([k,v])=><option key={k} value={k}>{v}</option>)}</SelectField><SelectField label="Unidade" value={form.unit} onChange={e=>set("unit",e.target.value)}><option value="un">Unidade</option><option value="ml">Mililitro</option><option value="g">Grama</option></SelectField></div>
+      <div className="expense-form-grid"><Field label={"Custo por "+form.unit+" (R$)"} type="number" required min="0" step=".01" value={form.cost} onChange={e=>set("cost",e.target.value)}/><Field label={"Preço por "+form.unit+" (R$)"} type="number" required min={form.purpose==="consumo"?"0":".01"} step=".01" value={form.price} onChange={e=>set("price",e.target.value)}/></div><Field label="Estoque mínimo" type="number" required min="0" step="1" value={form.minimum} onChange={e=>set("minimum",e.target.value)}/><p className="panel-subtitle">O saldo inicial é registrado por uma entrada após cadastrar o produto.</p>
+    </>:mode==="movement"?<>
+      <p className="panel-subtitle">{product.name} · Saldo atual: {product.quantity} {product.unit}</p><SelectField label="Tipo de movimentação" value={form.type} onChange={e=>set("type",e.target.value)}>{Object.entries(inventoryTypes).filter(([k])=>k!=="venda"&&(owner||k==="consumo")&&(k!=="consumo"||product.purpose!=="venda")).map(([k,v])=><option key={k} value={k}>{v}</option>)}</SelectField><Field label={form.type==="ajuste"?"Novo saldo contado":"Quantidade"} type="number" min={form.type==="ajuste"?0:1} step="1" required value={form.quantity} onChange={e=>set("quantity",e.target.value)}/><Field label="Motivo ou serviço realizado" required maxLength={250} value={form.reason} onChange={e=>set("reason",e.target.value)}/>
+    </>:<>
+      <Field label="Cliente (opcional)" maxLength={120} value={form.clientName} onChange={e=>set("clientName",e.target.value)}/>
+      <SelectField label="Produto" value={form.productId} onChange={e=>set("productId",e.target.value)}><option value="">Selecione</option>{products.filter(p=>p.purpose!=="consumo"&&p.quantity>0).map(p=><option value={p.id} key={p.id}>{p.name} · {p.quantity} {p.unit} · {money(p.priceCents)}</option>)}</SelectField><div className="expense-form-grid"><Field label="Quantidade" type="number" min="1" step="1" value={form.quantity} onChange={e=>set("quantity",e.target.value)}/><Button variant="secondary" type="button" onClick={add}>Adicionar item</Button></div>
+      {cart.map(i=><div className="expense-row" key={i.productId}><div className="expense-row-details"><b>{i.quantity} {i.unit} · {i.name}</b><small>{money(i.priceCents*i.quantity)}</small></div><Button type="button" variant="secondary" onClick={()=>setCart(c=>c.filter(j=>j.productId!==i.productId))}>Remover</Button></div>)}<strong>Total: {money(total)}</strong>
+      <SelectField label="Forma de pagamento" value={form.paymentMethod} required onChange={e=>set("paymentMethod",e.target.value)}><option value="">Selecione</option>{Object.entries(paymentNames).map(([k,v])=><option value={k} key={k}>{v}</option>)}</SelectField><p className="panel-subtitle">Confirme somente após receber. O caixa de hoje deve estar aberto.</p>
+    </>}
+    <ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" onClick={close} disabled={busy}>Cancelar</Button><Button type="submit" disabled={busy}>{busy?"Salvando...":mode==="sale"?"Confirmar venda":"Salvar"}</Button></div>
+  </form></Modal>;
+}
 const expenseCategories = {aluguel:"Aluguel",energia:"Energia",agua:"Água",internet:"Internet",materiais:"Materiais",fornecedores:"Fornecedores",manutencao:"Manutenção",marketing:"Marketing",impostos:"Impostos",outros:"Outros"};
 const expensePaymentNames = {...paymentNames,dinheiro:"Dinheiro (fora da gaveta)",cash_drawer:"Dinheiro da gaveta",boleto:"Boleto"};
 function CashFlowSummary({ flow }) {
@@ -2241,7 +2296,7 @@ function ReceivablesPage({ user }) {
   const [direct, setDirect] = useState(false);
   return <>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
-    <div className="finance-cash-actions"><div><b>Operação do caixa</b><small>Registre serviços e acompanhe os recebimentos.</small></div><Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button></div>
+    <div className="finance-cash-actions"><div><b>Operação do caixa</b><small>Registre serviços e acompanhe os recebimentos.</small></div><div className="expense-row-actions"><Link className="button button-secondary" to="/estoque?aba=vendas"><Package size={16}/> Vender produtos</Link><Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button></div></div>
     {direct && <AppointmentForm direct user={user} onClose={() => setDirect(false)} onSaved={() => { setDirect(false); refresh(); setCashRevision(n => n + 1); }} />}
     {pending.length > 0 && <Link className="cash-pending-summary cash-pending-link" to={pendingPaymentsPath}>
       <Clock3 size={22}/><div><b>{pending.length} pagamento(s) pendente(s)</b>
@@ -2431,6 +2486,7 @@ function FinancePage() {
       <StatCard title="Clientes para reativar" value={report?.inactiveClients?.length ?? "—"} note="Sem voltar há 30 dias ou mais" icon={Users} tone="orange" />
     </section>
     <CashFlowSummary flow={report.cashFlow}/>
+    {report.productSales&&<section className="panel expense-flow"><div className="panel-heading"><div><h2>Venda de produtos</h2><p className="panel-subtitle">Margem bruta estimada: vendas menos custo registrado no momento da venda, sem despesas ou impostos.</p></div></div><div className="expense-flow-grid"><div><small>Receita de produtos</small><strong>{money(report.productSales.revenueCents)}</strong></div><div><small>Custo dos produtos vendidos</small><strong>{money(report.productSales.costCents)}</strong></div><div><small>Margem bruta estimada</small><strong>{money(report.productSales.marginCents)}</strong></div><div><small>Vendas registradas</small><strong>{report.productSales.count}</strong></div></div></section>}
     <ReportDailyChart key={month} daily={report.daily||[]}/>
     <div className="reports-grid">
       <ReportSplit report={report}/>
@@ -3318,6 +3374,7 @@ export default function App() {
       <Route path="/solicitacoes" element={user.role!=="profissional" ? <OnlineRequestsPage/> : <AccessDenied/>}/>
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
+      <Route path="/estoque" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<InventoryPage user={user}/>:<AccessDenied/>}/>
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage user={user} /> : <AccessDenied />} />
       <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>

@@ -313,6 +313,42 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS operating_expenses_due_idx ON operating_expenses(tenant_id,status,due_on);
   CREATE INDEX IF NOT EXISTS operating_expenses_paid_idx ON operating_expenses(tenant_id,paid_on);
+  CREATE TABLE IF NOT EXISTS inventory_products (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, category TEXT NOT NULL DEFAULT '', vendor TEXT NOT NULL DEFAULT '',
+    purpose TEXT NOT NULL CHECK(purpose IN ('venda','consumo','ambos')),
+    unit TEXT NOT NULL DEFAULT 'un', cost_cents INTEGER NOT NULL CHECK(cost_cents>=0),
+    price_cents INTEGER NOT NULL CHECK(price_cents>=0),
+    quantity INTEGER NOT NULL DEFAULT 0 CHECK(quantity>=0),
+    minimum INTEGER NOT NULL DEFAULT 0 CHECK(minimum>=0)
+  );
+  CREATE INDEX IF NOT EXISTS inventory_products_tenant ON inventory_products(tenant_id,name);
+  CREATE TABLE IF NOT EXISTS product_sales (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    request_id TEXT NOT NULL, request_json TEXT NOT NULL,
+    client_name TEXT NOT NULL, seller_name TEXT NOT NULL,
+    total_cents INTEGER NOT NULL, cost_cents INTEGER NOT NULL, payment_method TEXT NOT NULL,
+    paid_on TEXT NOT NULL, paid_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    created_by TEXT NOT NULL REFERENCES users(id), UNIQUE(tenant_id,request_id)
+  );
+  CREATE INDEX IF NOT EXISTS product_sales_date ON product_sales(tenant_id,paid_on);
+  CREATE TABLE IF NOT EXISTS product_sale_items (
+    sale_id TEXT NOT NULL REFERENCES product_sales(id) ON DELETE CASCADE,
+    product_id TEXT NOT NULL REFERENCES inventory_products(id),
+    product_name TEXT NOT NULL, quantity INTEGER NOT NULL CHECK(quantity>0),
+    price_cents INTEGER NOT NULL, cost_cents INTEGER NOT NULL,
+    PRIMARY KEY(sale_id,product_id)
+  );
+  CREATE TABLE IF NOT EXISTS inventory_movements (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    product_id TEXT NOT NULL REFERENCES inventory_products(id),
+    type TEXT NOT NULL CHECK(type IN ('entrada','saida','ajuste','consumo','venda')),
+    delta INTEGER NOT NULL, balance INTEGER NOT NULL CHECK(balance>=0),
+    reason TEXT NOT NULL, sale_id TEXT REFERENCES product_sales(id),
+    created_by TEXT NOT NULL REFERENCES users(id), actor_name TEXT NOT NULL,
+    moved_on TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE INDEX IF NOT EXISTS inventory_movements_date ON inventory_movements(tenant_id,moved_on,created_at);
 `);
 ensureColumn("daily_cash_closings", "supply_cents", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("daily_cash_closings", "withdrawal_cents", "INTEGER NOT NULL DEFAULT 0");

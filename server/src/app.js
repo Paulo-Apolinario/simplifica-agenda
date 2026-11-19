@@ -568,7 +568,7 @@ app.get("/api/overview", requireAuth, (req, res) => {
     earningsDueCents: earnings?.dueCents ?? null,
     todayCount: summary.today_count,
     activeClients: summary.active_clients,
-    monthRevenueCents: req.user.role === "dono" ? summary.month_revenue : null,
+    monthRevenueCents: req.user.role === "dono" ? summary.month_revenue + productSalesSummary(tenant(req),month).revenueCents : null,
     monthCount: summary.month_count,
     upcoming,
   });
@@ -1709,6 +1709,11 @@ function cashDaySummary(tenantId, date) {
     JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
     WHERE a.tenant_id = ? AND a.paid_on = ? AND a.status = 'concluido' AND a.payment_method != ''
     ORDER BY a.paid_at DESC, a.id DESC`).all(tenantId, date);
+  rows.push(...db.prepare(`SELECT s.id, s.total_cents AS priceCents,s.payment_method AS paymentMethod,s.paid_at AS paidAt,
+    s.paid_on AS paidOn,s.paid_at AS startsAt,'product_sale' AS bookingSource,s.client_name AS clientName,
+    'Venda de produtos: ' || (SELECT group_concat(i.quantity || ' × ' || i.product_name, ', ') FROM product_sale_items i WHERE i.sale_id=s.id) AS serviceName,
+    s.seller_name AS professionalName FROM product_sales s WHERE s.tenant_id=? AND s.paid_on=?`).all(tenantId,date));
+  rows.sort((a,b)=>String(b.paidAt||"").localeCompare(String(a.paidAt||""))||a.id.localeCompare(b.id));
   for (const row of rows) methods[row.paymentMethod] = (methods[row.paymentMethod] || 0) + row.priceCents;
   return { date, receiptCount: rows.length, methods, expectedCashCents: methods.dinheiro,
     expectedTotalCents: rows.reduce((sum, row) => sum + row.priceCents, 0), receipts: rows };
@@ -1716,7 +1721,7 @@ function cashDaySummary(tenantId, date) {
 const expenseCategories = ["aluguel","energia","agua","internet","materiais","fornecedores","manutencao","marketing","impostos","outros"];
 const expenseMethods = ["cash_drawer", ...paymentMethods, "boleto"];
 function expenseCashFlow(tenantId, month) {
-  const receivedCents = db.prepare("SELECT coalesce(sum(price_cents),0) AS total FROM appointments WHERE tenant_id=? AND status='concluido' AND payment_method!='' AND substr(paid_on,1,7)=?").get(tenantId,month).total;
+  const receivedCents = db.prepare("SELECT coalesce(sum(price_cents),0) AS total FROM appointments WHERE tenant_id=? AND status='concluido' AND payment_method!='' AND substr(paid_on,1,7)=?").get(tenantId,month).total + productSalesSummary(tenantId,month).revenueCents;
   const expensesCents = db.prepare("SELECT coalesce(sum(amount_cents),0) AS total FROM operating_expenses WHERE tenant_id=? AND status='pago' AND substr(paid_on,1,7)=?").get(tenantId,month).total;
   const timezone = db.prepare("SELECT timezone FROM business_settings WHERE tenant_id=?").get(tenantId)?.timezone || "America/Sao_Paulo";
   const payoutsCents = db.prepare(`SELECT cp.amount_cents AS amount, cp.paid_at AS paidAt, b.receipt_snapshot_json AS snapshot
@@ -1800,6 +1805,101 @@ app.post("/api/expenses/:id/pay", requireAuth, allowRoles("dono"), (req,res)=>{
   })();
   if (outcome) return fail(res,409,outcome);
   res.json({ok:true});
+});
+function productSalesSummary(id,month) {
+  const row=db.prepare("SELECT coalesce(sum(total_cents),0) AS revenueCents,coalesce(sum(cost_cents),0) AS costCents,count(*) AS count FROM product_sales WHERE tenant_id=? AND substr(paid_on,1,7)=?").get(id,month);
+  return {...row,marginCents:row.revenueCents-row.costCents};
+}
+const inventoryProductsSql="SELECT id,name,category,vendor,purpose,unit,cost_cents AS costCents,price_cents AS priceCents,quantity,minimum FROM inventory_products";
+function productFields(body) {
+  const name=String(body?.name??"").trim(),category=String(body?.category??"").trim(),vendor=String(body?.vendor??"").trim(),purpose=String(body?.purpose??""),unit=String(body?.unit??"un");
+  const {costCents,priceCents,minimum}=body||{};
+  if(!name||name.length>120||category.length>100||vendor.length>120||!["venda","consumo","ambos"].includes(purpose)||!["un","ml","g"].includes(unit)
+    ||![costCents,priceCents,minimum].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=100000000)
+    ||(purpose!=="consumo"&&priceCents<=0))return null;
+  return {name,category,vendor,purpose,unit,costCents,priceCents,minimum};
+}
+function inventoryMovement(req,product,delta,type,reason,saleId=null) {
+  const balance=product.quantity+delta;
+  db.prepare("UPDATE inventory_products SET quantity=? WHERE id=? AND tenant_id=?").run(balance,product.id,tenant(req));
+  db.prepare(`INSERT INTO inventory_movements(id,tenant_id,product_id,type,delta,balance,reason,sale_id,created_by,actor_name,moved_on)
+    VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(createId(),tenant(req),product.id,type,delta,balance,reason,saleId,req.user.id,req.user.name||"Usuário",cashDay(tenant(req)));
+}
+app.get("/api/inventory",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const id=tenant(req),month=String(req.query.month??cashDay(id).slice(0,7));
+  if(!validMonth(month))return fail(res,400,"Mês inválido.");
+  const owner=req.user.role==="dono";
+  const products=db.prepare(inventoryProductsSql+" WHERE tenant_id=? ORDER BY name COLLATE NOCASE").all(id).map(p=>owner?p:(({costCents,vendor,...rest})=>rest)(p));
+  const movements=db.prepare(`SELECT m.id,p.name AS productName,p.unit,m.type,m.delta,m.balance,m.reason,m.actor_name AS actorName,m.moved_on AS movedOn
+    FROM inventory_movements m JOIN inventory_products p ON p.id=m.product_id AND p.tenant_id=m.tenant_id
+    WHERE m.tenant_id=? AND substr(m.moved_on,1,7)=? ORDER BY m.created_at DESC,m.id DESC`).all(id,month);
+  const sales=db.prepare(`SELECT s.id,s.client_name AS clientName,s.seller_name AS sellerName,s.total_cents AS totalCents,s.cost_cents AS costCents,
+    s.paid_on AS paidOn,s.payment_method AS paymentMethod FROM product_sales s WHERE s.tenant_id=? AND substr(s.paid_on,1,7)=? ORDER BY paid_at DESC`).all(id,month);
+  const items=db.prepare("SELECT product_name AS name,quantity,price_cents AS priceCents FROM product_sale_items WHERE sale_id=?");
+  res.setHeader("Cache-Control","no-store");
+  res.json({month,products,movements,sales:sales.map(s=>({...s,costCents:owner?s.costCents:undefined,items:items.all(s.id)})),
+    summary:owner?productSalesSummary(id,month):null});
+});
+app.post("/api/inventory/products",requireAuth,allowRoles("dono"),(req,res)=>{
+  const p=productFields(req.body);if(!p)return fail(res,400,"Confira os dados do produto.");
+  const id=createId();
+  db.prepare("INSERT INTO inventory_products(id,tenant_id,name,category,vendor,purpose,unit,cost_cents,price_cents,minimum) VALUES(?,?,?,?,?,?,?,?,?,?)")
+    .run(id,tenant(req),p.name,p.category,p.vendor,p.purpose,p.unit,p.costCents,p.priceCents,p.minimum);
+  res.status(201).json({id});
+});
+app.patch("/api/inventory/products/:id",requireAuth,allowRoles("dono"),(req,res)=>{
+  const p=productFields(req.body);if(!p)return fail(res,400,"Confira os dados do produto.");
+  const old=db.prepare(inventoryProductsSql+" WHERE id=? AND tenant_id=?").get(req.params.id,tenant(req));
+  if(!old)return fail(res,404,"Produto não encontrado.");
+  if(old.unit!==p.unit&&db.prepare("SELECT 1 FROM inventory_movements WHERE product_id=? AND tenant_id=? LIMIT 1").get(old.id,tenant(req)))return fail(res,409,"Não altere a unidade após movimentar o produto.");
+  db.prepare("UPDATE inventory_products SET name=?,category=?,vendor=?,purpose=?,unit=?,cost_cents=?,price_cents=?,minimum=? WHERE id=? AND tenant_id=?")
+    .run(p.name,p.category,p.vendor,p.purpose,p.unit,p.costCents,p.priceCents,p.minimum,old.id,tenant(req));
+  res.json({ok:true});
+});
+app.post("/api/inventory/products/:id/movements",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const type=String(req.body?.type??""),quantity=req.body?.quantity,reason=String(req.body?.reason??"").trim();
+  if(!["entrada","saida","ajuste","consumo"].includes(type)||!Number.isSafeInteger(quantity)||quantity<0||quantity>100000000||(!quantity&&type!=="ajuste")||!reason||reason.length>250)return fail(res,400,"Confira quantidade, tipo e motivo.");
+  if(req.user.role!=="dono"&&type!=="consumo")return fail(res,403,"Somente o administrador pode ajustar o estoque.");
+  const result=db.transaction(()=>{
+    const p=db.prepare(inventoryProductsSql+" WHERE id=? AND tenant_id=?").get(req.params.id,tenant(req));
+    if(!p)return "Produto não encontrado.";
+    if(type==="consumo"&&p.purpose==="venda")return "Produto não destinado ao consumo interno.";
+    const delta=type==="ajuste"?quantity-p.quantity:type==="entrada"?quantity:-quantity;
+    if(!delta||p.quantity+delta<0||p.quantity+delta>100000000)return "Saldo inválido ou insuficiente.";
+    inventoryMovement(req,p,delta,type,reason);return null;
+  })();
+  if(result)return fail(res,409,result);
+  res.status(201).json({ok:true});
+});
+app.post("/api/inventory/sales",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const requestId=String(req.body?.requestId??""),method=String(req.body?.paymentMethod??""),clientName=String(req.body?.clientName??"").trim()||"Consumidor";
+  const items=req.body?.items;
+  if(!/^[a-zA-Z0-9_-]{16,80}$/.test(requestId)||!paymentMethods.includes(method)||clientName.length>120||!Array.isArray(items)||!items.length||items.length>50||
+    items.some(i=>!i||typeof i.productId!=="string"||!Number.isSafeInteger(i.quantity)||i.quantity<=0||i.quantity>100000||!Number.isSafeInteger(i.priceCents)||i.priceCents<=0)||
+    new Set(items.map(i=>i.productId)).size!==items.length)return fail(res,400,"Confira os itens da venda e a forma de pagamento.");
+  const requestJson=JSON.stringify({method,clientName,items:items.map(i=>({productId:i.productId,quantity:i.quantity,priceCents:i.priceCents})).sort((a,b)=>a.productId.localeCompare(b.productId))});
+  const result=db.transaction(()=>{
+    const id=tenant(req),today=cashDay(id);
+    const prior=db.prepare("SELECT id,request_json AS requestJson,total_cents AS totalCents FROM product_sales WHERE tenant_id=? AND request_id=?").get(id,requestId);
+    if(prior)return prior.requestJson===requestJson?{id:prior.id,totalCents:prior.totalCents,replayed:true}:"Identificador de venda já utilizado.";
+    if(!cashOpening(id,today)||cashClosing(id,today))return "Abra o caixa de hoje antes de registrar a venda.";
+    const rows=[];
+    for(const i of items){
+      const p=db.prepare(inventoryProductsSql+" WHERE id=? AND tenant_id=?").get(i.productId,id);
+      if(!p||p.purpose==="consumo"||p.quantity<i.quantity||p.priceCents!==i.priceCents)return "Produto indisponível, preço alterado ou estoque insuficiente. Atualize a lista.";
+      rows.push({...p,sold:i.quantity});
+    }
+    const totalCents=rows.reduce((s,p)=>s+p.priceCents*p.sold,0),costCents=rows.reduce((s,p)=>s+p.costCents*p.sold,0);
+    if(!Number.isSafeInteger(totalCents)||totalCents>100000000000||!Number.isSafeInteger(costCents))return "Valor da venda inválido.";
+    const saleId=createId();
+    db.prepare(`INSERT INTO product_sales(id,tenant_id,request_id,request_json,client_name,seller_name,total_cents,cost_cents,payment_method,paid_on,created_by)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(saleId,id,requestId,requestJson,clientName,req.user.name||"Usuário",totalCents,costCents,method,today,req.user.id);
+    const add=db.prepare("INSERT INTO product_sale_items(sale_id,product_id,product_name,quantity,price_cents,cost_cents) VALUES(?,?,?,?,?,?)");
+    for(const p of rows){add.run(saleId,p.id,p.name,p.sold,p.priceCents,p.costCents);inventoryMovement(req,p,-p.sold,"venda","Venda de produtos",saleId);}
+    return {id:saleId,totalCents};
+  })();
+  if(typeof result==="string")return fail(res,409,result);
+  res.status(result.replayed?200:201).json(result);
 });
 app.get("/api/receivables/pending", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const rows = appointmentRows(tenant(req), "AND a.status = 'concluido' AND a.payment_method = ''");
@@ -2097,6 +2197,7 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
     sum(a.price_cents) AS cents, count(*) AS count FROM appointments a WHERE a.tenant_id=? AND a.status='concluido'
     AND ${appointmentCompletionMonth}=? GROUP BY date`).all(tenant(req),month);
   const receivedMap=new Map(receivedDays.map(row=>[row.date,row.cents]));
+  for(const row of db.prepare("SELECT paid_on AS date,sum(total_cents) AS cents FROM product_sales WHERE tenant_id=? AND substr(paid_on,1,7)=? GROUP BY paid_on").all(tenant(req),month))receivedMap.set(row.date,(receivedMap.get(row.date)||0)+row.cents);
   const productionMap=new Map(productionDays.map(row=>[row.date,row]));
   const [year,monthNumber]=month.split("-").map(Number);
   const daily=Array.from({length:new Date(Date.UTC(year,monthNumber,0)).getUTCDate()},(_,i)=>{
@@ -2106,7 +2207,13 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
   const paymentBreakdown = db.prepare(`SELECT payment_method AS method,sum(price_cents) AS cents,count(*) AS count
     FROM appointments WHERE tenant_id=? AND status='concluido' AND payment_method!='' AND substr(paid_on,1,7)=?
     GROUP BY payment_method ORDER BY cents DESC`).all(tenant(req),month);
-  res.json({ month, revenueCents: revenue.revenue_cents, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,
+  for(const row of db.prepare("SELECT payment_method AS method,sum(total_cents) AS cents,count(*) AS count FROM product_sales WHERE tenant_id=? AND substr(paid_on,1,7)=? GROUP BY payment_method").all(tenant(req),month)){
+    const existing=paymentBreakdown.find(p=>p.method===row.method);
+    if(existing){existing.cents+=row.cents;existing.count+=row.count;}else paymentBreakdown.push(row);
+  }
+  paymentBreakdown.sort((a,b)=>b.cents-a.cents);
+  const productSales=productSalesSummary(tenant(req),month);
+  res.json({ month, revenueCents: revenue.revenue_cents+productSales.revenueCents, productSales, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,
     productionCents, commissionTotalCents, establishmentShareCents: productionCents - commissionTotalCents,
     byService, byProfessional, inactiveClients, daily, paymentBreakdown, cashFlow:expenseCashFlow(tenant(req),month) });
 });
