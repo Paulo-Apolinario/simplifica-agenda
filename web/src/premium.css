@@ -379,7 +379,7 @@
 /* Finance — separate cash inflow, service production and professional payouts. */
 .premium-finance {display:grid;gap:17px;min-width:0;}
 .premium-finance > .page-title-row {margin-bottom:3px;}
-.premium-finance .premium-finance-tabs {display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;padding:0;margin:0 0 9px;background:transparent;border:0;overflow:visible;}
+.premium-finance .premium-finance-tabs {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,170px),1fr));gap:12px;padding:0;margin:0 0 9px;background:transparent;border:0;overflow:visible;}
 .expenses-page,.expense-form {display:grid;gap:16px;min-width:0;}
 .expense-filters {display:flex;gap:14px;align-items:end;flex-wrap:wrap;padding:18px;}
 .expense-filters .field {flex:1;min-width:160px;}
@@ -743,7 +743,7 @@
 /* Final shared polish: settings, dialogs, forms and contrast. */
 .premium-settings {display:grid;gap:17px;min-width:0;}
 .premium-settings > .page-title-row {margin-bottom:0;}
-.premium-settings-tabs {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0;padding:0;}
+.premium-settings-tabs {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:12px;margin:0;padding:0;}
 .premium-settings-tabs [role="tab"] {display:flex;min-width:0;min-height:84px;align-items:center;justify-content:flex-start;gap:10px;padding:13px;text-align:left;border-color:var(--line);border-radius:14px;background:var(--surface);color:var(--text);box-shadow:var(--premium-shadow);}
 .premium-settings-tabs [role="tab"] > span:nth-child(2) {display:grid;gap:4px;min-width:0;overflow-wrap:anywhere;}
 .premium-settings-tabs small {color:var(--muted);font-size:10px;font-weight:400;}

@@ -425,15 +425,12 @@ const navItems = [
   { to: "/solicitacoes", label: "Solicitações online", icon: ClipboardCheck },
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços", icon: Scissors },
-  { to: "/estoque", label: "Estoque e produtos", icon: Package },
   { to: "/pacotes", label: "Pacotes e fidelização", icon: Sparkles },
-  { to: "/whatsapp", label: "Central de WhatsApp", icon: Phone },
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
   { to: "/recebimentos", label: "Gestão financeira", icon: Wallet },
   { to: "/financeiro", label: "Relatórios", icon: Wallet },
-  { to: "/compartilhar", label: "Link de agendamento", icon: QrCode },
   { to: "/configuracoes", label: "Configurações do estabelecimento", icon: Settings },
   { to: "/minha-conta", label: "Minha conta", icon: ShieldCheck },
 ];
@@ -465,7 +462,6 @@ function Shell({ user, onLogout, children }) {
   },[user.role,user.tenantId,location.pathname]);
 
   const visibleNavItems = navItems.filter((item) => {
-    if(item.to==="/estoque"&&user.subscription?.features?.inventory===false)return false;
     if(item.to==="/pacotes"&&user.subscription?.features?.packages===false)return false;
     if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
@@ -489,7 +485,7 @@ function Shell({ user, onLogout, children }) {
     ? ["/", "/agenda", "/meus-atendimentos", "/meus-ganhos", "/clientes"]
     : ["/", "/agenda", "/solicitacoes", "/clientes", "/recebimentos"];
   const mobileItems = mobileRoutes.map((route) => visibleNavItems.find((item) => item.to === route)).filter(Boolean);
-  const pageName = location.pathname === "/recebimentos" && user.role === "recepcao"
+  const pageName = location.pathname === "/whatsapp" ? "Central de WhatsApp" : location.pathname === "/compartilhar" ? "Link de agendamento" : location.pathname === "/recebimentos" && user.role === "recepcao"
     ? "Caixa e recebimentos"
     : (visibleNavItems.find((item) => item.to === location.pathname)?.label ?? "Simplifica Agenda");
   return (
@@ -686,7 +682,7 @@ function ReceptionDashboard({ user }) {
   return <>
     <PageTitle dashboard actionClassName="dashboard-top-actions" eyebrow="CENTRAL DE ATENDIMENTO" title={`Bom trabalho, ${user.name.split(" ")[0]} 👋`}
       description="Acompanhe os horários, confirme solicitações e organize o atendimento ao cliente."
-      actions={<Link className="button button-primary dashboard-action-button" to="/solicitacoes"><ClipboardCheck size={16}/> Solicitações online</Link>}/>
+      actions={<><Link className="button button-secondary dashboard-action-button" to="/whatsapp"><Phone size={16}/> Central de WhatsApp</Link><Link className="button button-primary dashboard-action-button" to="/solicitacoes"><ClipboardCheck size={16}/> Solicitações online</Link></>}/>
     <ErrorMessage>{error}</ErrorMessage>
     <CashStatusBanner user={user}/>
     <section className="stats-grid">
@@ -731,9 +727,9 @@ function OverviewPage({ user }) {
   return <>
     <PageTitle dashboard actionClassName={user.role === "dono" ? "dashboard-top-actions" : ""} eyebrow={`${user.role === "profissional" ? "MINHA ROTINA" : "RESUMO DO NEGÓCIO"} · ${dateLabel(localDate(), { weekday: "long" }).toUpperCase()}`} title={`Olá, ${user.name.split(" ")[0]} 👋`}
       description={user.role === "profissional" ? "Seus horários, serviços concluídos e comissões em um só lugar." : "Aqui está um resumo do seu negócio. Tenha um ótimo dia!"}
-      actions={<Button className={user.role === "dono" ? "dashboard-action-button" : ""} onClick={() => navigate(user.role === "profissional" ? "/meus-atendimentos" : "/agenda")}>
+      actions={<>{user.role==="dono"&&user.tenantId!=="tenant-salao-demo"&&<Link className="button button-secondary dashboard-action-button" to="/whatsapp"><Phone size={16}/> Central de WhatsApp</Link>}<Button className={user.role === "dono" ? "dashboard-action-button" : ""} onClick={() => navigate(user.role === "profissional" ? "/meus-atendimentos" : "/agenda")}>
         <CalendarDays size={17} /> {user.role === "profissional" ? "Meus atendimentos" : "Ver agenda"}
-      </Button>} />
+      </Button></>} />
     <ErrorMessage>{error}</ErrorMessage>
     {user.role === "dono" && <CashStatusBanner user={user}/>}
     <section className="stats-grid">
@@ -771,6 +767,7 @@ function OverviewPage({ user }) {
           </> : <>
           <Link to="/clientes" className="shortcut-item"><span className="shortcut-icon green"><Users size={18} /></span><span><b>Cadastrar cliente</b><small>Guarde os detalhes</small></span><ArrowRight size={15} /></Link>
           <Link to="/servicos" className="shortcut-item"><span className="shortcut-icon violet"><Scissors size={18} /></span><span><b>Gerenciar serviços</b><small>Equipe, preços e duração</small></span><ArrowRight size={15} /></Link>
+          {user.tenantId==="tenant-salao-demo"&&<Link to="/compartilhar" className="shortcut-item"><span className="shortcut-icon violet"><QrCode size={18}/></span><span><b>Agendamento público</b><small>Link e QR Code de demonstração</small></span><ArrowRight size={15}/></Link>}
           {user.role === "dono" && <Link to="/financeiro" className="shortcut-item"><span className="shortcut-icon amber"><Wallet size={18} /></span><span><b>Conferir resultados</b><small>Receitas e comissões</small></span><ArrowRight size={15} /></Link>}</>}
         </div>
 
@@ -1770,7 +1767,7 @@ function ServicesPage({ user, section = "services" }) {
   </>;
 }
 
-function BookingSharePage({ user }) {
+function BookingSharePage({ user, embedded=false }) {
   const publicPath = `/agendar/${encodeURIComponent(user.slug || "")}`;
   const [baseUrl, setBaseUrl] = useState("");
   const [message, setMessage] = useState("");
@@ -1790,8 +1787,8 @@ function BookingSharePage({ user }) {
     `Agende seu horário em nosso estabelecimento: ${link}`
   )}`;
   return <>
-    <PageTitle eyebrow="AGENDAMENTO PARA CLIENTES" title="Divulgar meu agendamento"
-      description="Compartilhe sua página pública sem dar acesso ao painel administrativo."/>
+    {!embedded&&<PageTitle eyebrow="AGENDAMENTO PARA CLIENTES" title="Divulgar meu agendamento"
+      description="Compartilhe sua página pública sem dar acesso ao painel administrativo."/>}
     <div className="management-grid booking-sharing-grid premium-booking-share">
       <section className="panel management-panel booking-share-panel">
         <div className="panel-heading">
@@ -2130,19 +2127,20 @@ function FinancialHubPage({ user }) {
   const location = useLocation();
   const navigate = useNavigate();
   const requestedTab = new URLSearchParams(location.search).get("aba") || "caixa";
-  const available = ["caixa", ...(user.subscription?.features?.expenses===false?[]:["despesas"]), "comissoes", "regras", "fechamentos"];
-  const tab = requestedTab === "pendentes" ? "pendentes" : user.role === "dono" && available.includes(requestedTab) ? requestedTab : "caixa";
+  const available = ["caixa", ...(user.subscription?.features?.inventory===false?[]:["estoque"]), ...(user.role==="dono"?[...(user.subscription?.features?.expenses===false?[]:["despesas"]), "comissoes", "regras", "fechamentos"]:[])];
+  const tab = requestedTab === "pendentes" ? "pendentes" : available.includes(requestedTab) ? requestedTab : "caixa";
   const tabs = [
     {id:"caixa",title:"Caixa e recebimentos",icon:Wallet},
+    {id:"estoque",title:"Estoque e produtos",icon:Package},
     {id:"despesas",title:"Despesas e contas a pagar",icon:CircleDollarSign},
     {id:"comissoes",title:"Lançamentos dos profissionais",icon:CircleDollarSign},
     {id:"regras",title:"Regras de comissão",icon:Settings},
     {id:"fechamentos",title:"Fechamentos quinzenais",icon:CalendarDays},
   ];
   return <div className="premium-finance">
-    {user.role === "dono" && <>
-      <PageTitle eyebrow="CENTRAL FINANCEIRA" title="Gestão financeira"
-        description="Caixa, despesas, comissões e fechamentos em um único lugar." />
+    {(user.role === "dono"||available.includes("estoque")) && <>
+      <PageTitle eyebrow="CENTRAL FINANCEIRA" title={user.role==="dono"?"Gestão financeira":"Caixa e recebimentos"}
+        description={user.role==="dono"?"Caixa, estoque, despesas, comissões e fechamentos em um único lugar.":"Recebimentos, produtos e vendas em um único lugar."} />
       <div className="settings-tab-bar premium-finance-tabs" role="tablist" aria-label="Seções da gestão financeira">
         {tabs.filter(item=>available.includes(item.id)).map(item => <button key={item.id} type="button" role="tab"
           aria-selected={tab === item.id || (tab === "pendentes" && item.id === "caixa")} className={tab === item.id || (tab === "pendentes" && item.id === "caixa") ? "active" : ""}
@@ -2153,6 +2151,7 @@ function FinancialHubPage({ user }) {
     </>}
     {tab === "caixa" && <ReceivablesPage user={user}/>}
     {tab === "pendentes" && <PendingPaymentsPage user={user}/>}
+    {tab === "estoque" && <InventoryPage user={user}/>}
     {tab === "despesas" && user.role === "dono" && <ExpensesPage/>}
     {tab === "comissoes" && user.role === "dono" && <TeamCommissionsPage user={user}/>}
     {tab === "regras" && user.role === "dono" && <CommissionPoliciesPage/>}
@@ -2222,7 +2221,8 @@ const inventoryPurposes={venda:"Venda",consumo:"Uso interno",ambos:"Venda e uso 
 const inventoryTypes={entrada:"Entrada",saida:"Saída",ajuste:"Ajuste de saldo",consumo:"Consumo interno",venda:"Venda"};
 function InventoryPage({user}){
   const owner=user.role==="dono",location=useLocation(),navigate=useNavigate();
-  const tab=new URLSearchParams(location.search).get("aba")||"produtos";
+  const requested=new URLSearchParams(location.search).get("estoque");
+  const tab=["produtos","movimentos","vendas"].includes(requested)?requested:"produtos";
   const [month,setMonth]=useState(localDate().slice(0,7)),[data,setData]=useState(null),[error,setError]=useState(""),[rev,setRev]=useState(0),[search,setSearch]=useState(""),[modal,setModal]=useState(null);
   useEffect(()=>{let active=true;setData(null);setError("");api("/inventory?month="+month).then(d=>{if(active)setData(d);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[month,rev]);
   const products=data?.products||[],low=products.filter(p=>p.quantity<=p.minimum);
@@ -2232,7 +2232,7 @@ function InventoryPage({user}){
     <ErrorMessage>{error}</ErrorMessage>
     {!data?!error&&<Loading label="Carregando estoque..."/>:<>
       <section className="stats-grid finance-stats"><StatCard title="Produtos cadastrados" value={products.length} icon={Package}/><StatCard title="Estoque mínimo" value={low.length} note="Produtos no limite ou abaixo" icon={Clock3} tone="orange"/><StatCard title="Vendas no mês" value={data.sales.length} icon={Wallet} tone="green"/>{owner&&<StatCard title="Margem bruta estimada" value={money(data.summary.marginCents)} icon={CircleDollarSign} note="Receita menos custo dos produtos vendidos"/>}</section>
-      <div className="settings-tab-bar" role="tablist" aria-label="Estoque">{[["produtos","Produtos"],["movimentos","Movimentações"],["vendas","Vendas registradas"]].map(([key,label])=><button type="button" role="tab" key={key} aria-selected={tab===key} className={tab===key?"active":""} onClick={()=>navigate("/estoque?aba="+key)}>{label}</button>)}</div>
+      <div className="settings-tab-bar" role="tablist" aria-label="Estoque">{[["produtos","Produtos"],["movimentos","Movimentações"],["vendas","Vendas registradas"]].map(([key,label])=><button type="button" role="tab" key={key} aria-selected={tab===key} className={tab===key?"active":""} onClick={()=>navigate("/recebimentos?aba=estoque&estoque="+key)}>{label}</button>)}</div>
       {tab==="produtos"&&<section className="panel expense-list"><div className="panel-heading"><div><h2>Catálogo e saldo atual</h2><p className="panel-subtitle">As movimentações de estoque não registram pagamentos a fornecedores; lance essas despesas no financeiro.</p></div></div><Field label="Buscar produto" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Nome ou categoria"/>
         {products.filter(p=>(p.name+" "+p.category).toLowerCase().includes(search.toLowerCase())).map(p=><div className="expense-row" key={p.id}><div className="expense-row-details"><b>{p.name}</b><small>{p.category||"Sem categoria"} · {inventoryPurposes[p.purpose]}</small><small>Venda: {money(p.priceCents)} por {p.unit}{owner?" · Custo: "+money(p.costCents)+" por "+p.unit:""}</small></div><div className="expense-row-money"><strong>{p.quantity} {p.unit}</strong><span className={p.quantity<=p.minimum?"expense-status vencido":"expense-status pago"}>{p.quantity<=p.minimum?"Estoque baixo":"Disponível"}</span><small>Mínimo: {p.minimum}</small></div><div className="expense-row-actions">{(owner||p.purpose!=="venda")&&<Button onClick={()=>setModal({mode:"movement",product:p})}>Movimentar</Button>}{owner&&<Button variant="secondary" onClick={()=>setModal({mode:"product",product:p})}>Editar</Button>}</div></div>)}
         {!products.length&&<EmptyState icon={Package} title="Nenhum produto cadastrado" description="Cadastre materiais e produtos para iniciar o controle."/>}</section>}
@@ -2366,7 +2366,7 @@ function ReceivablesPage({ user }) {
   const [direct, setDirect] = useState(false);
   return <>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
-    <div className="finance-cash-actions"><div><b>Operação do caixa</b><small>Registre serviços e acompanhe os recebimentos.</small></div><div className="expense-row-actions">{user.subscription?.features?.inventory!==false&&<Link className="button button-secondary" to="/estoque?aba=vendas"><Package size={16}/> Vender produtos</Link>}<Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button></div></div>
+    <div className="finance-cash-actions"><div><b>Operação do caixa</b><small>Registre serviços e acompanhe os recebimentos.</small></div><div className="expense-row-actions">{user.subscription?.features?.inventory!==false&&<Link className="button button-secondary" to="/recebimentos?aba=estoque&estoque=vendas"><Package size={16}/> Vender produtos</Link>}<Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button></div></div>
     {direct && <AppointmentForm direct user={user} onClose={() => setDirect(false)} onSaved={() => { setDirect(false); refresh(); setCashRevision(n => n + 1); }} />}
     {pending.length > 0 && <Link className="cash-pending-summary cash-pending-link" to={pendingPaymentsPath}>
       <Clock3 size={22}/><div><b>{pending.length} pagamento(s) pendente(s)</b>
@@ -2589,9 +2589,12 @@ function FinancePage({user}) {
 
 const weekdays = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
 function SettingsPage({ user, onUserUpdated }) {
+  const location=useLocation(),navigate=useNavigate();
   const [settings, setSettings] = useState(null);
   const [hours, setHours] = useState([]);
-  const [tab, setTab] = useState("business");
+  const requestedTab=new URLSearchParams(location.search).get("aba");
+  const tab=["business","hours","booking","account","whatsapp","link"].includes(requestedTab)?requestedTab:"business";
+  const setTab=value=>navigate("/configuracoes?aba="+value);
   const [booking, setBooking] = useState(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -2669,6 +2672,8 @@ function SettingsPage({ user, onUserUpdated }) {
         onClick={() => { setTab("hours"); setError(""); setMessage(""); }}><span className="settings-tab-icon"><Clock3 size={20}/></span><span>Horários<small>Funcionamento</small></span></button>
       <button type="button" role="tab" aria-selected={tab === "booking"} className={tab === "booking" ? "active" : ""}
         onClick={() => { setTab("booking"); setError(""); setMessage(""); }}><span className="settings-tab-icon"><CalendarClock size={20}/></span><span>Agendamento online<small>Regras de reserva</small></span></button>
+      <button type="button" role="tab" aria-selected={tab==="link"} className={tab==="link"?"active":""} onClick={()=>setTab("link")}><span className="settings-tab-icon"><QrCode size={20}/></span><span>Link de agendamento<small>Divulgação e QR Code</small></span></button>
+      <button type="button" role="tab" aria-selected={tab==="whatsapp"} className={tab==="whatsapp"?"active":""} onClick={()=>setTab("whatsapp")}><span className="settings-tab-icon"><Phone size={20}/></span><span>WhatsApp<small>Mensagens e lembretes</small></span></button>
       <button type="button" role="tab" aria-selected={tab === "account"} className={tab === "account" ? "active" : ""}
         onClick={() => { setTab("account"); setError(""); setMessage(""); }}><span className="settings-tab-icon"><ShieldCheck size={20}/></span><span>Minha conta<small>Perfil e segurança</small></span></button>
     </div>
@@ -2762,6 +2767,8 @@ function SettingsPage({ user, onUserUpdated }) {
     {tab === "account" && <div className="settings-single-section">
       <AccountPage user={user} onUserUpdated={onUserUpdated} embedded/>
     </div>}
+    {tab==="link"&&<BookingSharePage user={user} embedded/>}
+    {tab==="whatsapp"&&<WhatsAppCenter user={user} configOnly/>}
   </div>;
 }
 function PublicBooking({ slug }) {
@@ -2925,19 +2932,22 @@ function WhatsAppQueueRow({row,onChange}){
     {fallback&&!row.sentAt&&<a className="button button-secondary" href={fallback} target="_blank" rel="noreferrer">Abrir conversa preparada</a>}<ErrorMessage>{error}</ErrorMessage>
   </article>;
 }
-function WhatsAppCenter({user}){
+function WhatsAppCenter({user,configOnly=false}){
   const owner=user.role==="dono";
-  const [rows,setRows]=useState(null),[prefs,setPrefs]=useState(null),[error,setError]=useState(""),[tab,setTab]=useState("pendentes"),[query,setQuery]=useState(""),[kind,setKind]=useState("all"),[busy,setBusy]=useState(false),[notice,setNotice]=useState("");
+  const [rows,setRows]=useState(null),[prefs,setPrefs]=useState(null),[error,setError]=useState(""),[selectedTab,setTab]=useState("pendentes"),[query,setQuery]=useState(""),[kind,setKind]=useState("all"),[busy,setBusy]=useState(false),[notice,setNotice]=useState("");
+  const tab=configOnly?"config":selectedTab;
   const refresh=useCallback(()=>api("/whatsapp/sync",{method:"POST"}).then(d=>setRows(d.messages)).catch(e=>setError(e.message)),[]);
-  useEffect(()=>{refresh();api("/whatsapp/preferences").then(setPrefs).catch(e=>setError(e.message));const timer=window.setInterval(refresh,60000);return()=>window.clearInterval(timer);},[refresh]);
+  useEffect(()=>{api("/whatsapp/preferences").then(setPrefs).catch(e=>setError(e.message));if(configOnly)return;refresh();const timer=window.setInterval(refresh,60000);return()=>window.clearInterval(timer);},[refresh,configOnly]);
   const save=async e=>{e.preventDefault();setBusy(true);setError("");setNotice("");try{await api("/whatsapp/preferences",{method:"PUT",body:{...prefs,reminderHours:prefs.reminderHours.filter(h=>h!==null)}});await refresh();setNotice("Preferências salvas.");}catch(e){setError(e.message);}finally{setBusy(false);}};
   const changeRule=(key,patch)=>setPrefs(p=>({...p,rules:{...p.rules,[key]:{...p.rules[key],...patch}}}));
   const pending=rows?.filter(r=>!r.sentAt)||[],done=rows?.filter(r=>r.sentAt)||[];
   const visible=(tab==="historico"?done:pending).filter(r=>(kind==="all"||r.kind===kind)&&(!query||r.clientName.toLowerCase().includes(query.toLowerCase())));
   return <div className="expenses-page">
-    <PageTitle eyebrow="CENTRAL DE COMUNICAÇÃO" title="Central de WhatsApp" description="Prepare avisos e lembretes de clientes, envie manualmente e registre a confirmação." actions={<Button variant="secondary" onClick={refresh}><RefreshCw size={16}/> Atualizar fila</Button>}/>
+    {!configOnly&&<><PageTitle eyebrow="CENTRAL DE COMUNICAÇÃO" title="Central de WhatsApp" description="Prepare avisos e lembretes de clientes, envie manualmente e registre a confirmação." actions={<><Link className="button button-secondary" to="/"><ArrowLeft size={16}/> Voltar à visão geral</Link>{owner&&<Link className="button button-secondary" to="/configuracoes?aba=whatsapp"><Settings size={16}/> Configurações</Link>}<Button variant="secondary" onClick={refresh}><RefreshCw size={16}/> Atualizar fila</Button></>}/>
     <section className="stats-grid finance-stats"><StatCard title="Avisos pendentes" value={rows?pending.length:"—"} icon={Clock3} tone="orange"/><StatCard title="Conversas preparadas" value={rows?pending.filter(r=>r.openedAt).length:"—"} icon={Phone}/><StatCard title="Envios confirmados" value={rows?done.length:"—"} icon={CheckCheck} tone="green"/><StatCard title="Modalidade" value={prefs?.mode==="automatic"?"Automática":"Manual"} note={prefs?.mode==="automatic"?"Avisos elegíveis; demais são manuais":"Envio pelo aplicativo"} icon={Settings}/></section>
-    <div className="settings-tab-bar" role="tablist" aria-label="Seções WhatsApp">{[["pendentes","Fila de avisos"],["historico","Histórico"],...(owner?[["config","Configurações"]]:[])].map(([k,v])=><button key={k} role="tab" type="button" aria-selected={tab===k} className={tab===k?"active":""} onClick={()=>setTab(k)}>{v}</button>)}</div>
+    <div className="settings-tab-bar" role="tablist" aria-label="Seções WhatsApp">{[["pendentes","Fila de avisos"],["historico","Histórico"]].map(([k,v])=><button key={k} role="tab" type="button" aria-selected={tab===k} className={tab===k?"active":""} onClick={()=>setTab(k)}>{v}</button>)}</div></>}
+    {configOnly&&<div className="panel-heading"><div><h2>Configuração do WhatsApp</h2><p className="panel-subtitle">A fila e o histórico ficam na Central de WhatsApp, acessível pela visão geral.</p></div><Link className="button button-secondary" to="/whatsapp"><Phone size={16}/> Abrir central</Link></div>}
+    {configOnly&&!prefs&&!error&&<Loading label="Carregando preferências..."/>}
     <ErrorMessage>{error}</ErrorMessage>{notice&&<p className="success-message">{notice}</p>}
     {tab==="config"&&owner&&prefs?<section className="panel expense-list"><form className="expense-form" onSubmit={save}>
       <div><h2>Preferências do estabelecimento</h2><p className="panel-subtitle">Manual é o padrão. A modalidade automática mantém a integração existente para confirmações e cancelamentos públicos; exige credenciais e modelos aprovados. Os demais avisos continuam manuais.</p></div>
@@ -3532,7 +3542,7 @@ export default function App() {
       <Route path="/solicitacoes" element={user.role!=="profissional" ? <OnlineRequestsPage/> : <AccessDenied/>}/>
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
-      <Route path="/estoque" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"&&user.subscription?.features?.inventory!==false?<InventoryPage user={user}/>:<AccessDenied/>}/>
+      <Route path="/estoque" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"&&user.subscription?.features?.inventory!==false?<Navigate to={"/recebimentos?aba=estoque&estoque="+encodeURIComponent(new URLSearchParams(location.search).get("aba")||"produtos")} replace/>:<AccessDenied/>}/>
       <Route path="/pacotes" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"&&user.subscription?.features?.packages!==false?<PackagesPage user={user}/>:<AccessDenied/>}/>
       <Route path="/whatsapp" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<WhatsAppCenter user={user}/>:<AccessDenied/>}/>
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
@@ -3541,7 +3551,7 @@ export default function App() {
       <Route path="/comissoes" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=comissoes" replace/> : <AccessDenied/>}/>
       <Route path="/regras-comissao" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=regras" replace/> : <AccessDenied/>}/>
       <Route path="/fechamentos" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=fechamentos" replace/> : <AccessDenied/>}/>
-      <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
+      <Route path="/compartilhar" element={user.role==="dono"&&user.tenantId!=="tenant-salao-demo"?<Navigate to="/configuracoes?aba=link" replace/>:user.role!=="profissional"?<BookingSharePage user={user}/>:<AccessDenied/>} />
       <Route path="/financeiro" element={user.role === "dono" ? <FinancePage user={user}/> : <AccessDenied />} />
       <Route path="/recebimentos" element={["dono", "recepcao"].includes(user.role) && user.tenantId !== "tenant-salao-demo" ? <FinancialHubPage user={user} /> : <AccessDenied />} />
       <Route path="/configuracoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettingsPage user={user} onUserUpdated={setUser} /> : <AccessDenied />} />
