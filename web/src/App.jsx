@@ -427,6 +427,7 @@ const navItems = [
   { to: "/servicos", label: "Serviços", icon: Scissors },
   { to: "/estoque", label: "Estoque e produtos", icon: Package },
   { to: "/pacotes", label: "Pacotes e fidelização", icon: Sparkles },
+  { to: "/whatsapp", label: "Central de WhatsApp", icon: Phone },
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
@@ -468,7 +469,7 @@ function Shell({ user, onLogout, children }) {
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
     if (user.role === "recepcao") return !["/financeiro", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos"].includes(item.to);
-    if (isDemo && ["/pacotes", "/estoque", "/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
+    if (isDemo && ["/whatsapp", "/pacotes", "/estoque", "/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
     return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
   useEffect(() => {
@@ -1187,7 +1188,7 @@ function AgendaPage({ user }) {
 }
 
 function ClientForm({ client, onClose, onSaved }) {
-  const [values, setValues] = useState({ name: client?.name ?? "", phone: client?.phone ?? "", email: client?.email ?? "", notes: client?.notes ?? "" });
+  const [values, setValues] = useState({ name: client?.name ?? "", phone: client?.phone ?? "", email: client?.email ?? "", notes: client?.notes ?? "",whatsappConsent:!!client?.whatsappConsent,whatsappMarketingConsent:!!client?.whatsappMarketingConsent,revokeBookingConsent:false });
   const [error, setError] = useState("");
   const submit = async (event) => {
     event.preventDefault(); setError("");
@@ -1199,9 +1200,13 @@ function ClientForm({ client, onClose, onSaved }) {
   return <Modal title={client ? "Editar cliente" : "Novo cliente"} onClose={onClose}>
     <form className="form-stack" onSubmit={submit}>
       <Field label="Nome completo" required value={values.name} onChange={(e) => setValues({ ...values, name: e.target.value })} />
-      <Field label="WhatsApp / telefone" type="tel" placeholder="(11) 99999-9999" value={values.phone} onChange={(e) => setValues({ ...values, phone: e.target.value })} />
+      <Field label="WhatsApp / telefone" type="tel" placeholder="(11) 99999-9999" value={values.phone} onChange={(e) => setValues({ ...values, phone: e.target.value,...(client&&e.target.value.replace(/\D/g,"")!==client.phone.replace(/\D/g,"")?{whatsappConsent:false,whatsappMarketingConsent:false}: {}) })} />
       <Field label="E-mail" type="email" value={values.email} onChange={(e) => setValues({ ...values, email: e.target.value })} />
       <Field label="Observações" placeholder="Preferências, alergias, detalhes importantes..." value={values.notes} onChange={(e) => setValues({ ...values, notes: e.target.value })} />
+      <label className="choice-option"><input type="checkbox" checked={values.whatsappConsent} onChange={e=>setValues(v=>({...v,whatsappConsent:e.target.checked}))}/> Cliente autorizou avisos de agendamentos internos e pacotes por WhatsApp.</label>
+      <label className="choice-option"><input type="checkbox" checked={values.whatsappMarketingConsent} onChange={e=>setValues(v=>({...v,whatsappMarketingConsent:e.target.checked}))}/> Cliente autorizou mensagens de fidelidade e reativação.</label>
+      {client&&<label className="choice-option"><input type="checkbox" checked={values.revokeBookingConsent} onChange={e=>setValues(v=>({...v,revokeBookingConsent:e.target.checked}))}/> Revogar também as autorizações de reservas online anteriores.</label>}
+      {client&&values.phone.replace(/\D/g,"")!==client.phone.replace(/\D/g,"")&&<p className="panel-subtitle">Alterar o número revoga as autorizações anteriores. Após salvar, confirme o consentimento do novo número no cadastro.</p>}
       <ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button><Button>Salvar cliente</Button></div>
     </form>
   </Modal>;
@@ -2572,7 +2577,7 @@ function FinancePage() {
     <section className="panel inactive-panel"><div className="panel-heading"><div><p className="eyebrow">RELACIONAMENTO</p><h2>Clientes para reativar</h2><p className="panel-subtitle">Lista atual de clientes sem visita há 30 dias ou mais, independente do mês selecionado.</p></div><span className="count-chip">{report?.inactiveClients?.length ?? 0} clientes</span></div>
       {report?.inactiveClients?.length ? <div className="inactive-list">{report.inactiveClients.map((client) => <div className="inactive-row" key={client.id}><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
         <div className="min-w-0 flex-1"><b>{client.name}</b><small>Última visita em {dateLabel(client.lastVisit.slice(0, 10))}</small></div>
-        {client.phone && <a href={whatsappUrl(client.phone, `Oi, ${client.name}! Sentimos sua falta por aqui 💚 Que tal agendar um novo horário?`)} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={15} /> Chamar no WhatsApp</a>}</div>)}</div>
+        {client.phone && client.whatsappMarketingConsent && <a href={whatsappUrl(client.phone, `Oi, ${client.name}! Sentimos sua falta por aqui 💚 Que tal agendar um novo horário?`)} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={15} /> Chamar no WhatsApp</a>}</div>)}</div>
         : <p className="report-empty">Nenhum cliente sumido por enquanto. Seu relacionamento está em dia! 💚</p>}
     </section>
     <AppointmentAuditReport month={month}/>
@@ -2890,31 +2895,75 @@ function PublicBooking({ slug }) {
 
 function needsManualWhatsApp(appointment, state) {
   return Boolean(appointment.whatsappOptIn && appointment.clientPhone
-    && state && !["submitted", "no-consent", "not-applicable"].includes(state));
+    && state && !["submitted", "no-consent", "not-applicable","disabled"].includes(state));
 }
 
-function openAppointmentWhatsApp(appointment) {
-  const status = statusNames[appointment.status];
-  const business = appointment.businessName ? `Aqui é ${appointment.businessName}. ` : "";
-  const message = `Olá, ${appointment.clientName}! ${business}Seu agendamento de ${appointment.serviceName}, com ${appointment.professionalName}, em ${dateTimeLabel(appointment.startsAt)}, está: ${status}.`;
-  window.open(whatsappUrl(appointment.clientPhone, message), "_blank", "noopener,noreferrer");
-  return api(`/requests/${appointment.id}/whatsapp-opened`, {
-    method: "POST", body: { status: appointment.status },
-  });
+const whatsappKindNames={agendado:"Solicitação recebida",confirmado:"Confirmação",cancelado:"Cancelamento",remarcacao:"Reagendamento",lembrete:"Lembrete",pacote:"Vencimento de pacote",fidelidade:"Fidelidade"};
+function WhatsAppQueueRow({row,onChange}){
+  const [busy,setBusy]=useState(false),[error,setError]=useState(""),[fallback,setFallback]=useState("");
+  const open=async()=>{
+    if(busy)return;setBusy(true);setError("");setFallback("");
+    const popup=window.open("","_blank");
+    if(popup)popup.opener=null;
+    try{
+      const result=await api("/whatsapp/messages/"+row.id+"/open",{method:"POST"});
+      const url=whatsappUrl(result.phone,result.message);
+      if(popup&&!popup.closed)popup.location.replace(url);else setFallback(url);
+      await onChange();
+    }catch(e){if(popup&&!popup.closed)popup.close();setError(e.message);}finally{setBusy(false);}
+  };
+  const confirm=async()=>{
+    if(busy||!await confirmAction("Você realmente enviou esta mensagem pelo WhatsApp? O sistema apenas registra sua confirmação, sem verificar a entrega."))return;
+    setBusy(true);setError("");try{await api("/whatsapp/messages/"+row.id+"/sent",{method:"POST"});await onChange();}catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  return <article className="whatsapp-queue-card">
+    <div className="expense-row"><div className="expense-row-details"><b>{row.clientName}</b><small>{whatsappKindNames[row.kind]||row.kind}</small></div><span className={"expense-status "+(row.sentAt?"pago":row.openedAt?"vencido":"pendente")}>{row.sentAt?"Envio confirmado":row.openedAt?"Conversa preparada":"Pendente"}</span></div>
+    <p className="whatsapp-message-preview">{row.message}</p>
+    {row.sentAt?<small>Confirmado por {row.sentByName} · {cashTimestamp(row.sentAt)} · Entrega não verificada.</small>:<div className="expense-row-actions"><Button variant="secondary" disabled={busy} onClick={open}><Phone size={15}/> {row.openedAt?"Reabrir WhatsApp":"Abrir WhatsApp"}</Button>{row.openedAt&&<Button disabled={busy} onClick={confirm}><Check size={15}/> Confirmar envio</Button>}</div>}
+    {fallback&&!row.sentAt&&<a className="button button-secondary" href={fallback} target="_blank" rel="noreferrer">Abrir conversa preparada</a>}<ErrorMessage>{error}</ErrorMessage>
+  </article>;
 }
-
+function WhatsAppCenter({user}){
+  const owner=user.role==="dono";
+  const [rows,setRows]=useState(null),[prefs,setPrefs]=useState(null),[error,setError]=useState(""),[tab,setTab]=useState("pendentes"),[query,setQuery]=useState(""),[kind,setKind]=useState("all"),[busy,setBusy]=useState(false),[notice,setNotice]=useState("");
+  const refresh=useCallback(()=>api("/whatsapp/sync",{method:"POST"}).then(d=>setRows(d.messages)).catch(e=>setError(e.message)),[]);
+  useEffect(()=>{refresh();api("/whatsapp/preferences").then(setPrefs).catch(e=>setError(e.message));const timer=window.setInterval(refresh,60000);return()=>window.clearInterval(timer);},[refresh]);
+  const save=async e=>{e.preventDefault();setBusy(true);setError("");setNotice("");try{await api("/whatsapp/preferences",{method:"PUT",body:{...prefs,reminderHours:prefs.reminderHours.filter(h=>h!==null)}});await refresh();setNotice("Preferências salvas.");}catch(e){setError(e.message);}finally{setBusy(false);}};
+  const changeRule=(key,patch)=>setPrefs(p=>({...p,rules:{...p.rules,[key]:{...p.rules[key],...patch}}}));
+  const pending=rows?.filter(r=>!r.sentAt)||[],done=rows?.filter(r=>r.sentAt)||[];
+  const visible=(tab==="historico"?done:pending).filter(r=>(kind==="all"||r.kind===kind)&&(!query||r.clientName.toLowerCase().includes(query.toLowerCase())));
+  return <div className="expenses-page">
+    <PageTitle eyebrow="CENTRAL DE COMUNICAÇÃO" title="Central de WhatsApp" description="Prepare avisos e lembretes de clientes, envie manualmente e registre a confirmação." actions={<Button variant="secondary" onClick={refresh}><RefreshCw size={16}/> Atualizar fila</Button>}/>
+    <section className="stats-grid finance-stats"><StatCard title="Avisos pendentes" value={rows?pending.length:"—"} icon={Clock3} tone="orange"/><StatCard title="Conversas preparadas" value={rows?pending.filter(r=>r.openedAt).length:"—"} icon={Phone}/><StatCard title="Envios confirmados" value={rows?done.length:"—"} icon={CheckCheck} tone="green"/><StatCard title="Modalidade" value={prefs?.mode==="automatic"?"Automática":"Manual"} note={prefs?.mode==="automatic"?"Avisos elegíveis; demais são manuais":"Envio pelo aplicativo"} icon={Settings}/></section>
+    <div className="settings-tab-bar" role="tablist" aria-label="Seções WhatsApp">{[["pendentes","Fila de avisos"],["historico","Histórico"],...(owner?[["config","Configurações"]]:[])].map(([k,v])=><button key={k} role="tab" type="button" aria-selected={tab===k} className={tab===k?"active":""} onClick={()=>setTab(k)}>{v}</button>)}</div>
+    <ErrorMessage>{error}</ErrorMessage>{notice&&<p className="success-message">{notice}</p>}
+    {tab==="config"&&owner&&prefs?<section className="panel expense-list"><form className="expense-form" onSubmit={save}>
+      <div><h2>Preferências do estabelecimento</h2><p className="panel-subtitle">Manual é o padrão. A modalidade automática mantém a integração existente para confirmações e cancelamentos públicos; exige credenciais e modelos aprovados. Os demais avisos continuam manuais.</p></div>
+      <SelectField label="Modalidade" value={prefs.mode} onChange={e=>setPrefs(p=>({...p,mode:e.target.value}))}><option value="manual">Manual — sem API</option><option value="automatic">Automática — API oficial configurada no servidor</option></SelectField>
+      {prefs.mode==="automatic"&&<p className="booking-share-notice">{prefs.automaticConfigured?"Configuração encontrada no servidor.":"API ainda não configurada. Os avisos continuarão disponíveis na fila manual."}</p>}
+      <div className="expense-form-grid"><Field label="Primeiro lembrete (horas)" type="number" min="1" max="168" value={prefs.reminderHours[0]??""} onChange={e=>setPrefs(p=>({...p,reminderHours:[e.target.value===""?null:Number(e.target.value),p.reminderHours[1]??null]}))}/><Field label="Segundo lembrete (horas)" type="number" min="1" max="168" value={prefs.reminderHours[1]??""} onChange={e=>setPrefs(p=>({...p,reminderHours:[p.reminderHours[0]??null,e.target.value===""?null:Number(e.target.value)]}))}/><Field label="Avisar pacote com antecedência (dias)" type="number" min="1" max="60" required value={prefs.expiryDays} onChange={e=>setPrefs(p=>({...p,expiryDays:Number(e.target.value)}))}/></div>
+      <p className="panel-subtitle">Variáveis disponíveis: para todos, {"{cliente}, {empresa}"}; para atendimentos, {"{servico}, {profissional}, {data}, {hora}"}; para pacotes, {"{pacote}, {validade}, {sessoes}"}; para fidelidade, {"{pontos}, {desconto}"}.</p>
+      {Object.entries(prefs.rules).map(([k,r])=><div className="whatsapp-template" key={k}><label className="choice-option"><input type="checkbox" checked={r.enabled} onChange={e=>changeRule(k,{enabled:e.target.checked})}/> {r.label}</label><Field label="Modelo de mensagem"><textarea className="input" rows={3} required maxLength={1000} value={r.template} onChange={e=>changeRule(k,{template:e.target.value})}/></Field></div>)}
+      <div className="modal-actions"><Button disabled={busy}>{busy?"Salvando...":"Salvar configurações"}</Button></div>
+    </form></section>:tab!=="config"&&<section className="panel expense-list">
+      <div className="panel-heading"><div><h2>{tab==="historico"?"Envios confirmados pelo atendente":"Avisos aguardando atendimento"}</h2><p className="panel-subtitle">A fila atualiza quando esta tela está aberta. Somente clientes com autorização entram nos avisos. Envie a mensagem no WhatsApp e depois confirme aqui.</p></div><span className="count-chip">{visible.length}</span></div>
+      <div className="expense-filters"><Field label="Buscar cliente" value={query} onChange={e=>setQuery(e.target.value)}/><SelectField label="Tipo de aviso" value={kind} onChange={e=>setKind(e.target.value)}><option value="all">Todos</option>{Object.entries(whatsappKindNames).map(([k,v])=><option key={k} value={k}>{v}</option>)}</SelectField></div>
+      {rows===null?<Loading label="Carregando avisos..."/>:visible.length?<div className="whatsapp-queue-grid">{visible.map(row=><WhatsAppQueueRow key={row.id} row={row} onChange={refresh}/>)}</div>:<EmptyState icon={Phone} title="Nenhum aviso nesta seleção" description="Avisos elegíveis aparecerão automaticamente na fila."/>}
+    </section>}
+  </div>;
+}
 function WhatsAppStatusNotice({ appointment, onClose }) {
-  const [error, setError] = useState("");
+  const [error, setError] = useState(""),[rows,setRows]=useState(null);
+  const refresh=useCallback(()=>api("/whatsapp/sync",{method:"POST"}).then(d=>setRows(d.messages.filter(m=>m.appointmentId===appointment.id&&m.kind!=="lembrete"))).catch(e=>setError(e.message)),[appointment.id]);
+  useEffect(()=>{refresh();},[refresh]);
   return <Modal title="Avisar cliente pelo WhatsApp" onClose={onClose}>
     <div className="form-stack">
-      <p className="booking-share-notice"><Info size={16}/> O status foi registrado. Você pode abrir o WhatsApp para enviar o aviso manualmente.</p>
+      <p className="booking-share-notice"><Info size={16}/> Confira o aviso e envie manualmente pelo WhatsApp.</p>
       <p className="panel-subtitle">Uma conversa aberta não significa que a mensagem foi enviada.</p>
       <ErrorMessage>{error}</ErrorMessage>
+      {rows===null?<Loading label="Preparando aviso..."/>:rows.length?rows.map(row=><WhatsAppQueueRow key={row.id} row={row} onChange={refresh}/>):<p className="panel-subtitle">Nenhum aviso disponível para este agendamento.</p>}
       <div className="modal-actions">
         <Button variant="secondary" onClick={onClose}>Avisar depois</Button>
-        <Button onClick={() => openAppointmentWhatsApp(appointment).then(onClose).catch((reason) => setError(reason.message))}>
-          <Phone size={16}/> Abrir WhatsApp para enviar
-        </Button>
       </div>
     </div>
   </Modal>;
@@ -2976,9 +3025,7 @@ function OnlineRequestsPage() {
             <Button disabled={busy===item.id} onClick={()=>act(item,"confirm")}>Confirmar</Button>
             <Button variant="secondary" disabled={busy===item.id} onClick={()=>act(item,"reject")}>Recusar</Button>
           </>}
-          {Boolean(item.whatsappOptIn && item.clientPhone) && <button type="button" className="button button-secondary" onClick={() =>
-            openAppointmentWhatsApp(item).then(refresh).catch((reason) => setError(reason.message))
-          }><Phone size={16}/> Abrir WhatsApp ({item.status==="confirmado"?"confirmação":item.status==="cancelado"?"cancelamento":"solicitação"})</button>}
+          {Boolean(item.whatsappOptIn && item.clientPhone) && <button type="button" className="button button-secondary" onClick={()=>setNotice(item)}><Phone size={16}/> Abrir WhatsApp ({item.status==="confirmado"?"confirmação":item.status==="cancelado"?"cancelamento":"solicitação"})</button>}
           </div>
           {item.whatsappDeliveryState==="submitted" && <small>Enviado à API do WhatsApp — entrega ainda não verificada</small>}
           {item.whatsappDeliveryState==="failed" && <small>Envio automático não concluído — envie manualmente</small>}
@@ -3441,6 +3488,7 @@ export default function App() {
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
       <Route path="/estoque" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<InventoryPage user={user}/>:<AccessDenied/>}/>
       <Route path="/pacotes" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<PackagesPage user={user}/>:<AccessDenied/>}/>
+      <Route path="/whatsapp" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<WhatsAppCenter user={user}/>:<AccessDenied/>}/>
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage user={user} /> : <AccessDenied />} />
       <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>

@@ -578,6 +578,7 @@ app.get("/api/clients", requireAuth, (req, res) => {
   const search = `%${String(req.query.search ?? "").trim()}%`;
   const clients = db.prepare(`
     SELECT c.id, c.name, c.phone, c.email, c.notes, c.created_at AS createdAt,
+      c.whatsapp_consent AS whatsappConsent,c.whatsapp_marketing_consent AS whatsappMarketingConsent,
       count(a.id) AS appointmentCount,
       max(COALESCE(a.completed_on, substr(a.starts_at, 1, 10))) FILTER (WHERE a.status = 'concluido') AS lastVisit
     FROM clients c
@@ -632,8 +633,8 @@ app.post("/api/clients", requireAuth, allowRoles("dono", "recepcao"), (req, res)
   const notes = String(req.body?.notes ?? "").trim();
   const id = createId();
   try {
-    db.prepare("INSERT INTO clients (id, tenant_id, name, phone, email, notes) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(id, tenant(req), name, phone, email, notes);
+    db.prepare("INSERT INTO clients (id, tenant_id, name, phone, email, notes,whatsapp_consent,whatsapp_marketing_consent) VALUES (?, ?, ?, ?, ?, ?,?,?)")
+      .run(id, tenant(req), name, phone, email, notes,req.body?.whatsappConsent===true?1:0,req.body?.whatsappMarketingConsent===true?1:0);
     res.status(201).json({ client: db.prepare("SELECT id, name, phone, email, notes FROM clients WHERE id = ?").get(id) });
   } catch (error) {
     if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return fail(res, 409, "Já existe um cliente com este nome e telefone.");
@@ -642,13 +643,18 @@ app.post("/api/clients", requireAuth, allowRoles("dono", "recepcao"), (req, res)
 });
 
 app.patch("/api/clients/:id", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
-  const existing = db.prepare("SELECT id FROM clients WHERE id = ? AND tenant_id = ?").get(req.params.id, tenant(req));
+  const existing = db.prepare("SELECT id,phone,whatsapp_consent AS consent,whatsapp_marketing_consent AS marketing FROM clients WHERE id = ? AND tenant_id = ?").get(req.params.id, tenant(req));
   if (!existing) return fail(res, 404, "Cliente não encontrado.");
   const name = requiredText(req.body?.name, "Nome");
   try {
-    db.prepare("UPDATE clients SET name = ?, phone = ?, email = ?, notes = ? WHERE id = ? AND tenant_id = ?")
-      .run(name, String(req.body?.phone ?? "").trim(), String(req.body?.email ?? "").trim(),
-        String(req.body?.notes ?? "").trim(), req.params.id, tenant(req));
+    const phone=String(req.body?.phone??"").trim(),changed=phone.replace(/\D/g,"")!==existing.phone.replace(/\D/g,"");
+    db.transaction(()=>{
+      db.prepare("UPDATE clients SET name = ?, phone = ?, email = ?, notes = ?,whatsapp_consent=?,whatsapp_marketing_consent=? WHERE id = ? AND tenant_id = ?")
+        .run(name,phone,String(req.body?.email??"").trim(),String(req.body?.notes??"").trim(),
+          changed?0:req.body?.whatsappConsent===undefined?existing.consent:req.body.whatsappConsent===true?1:0,
+          changed?0:req.body?.whatsappMarketingConsent===undefined?existing.marketing:req.body.whatsappMarketingConsent===true?1:0,req.params.id,tenant(req));
+      if(changed||req.body?.revokeBookingConsent===true)db.prepare("UPDATE appointments SET whatsapp_opt_in=0 WHERE tenant_id=? AND client_id=?").run(tenant(req),req.params.id);
+    })();
     res.json({ client: db.prepare("SELECT id, name, phone, email, notes FROM clients WHERE id = ?").get(req.params.id) });
   } catch (error) {
     if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return fail(res, 409, "Já existe um cliente com este nome e telefone.");
@@ -1427,10 +1433,7 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     ? db.prepare("SELECT id, phone FROM clients WHERE id = ? AND tenant_id = ? AND notes != '__internal_anonymous__'").get(clientId, tenant(req))
     : null;
   if (clientChanged && !replacementClient) return fail(res, 400, "Cliente inválido.");
-  const previousPhone = clientChanged
-    ? db.prepare("SELECT phone FROM clients WHERE id = ? AND tenant_id = ?").get(appointment.clientId, tenant(req))?.phone
-    : null;
-  const resetConsent = clientChanged && appointment.bookingSource === "public" && replacementClient.phone !== previousPhone;
+  const resetConsent = clientChanged && appointment.bookingSource === "public";
   const status = req.body?.status ?? appointment.status;
   if (appointment.bookingSource === "direct" && (status !== "concluido" || (req.body?.startsAt !== undefined && req.body.startsAt !== appointment.startsAt)))
     return fail(res, 409, "Serviço registrado diretamente não pode ser convertido em agendamento.");
@@ -2331,7 +2334,7 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
     GROUP BY u.id ORDER BY revenueCents DESC
   `).all(tenant(req), month);
   const inactiveClients = db.prepare(`
-    SELECT c.id, c.name, c.phone, max(COALESCE(a.completed_on, substr(a.starts_at, 1, 10))) AS lastVisit
+    SELECT c.id, c.name, c.phone,c.whatsapp_marketing_consent AS whatsappMarketingConsent, max(COALESCE(a.completed_on, substr(a.starts_at, 1, 10))) AS lastVisit
     FROM clients c JOIN appointments a ON a.client_id = c.id AND a.tenant_id = c.tenant_id
     WHERE c.tenant_id = ? AND c.notes != '__internal_anonymous__' AND a.status = 'concluido'
     GROUP BY c.id
@@ -2660,6 +2663,121 @@ app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedul
 
 // Meta WhatsApp Cloud API is opt-in and requires an approved utility template per status.
 // Configured server-side only: WHATSAPP_CLOUD_CONFIG_JSON maps business slug to credentials.
+const whatsappDefaults={
+  agendado:{enabled:true,label:"Solicitação recebida",template:"Olá, {cliente}! Recebemos sua solicitação de {servico}, com {profissional}, para {data} às {hora}. Aguarde a confirmação. — {empresa}"},
+  confirmado:{enabled:true,label:"Agendamento confirmado",template:"Olá, {cliente}! Seu horário de {servico} com {profissional} está confirmado para {data} às {hora}. — {empresa}"},
+  cancelado:{enabled:true,label:"Cancelamento",template:"Olá, {cliente}! Seu horário de {servico} previsto para {data} às {hora} foi cancelado. — {empresa}"},
+  remarcacao:{enabled:true,label:"Reagendamento",template:"Olá, {cliente}! Seu horário de {servico} com {profissional} foi alterado para {data} às {hora}. — {empresa}"},
+  lembrete:{enabled:true,label:"Lembrete de atendimento",template:"Olá, {cliente}! Lembramos seu atendimento de {servico}, com {profissional}, em {data} às {hora}. Esperamos você! — {empresa}"},
+  pacote:{enabled:true,label:"Vencimento de pacote",template:"Olá, {cliente}! Seu pacote {pacote} vence em {validade} e ainda tem {sessoes} sessão(ões). Entre em contato para agendar. — {empresa}"},
+  fidelidade:{enabled:false,label:"Recompensa de fidelidade",template:"Olá, {cliente}! Você tem {pontos} pontos e pode resgatar um desconto de {desconto}. — {empresa}"}
+};
+function whatsappPreferences(id){
+  const row=db.prepare("SELECT mode,rules_json AS json FROM whatsapp_preferences WHERE tenant_id=?").get(id);
+  let stored={};try{stored=JSON.parse(row?.json||"{}");}catch{}
+  const rules=Object.fromEntries(Object.entries(whatsappDefaults).map(([kind,defaults])=>[kind,{...defaults,...stored.rules?.[kind]}]));
+  return {mode:row?.mode||"manual",rules,reminderHours:stored.reminderHours||[24,2],expiryDays:stored.expiryDays||7};
+}
+function whatsappPhone(phone){
+  const raw=String(phone||"").replace(/\D/g,"");
+  if(/^\d{10,11}$/.test(raw))return "55"+raw;
+  return /^55\d{10,11}$/.test(raw)?raw:"";
+}
+function whatsappDate(day){return day?day.slice(0,10).split("-").reverse().join("/"):"";}
+function refreshWhatsAppQueue(id){
+  const settings=whatsappPreferences(id),now=localNow(id),today=now.slice(0,10);
+  const business=db.prepare("SELECT business_name AS name FROM business_settings WHERE tenant_id=?").get(id)?.name||"Estabelecimento";
+  const candidates=[];
+  const add=(kind,key,row,vars,appointmentId=null)=>{
+    const rule=settings.rules[kind],phone=whatsappPhone(row.phone);
+    if(!rule?.enabled||!phone)return;
+    const message=rule.template.replace(/\{([a-z]+)\}/g,(_m,k)=>String(({cliente:row.clientName,empresa:business,...vars})[k]??""));
+    candidates.push({kind,key:key+":"+row.clientId+":"+phone,clientId:row.clientId,clientName:row.clientName,phone,message,appointmentId});
+  };
+  const cutoff=addLocalMinutes(now,-7*1440);
+  const appointments=db.prepare(`SELECT a.id,a.status,a.starts_at AS startsAt,a.booking_source AS source,
+    c.id AS clientId,c.name AS clientName,c.phone,s.name AS serviceName,u.name AS professionalName,
+    w.id AS legacyId,w.delivery_state AS legacyState,w.opened_at AS legacyOpened,w.opened_by AS legacyOpenedBy,
+    (SELECT x.id FROM appointment_audit x WHERE x.tenant_id=a.tenant_id AND x.appointment_id=a.id AND x.action IN ('criacao','confirmacao','cancelamento','status','remarcacao') ORDER BY x.created_at DESC,x.rowid DESC LIMIT 1) AS eventId,
+    (SELECT x.action FROM appointment_audit x WHERE x.tenant_id=a.tenant_id AND x.appointment_id=a.id AND x.action IN ('criacao','confirmacao','cancelamento','status','remarcacao') ORDER BY x.created_at DESC,x.rowid DESC LIMIT 1) AS eventAction
+    FROM appointments a JOIN clients c ON c.id=a.client_id AND c.tenant_id=a.tenant_id
+    JOIN services s ON s.id=a.service_id AND s.tenant_id=a.tenant_id JOIN users u ON u.id=a.professional_id AND u.tenant_id=a.tenant_id
+    LEFT JOIN whatsapp_notifications w ON w.tenant_id=a.tenant_id AND w.appointment_id=a.id AND w.status=a.status
+    WHERE a.tenant_id=? AND a.status IN ('agendado','confirmado','cancelado') AND a.starts_at>=? AND a.booking_source!='direct'
+    AND (CASE WHEN a.booking_source='public' THEN a.whatsapp_opt_in ELSE c.whatsapp_consent END)=1`).all(id,cutoff);
+  for(const a of appointments){
+    const vars={servico:a.serviceName,profissional:a.professionalName,data:whatsappDate(a.startsAt),hora:a.startsAt.slice(11,16)};
+    const version=a.eventId||a.startsAt;
+    const kind=a.eventAction==="remarcacao"&&a.status!=="cancelado"?"remarcacao":a.status;
+    if((a.status==="cancelado"||a.startsAt>=now)&&!(kind===a.status&&a.legacyState==="submitted"))
+      add(kind,"appointment:"+a.id+":"+kind+":"+version+":"+a.startsAt,a,vars,a.id);
+    if(a.status==="confirmado"&&a.startsAt>now){
+      const hours=[...settings.reminderHours].sort((a,b)=>a-b).find(h=>a.startsAt<=addLocalMinutes(now,h*60));
+      if(hours)add("lembrete","reminder:"+a.id+":"+version+":"+a.startsAt+":"+hours,a,vars,a.id);
+    }
+  }
+  const expiry=new Date(today+"T12:00:00Z");expiry.setUTCDate(expiry.getUTCDate()+settings.expiryDays);
+  const packages=db.prepare(`SELECT p.id,p.package_name AS packageName,p.expires_on AS expiresOn,c.id AS clientId,c.name AS clientName,c.phone
+    FROM package_purchases p JOIN clients c ON c.id=p.client_id AND c.tenant_id=p.tenant_id WHERE p.tenant_id=? AND c.whatsapp_consent=1 AND p.expires_on BETWEEN ? AND ?`).all(id,today,expiry.toISOString().slice(0,10));
+  for(const p of packages){
+    const left=purchasedItems(p.id).reduce((s,i)=>s+i.sessions-i.used,0);
+    if(left)add("pacote","package:"+p.id+":"+p.expiresOn,p,{pacote:p.packageName,validade:whatsappDate(p.expiresOn),sessoes:left});
+  }
+  const loyalty=loyaltySettings(id);
+  if(loyalty.enabled&&settings.rules.fidelidade.enabled){
+    const clients=db.prepare("SELECT id AS clientId,name AS clientName,phone FROM clients WHERE tenant_id=? AND whatsapp_marketing_consent=1 AND notes!='__internal_anonymous__'").all(id);
+    for(const c of clients){
+      const points=loyaltyPoints(id,c.clientId);
+      if(points.balance>=loyalty.threshold)add("fidelidade","loyalty:"+c.clientId+":"+points.spent,c,{pontos:points.balance,desconto:"R$ "+(loyalty.discountCents/100).toFixed(2).replace(".",",")});
+    }
+  }
+  db.transaction(()=>{
+    db.prepare("UPDATE whatsapp_manual_queue SET active=0 WHERE tenant_id=? AND sent_at IS NULL").run(id);
+    const insert=db.prepare(`INSERT INTO whatsapp_manual_queue(id,tenant_id,event_key,kind,client_id,appointment_id,phone,message,client_name)
+      VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id,event_key) DO UPDATE SET active=1,phone=excluded.phone,message=excluded.message,client_name=excluded.client_name,
+      opened_at=CASE WHEN whatsapp_manual_queue.phone!=excluded.phone OR whatsapp_manual_queue.message!=excluded.message THEN NULL ELSE whatsapp_manual_queue.opened_at END,
+      opened_by=CASE WHEN whatsapp_manual_queue.phone!=excluded.phone OR whatsapp_manual_queue.message!=excluded.message THEN NULL ELSE whatsapp_manual_queue.opened_by END
+      WHERE whatsapp_manual_queue.sent_at IS NULL`);
+    for(const c of candidates)insert.run(createId(),id,c.key,c.kind,c.clientId,c.appointmentId,c.phone,c.message,c.clientName);
+  })();
+}
+app.get("/api/whatsapp/preferences",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const slug=db.prepare("SELECT slug FROM tenants WHERE id=?").get(tenant(req))?.slug;
+  res.json({...whatsappPreferences(tenant(req)),automaticConfigured:Boolean(whatsAppCloudConfig(slug))});
+});
+app.put("/api/whatsapp/preferences",requireAuth,allowRoles("dono"),(req,res)=>{
+  const {mode,rules,reminderHours,expiryDays}=req.body||{};
+  if(!["manual","automatic"].includes(mode)||!rules||!Array.isArray(reminderHours)||reminderHours.length>2||new Set(reminderHours).size!==reminderHours.length||reminderHours.some(h=>!Number.isSafeInteger(h)||h<1||h>168)||!Number.isSafeInteger(expiryDays)||expiryDays<1||expiryDays>60)
+    return fail(res,400,"Confira as preferências de WhatsApp.");
+  const sanitized={};
+  const tokens=new Set(["cliente","empresa","servico","profissional","data","hora","pacote","validade","sessoes","pontos","desconto"]);
+  for(const kind of Object.keys(whatsappDefaults)){
+    const r=rules[kind];
+    if(typeof r?.enabled!=="boolean"||typeof r.template!=="string"||!r.template.trim()||r.template.length>1000||[...r.template.matchAll(/\{([^{}]+)\}/g)].some(m=>!tokens.has(m[1])))return fail(res,400,"Modelo inválido: "+whatsappDefaults[kind].label);
+    sanitized[kind]={enabled:r.enabled,template:r.template.trim()};
+  }
+  db.prepare("INSERT INTO whatsapp_preferences(tenant_id,mode,rules_json) VALUES(?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET mode=excluded.mode,rules_json=excluded.rules_json").run(tenant(req),mode,JSON.stringify({rules:sanitized,reminderHours,expiryDays}));
+  refreshWhatsAppQueue(tenant(req));res.json({ok:true});
+});
+app.post("/api/whatsapp/sync",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const id=tenant(req);refreshWhatsAppQueue(id);
+  const rows=db.prepare(`SELECT id,kind,appointment_id AS appointmentId,client_name AS clientName,
+    CASE WHEN sent_at IS NULL THEN phone ELSE '' END AS phone,message,created_at AS createdAt,opened_at AS openedAt,sent_at AS sentAt,sent_by_name AS sentByName
+    FROM whatsapp_manual_queue WHERE tenant_id=? AND (active=1 OR sent_at IS NOT NULL)
+    ORDER BY sent_at IS NOT NULL,created_at DESC LIMIT 1000`).all(id);
+  res.setHeader("Cache-Control","no-store");res.json({messages:rows});
+});
+app.post("/api/whatsapp/messages/:id/:action",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const id=tenant(req),action=req.params.action;
+  if(!["open","sent"].includes(action))return fail(res,400,"Ação inválida.");
+  refreshWhatsAppQueue(id);
+  const row=db.prepare("SELECT * FROM whatsapp_manual_queue WHERE id=? AND tenant_id=? AND active=1").get(req.params.id,id);
+  if(!row||row.sent_at)return fail(res,409,"Aviso indisponível ou já confirmado.");
+  if(action==="sent"&&!row.opened_at)return fail(res,409,"Abra primeiro a conversa e confirme o envio no WhatsApp.");
+  if(action==="open")db.prepare("UPDATE whatsapp_manual_queue SET opened_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),opened_by=? WHERE id=? AND tenant_id=?").run(req.user.id,row.id,id);
+  else db.prepare("UPDATE whatsapp_manual_queue SET sent_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),sent_by=?,sent_by_name=? WHERE id=? AND tenant_id=?").run(req.user.id,req.user.name||"Usuário",row.id,id);
+  res.json(action==="open"?{phone:row.phone,message:row.message}:{ok:true});
+});
 function whatsAppCloudConfig(slug) {
   if (!process.env.WHATSAPP_CLOUD_CONFIG_JSON) return null;
   try {
@@ -2680,8 +2798,12 @@ async function notifyStatusWhatsApp(tenantId,appointmentId,targetStatus) {
     JOIN business_settings b ON b.tenant_id=a.tenant_id
     WHERE a.id=? AND a.tenant_id=?`).get(appointmentId,tenantId);
   if(!row || row.status!==targetStatus || !["confirmado","cancelado"].includes(targetStatus))return "not-applicable";
+  const prefs=whatsappPreferences(tenantId);
   const config=whatsAppCloudConfig(row.slug);
-  if(!row.whatsappOptIn || !config)return row.whatsappOptIn?"not-configured":"no-consent";
+  if(!row.whatsappOptIn)return "no-consent";
+  if(!prefs.rules[targetStatus]?.enabled)return "disabled";
+  if(!config)return "not-configured";
+  if(prefs.mode!=="automatic")return "manual";
   const raw=row.phone.replace(/\D/g,"");
   const number=raw.startsWith("55")?raw:"55"+raw;
   if(!/^55\d{10,11}$/.test(number))return "invalid-phone";
@@ -2733,6 +2855,7 @@ app.post("/api/requests/:id/whatsapp-opened", requireAuth, allowRoles("dono","re
     .get(req.params.id,tenant(req),status);
   if(!record)return fail(res,409,"Solicitação ou status não encontrado.");
   if (!record.whatsappOptIn) return fail(res, 403, "O cliente não autorizou avisos por WhatsApp.");
+  if(!whatsappPreferences(tenant(req)).rules[status]?.enabled)return fail(res,409,"Este aviso está desativado.");
   queueWhatsAppNotification(tenant(req),record.id,status);
   db.prepare(`UPDATE whatsapp_notifications SET opened_at=datetime('now'),opened_by=?
     WHERE tenant_id=? AND appointment_id=? AND status=?`)

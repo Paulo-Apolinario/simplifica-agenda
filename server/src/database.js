@@ -229,7 +229,25 @@ db.exec(`
   );
   CREATE UNIQUE INDEX IF NOT EXISTS whatsapp_notification_event_idx
     ON whatsapp_notifications(tenant_id, appointment_id, status);
+  CREATE TABLE IF NOT EXISTS whatsapp_preferences (
+    tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL DEFAULT 'manual' CHECK(mode IN ('manual','automatic')),
+    rules_json TEXT NOT NULL DEFAULT '{}'
+  );
+  CREATE TABLE IF NOT EXISTS whatsapp_manual_queue (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    event_key TEXT NOT NULL, kind TEXT NOT NULL,
+    client_id TEXT NOT NULL REFERENCES clients(id), appointment_id TEXT REFERENCES appointments(id),
+    phone TEXT NOT NULL, message TEXT NOT NULL, client_name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    opened_at TEXT, opened_by TEXT REFERENCES users(id),
+    sent_at TEXT, sent_by TEXT REFERENCES users(id), sent_by_name TEXT,
+    active INTEGER NOT NULL DEFAULT 1, UNIQUE(tenant_id,event_key)
+  );
+  CREATE INDEX IF NOT EXISTS whatsapp_manual_queue_tenant ON whatsapp_manual_queue(tenant_id,active,sent_at);
 `);
+ensureColumn("clients","whatsapp_consent","INTEGER NOT NULL DEFAULT 0");
+ensureColumn("clients","whatsapp_marketing_consent","INTEGER NOT NULL DEFAULT 0");
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS appointment_audit (
