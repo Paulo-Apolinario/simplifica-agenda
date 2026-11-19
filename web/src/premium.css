@@ -641,6 +641,71 @@
   .premium-public {background:#fff!important;}
   .premium-public .public-booking-card {box-shadow:none;border:0;margin:0;padding:0;width:100%;}
 }
+
+/* Professional workspace — comfortable mobile service and earnings management. */
+.professional-workspace {display:grid;gap:17px;min-width:0;}
+.professional-workspace > .page-title-row,.professional-workspace .stats-grid {margin-bottom:0;}
+.professional-filter-bar {display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px;padding:15px 17px;}
+.professional-filter-bar .month-filter {margin:0;min-width:150px;}
+.professional-filter-bar .field {flex:0 1 220px;}
+.professional-filter-bar .input {min-height:42px;font-size:13px;}
+.professional-filter-bar .field-label,.professional-filter-bar label {font-size:11px;color:var(--muted);}
+.professional-balance-hero {position:relative;display:grid;grid-template-columns:1fr auto;gap:20px;padding:24px;border-radius:20px;background:linear-gradient(125deg,#122950,#275cbd);color:#fff;overflow:hidden;box-shadow:0 9px 24px #234c9e22;}
+.professional-balance-hero > div:first-child {display:grid;gap:8px;min-width:0;}
+.professional-balance-hero .eyebrow {color:#c3d9ff;letter-spacing:1.3px;}
+.professional-balance-hero strong {font-size:clamp(27px,4vw,42px);font-weight:700;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;}
+.professional-balance-hero small {font-size:12px;color:#dce8ff;}
+.professional-balance-icon {display:grid;place-items:center;width:62px;height:62px;border-radius:18px;background:#ffffff22;color:#e8f1ff;}
+.professional-balance-foot {grid-column:1/-1;display:flex;justify-content:space-between;gap:10px;padding-top:14px;border-top:1px solid #ffffff25;color:#e1ecff;font-size:13px;}
+.professional-balance-foot b {font-weight:700;color:#fff;}
+.professional-stats {grid-template-columns:repeat(4,minmax(0,1fr));}
+.professional-stats:has(> :nth-child(3):last-child) {grid-template-columns:repeat(3,minmax(0,1fr));}
+.professional-list-panel .panel-heading {padding-bottom:14px;border-bottom:1px solid var(--line);}
+.professional-card-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;}
+.professional-service-card {display:grid;gap:13px;min-width:0;padding:16px;background:var(--surface);border:1px solid var(--line);border-radius:14px;border-left:4px solid #8b5cf6;}
+.professional-service-card[data-status="agendado"] {border-left-color:#3976ec;}
+.professional-service-card[data-status="confirmado"] {border-left-color:#10b981;}
+.professional-service-card[data-status="concluido"] {border-left-color:#8391a8;}
+.professional-service-card[data-status="cancelado"],.professional-service-card[data-status="faltou"] {border-left-color:#dc4964;}
+.professional-card-head {display:flex;align-items:center;gap:10px;min-width:0;}
+.professional-card-icon {display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;border-radius:12px;background:#eee8ff;color:#7449c8;}
+.professional-card-head > div {display:grid;gap:4px;min-width:0;flex:1;}
+.professional-card-head b {color:var(--text);font-size:14px;font-weight:700;overflow-wrap:anywhere;}
+.professional-card-head small {font-size:12px;color:var(--muted);overflow-wrap:anywhere;}
+.professional-card-date {display:flex;align-items:center;gap:7px;color:var(--muted);font-size:12px;line-height:1.5;}
+.professional-card-date svg {flex:0 0 15px;color:#6483b8;}
+.professional-card-date small {font-size:12px;}
+.professional-card-amounts {display:grid;grid-template-columns:repeat(auto-fit,minmax(95px,1fr));gap:8px;padding:12px;background:var(--soft);border-radius:10px;}
+.professional-card-amounts > div {display:grid;gap:5px;min-width:0;}
+.professional-card-amounts small,.professional-card-note {font-size:10px;color:var(--muted);}
+.professional-card-amounts b,.professional-card-amounts strong {color:var(--text);font-size:14px;font-weight:700;overflow-wrap:anywhere;}
+.professional-card-amounts strong {color:#245ed6;font-size:16px;}
+.professional-card-note {line-height:1.5;}
+.professional-service-card > .button {width:100%;min-height:45px;}
+.dark .professional-card-icon {background:#382c59;color:#d2baff;}
+.dark .professional-card-amounts strong {color:#b1cdff;}
+@media(max-width:1120px){.professional-stats {grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media(max-width:760px){
+  .professional-workspace {gap:13px;}
+  .professional-filter-bar {padding:13px;gap:10px;}
+  .professional-filter-bar .month-filter,.professional-filter-bar .field {min-width:0;flex:1 1 100%;}
+  .professional-filter-bar > .button {width:100%;}
+  .professional-card-grid {grid-template-columns:1fr;}
+  .professional-service-card {padding:13px;}
+  .professional-card-head .status-badge {font-size:10px;}
+  .professional-balance-hero {padding:18px;gap:13px;}
+  .professional-balance-icon {width:45px;height:45px;border-radius:13px;}
+  .professional-balance-icon svg {width:23px;}
+  .professional-balance-hero strong {font-size:32px;}
+  .professional-balance-foot {font-size:12px;}
+  .professional-workspace .page-actions .button {min-height:46px;font-size:13px;}
+  .professional-stats,.professional-stats:has(> :nth-child(3):last-child) {grid-template-columns:repeat(2,minmax(0,1fr));}
+  .professional-stats:has(> :nth-child(3):last-child) > :last-child {grid-column:1/-1;}
+  .professional-stats .stat-card {min-height:118px;padding:11px;gap:7px;}
+  .professional-stats .stat-icon {width:27px;height:27px;border-radius:8px;}
+  .professional-stats .stat-icon svg {width:16px;height:16px;}
+  .professional-stats .stat-copy > span {font-size:11px;}
+}
 @media(max-width:1120px){
   .premium-finance .premium-finance-tabs,.commission-overview,.settlement-overview {grid-template-columns:repeat(2,minmax(0,1fr));}
   .cash-method-grid,.settlement-breakdown {grid-template-columns:repeat(3,minmax(0,1fr));}

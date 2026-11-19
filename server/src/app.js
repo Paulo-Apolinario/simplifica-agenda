@@ -1013,7 +1013,7 @@ const commissionCents = row => Math.round(row.priceCents * Math.max(0,
 function professionalEarnings(tenantId, professionalId, month = null) {
   const whereMonth = month ? " AND substr(COALESCE(a.completed_on, a.starts_at), 1, 7) = ?" : "";
   const params = month ? [tenantId, professionalId, month] : [tenantId, professionalId];
-  const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, s.name AS serviceName,
+  const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, COALESCE(a.completed_on,substr(a.starts_at,1,10)) AS completedOn, s.name AS serviceName,
     c.name AS clientName, a.price_cents AS priceCents, a.booking_source AS bookingSource, a.payment_method AS paymentMethod,
     a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent,
     CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents, cp.paid_at AS paidAt
@@ -1022,7 +1022,7 @@ function professionalEarnings(tenantId, professionalId, month = null) {
     JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
     LEFT JOIN commission_payments cp ON cp.appointment_id = a.id AND cp.tenant_id = a.tenant_id
     WHERE a.tenant_id = ? AND a.professional_id = ? AND a.status = 'concluido'${whereMonth}
-    ORDER BY a.starts_at DESC`).all(...params);
+    ORDER BY completedOn DESC, a.starts_at DESC`).all(...params);
   const services = rows.map(row => ({
     ...row, earnedCents: commissionCents(row), paid: row.paidCents !== null,
   }));

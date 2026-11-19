@@ -1408,40 +1408,44 @@ function ProfessionalEarningsPage() {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [filter,setFilter]=useState("all");
   useEffect(() => {
-    setData(null);
+    let active=true;setData(null);setError("");
     api(`/professional/earnings?month=${encodeURIComponent(month)}`)
-      .then(result => { setData(result); setError(""); })
-      .catch(reason => setError(reason.message));
+      .then(result => { if(active){setData(result);setError("");} })
+      .catch(reason => {if(active)setError(reason.message);});
+    return ()=>{active=false;};
   }, [month]);
-  return <>
+  const visible=(data?.services||[]).filter(item=>filter==="all"||(filter==="paid"?item.paid:!item.paid));
+  return <div className="professional-workspace">
     <PageTitle eyebrow="MINHAS COMISSÕES" title="Meus ganhos"
-      description="Confira suas comissões de serviços concluídos e os pagamentos registrados pelo comércio."/>
-    <div className="month-filter"><label htmlFor="earnings-month">Mês de referência</label>
-      <input id="earnings-month" className="input month-input" type="month" value={month} onChange={event => setMonth(event.target.value)}/></div>
+      description="Confira suas comissões de serviços concluídos e os pagamentos registrados pelo comércio."
+      actions={<Link className="button button-secondary" to="/meus-atendimentos"><ClipboardCheck size={16}/> Meus atendimentos</Link>}/>
+    <div className="panel professional-filter-bar"><div className="month-filter"><label htmlFor="earnings-month">Mês de referência</label>
+      <input id="earnings-month" className="input month-input" type="month" value={month} onChange={event => {if(event.target.value)setMonth(event.target.value);}}/></div>
+      <SelectField label="Situação da comissão" value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">Todas</option><option value="pending">A receber</option><option value="paid">Pagas</option></SelectField></div>
     <ErrorMessage>{error}</ErrorMessage>
     {!data ? !error && <Loading/> : <>
-      <section className="stats-grid finance-stats">
-        <StatCard title="Saldo total a receber" value={money(data.allTime.dueCents)} note="Comissões de todos os períodos não pagas" icon={Wallet} tone="green"/>
-        <StatCard title="Comissões deste mês" value={money(data.earnedCents)} note="Serviços concluídos no período" icon={ClipboardCheck} tone="blue"/>
-        <StatCard title="Pagamentos registrados" value={money(data.allTime.paidCents)} note="Histórico total de comissões pagas" icon={CheckCheck} tone="purple"/>
+      <section className="professional-balance-hero"><div><span className="eyebrow">SALDO TOTAL A RECEBER</span><strong>{money(data.allTime.dueCents)}</strong><small>Comissões pendentes de todos os períodos</small></div><span className="professional-balance-icon"><Wallet size={30}/></span><div className="professional-balance-foot"><span>Total já repassado</span><b>{money(data.allTime.paidCents)}</b></div></section>
+      <section className="stats-grid finance-stats professional-stats">
+        <StatCard title="Comissões do mês" value={money(data.earnedCents)} note="Geradas pelos serviços concluídos" icon={ClipboardCheck} tone="purple"/>
+        <StatCard title="Repassado (serviços do mês)" value={money(data.paidCents)} note="Pagamento confirmado" icon={CheckCheck} tone="green"/>
+        <StatCard title="A receber (serviços do mês)" value={money(data.dueCents)} note="Comissão ainda não repassada" icon={Wallet} tone="orange"/>
       </section>
-      <section className="panel management-panel">
+      <section className="panel management-panel professional-list-panel">
         <div className="panel-heading"><div><p className="eyebrow">DETALHAMENTO</p><h2>Serviços prestados</h2>
           <p className="panel-subtitle">Os valores abaixo são comissões, não o preço integral dos serviços. Somente o proprietário registra o pagamento.</p></div></div>
-        {data.services.length ? <div className="management-list">{data.services.map(item =>
-          <article className="service-row" key={item.id}>
-            <span className="service-row-icon"><Wallet size={18}/></span>
-            <div className="min-w-0 flex-1"><b>{item.serviceName} · {item.clientName}</b>
-              <small>{dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Registro direto" : "Agendado"} · {money(item.priceCents)} bruto · {Math.max(0,item.commissionPercent - (item.houseSharePercent || 0))}% líquido · Cliente {item.paymentMethod ? "pagou" : "a pagar"}</small></div>
-            <strong>{money(item.earnedCents)}</strong>
-            <span className={`status-badge ${item.paid ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
-              {item.paid ? "Pago" : "A receber"}</span>
+        {visible.length ? <div className="professional-card-grid">{visible.map(item =>
+          <article className="professional-service-card" key={item.id}>
+            <div className="professional-card-head"><span className="professional-card-icon"><Wallet size={19}/></span><div><b>{item.serviceName}</b><small>{item.clientName}</small></div><span className={`status-badge ${item.paid ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{item.paid?"Pago":"A receber"}</span></div>
+            <p className="professional-card-date"><CalendarDays size={15}/> Realizado em {dateLabel(item.completedOn||item.startsAt.slice(0,10))} · {item.bookingSource==="direct"?"Registro direto":"Agendado"}</p>
+            <div className="professional-card-amounts"><div><small>Valor do serviço</small><b>{money(item.priceCents)}</b></div><div><small>Comissão efetiva</small><b>{Math.max(0,item.commissionPercent-(item.houseSharePercent||0))}%</b></div><div><small>{item.paid?"Comissão paga":"Sua comissão"}</small><strong>{money(item.paid?item.paidCents:item.earnedCents)}</strong></div></div>
+            <small className="professional-card-note">Cliente: {item.paymentMethod?"pagamento recebido":"pagamento pendente"}{item.paid&&item.paidAt?` · Repasse registrado em ${cashTimestamp(item.paidAt)}`:""}</small>
           </article>)}</div> : <EmptyState icon={Wallet} title="Sem ganhos registrados neste mês"
             description="A comissão aparece quando um serviço atribuído a você é concluído."/>}
       </section>
     </>}
-  </>;
+  </div>;
 }
 
 function TeamCommissionsPage({ user }) {
@@ -1545,11 +1549,14 @@ function ProfessionalWorkPage({ user }) {
   const [data, setData] = useState({ services: [], totals: { appointments: 0, completed: 0, serviceValueCents: 0 } });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(null);
+  const [filter,setFilter]=useState("all");
+  const refreshVersion=useRef(0);
   const refresh = useCallback(async () => {
+    const version=++refreshVersion.current;
     try {
       const result = await api(`/professional/my-services?month=${encodeURIComponent(month)}`);
-      setData(result); setError("");
-    } catch (reason) { setError(reason.message); }
+      if(version===refreshVersion.current){setData(result);setError("");}
+    } catch (reason) { if(version===refreshVersion.current)setError(reason.message); }
   }, [month]);
   useEffect(() => { refresh(); }, [refresh]);
   const complete = async (id) => {
@@ -1569,38 +1576,41 @@ function ProfessionalWorkPage({ user }) {
     finally { setSaving(null); }
   };
   const canComplete = item => ["agendado", "confirmado"].includes(item.status);
-  return <>
+  const current=data.month===month;
+  const services=current?data.services:[];
+  const visible=services.filter(item=>filter==="all"||(filter==="pending"?canComplete(item):filter==="today"?(item.status==="concluido"?item.completedOn||item.startsAt.slice(0,10):item.startsAt.slice(0,10))===localDate():item.status===filter));
+  return <div className="professional-workspace">
     <PageTitle eyebrow="ÁREA DO PROFISSIONAL" title="Meus atendimentos"
       description="Visualize seus serviços e registre os que foram efetivamente realizados."
       actions={<Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button>} />
-    <div className="month-filter"><label htmlFor="professional-month">Mês</label>
+    <div className="panel professional-filter-bar"><div className="month-filter"><label htmlFor="professional-month">Mês</label>
       <input id="professional-month" className="input month-input" type="month" value={month}
-        onChange={e => setMonth(e.target.value)}/></div>
+        onChange={e => {if(e.target.value)setMonth(e.target.value);}}/></div><SelectField label="Filtrar atendimentos" value={filter} onChange={e=>setFilter(e.target.value)}><option value="all">Todos</option><option value="today">Hoje</option><option value="pending">A realizar</option><option value="concluido">Concluídos</option><option value="cancelado">Cancelados</option><option value="faltou">Faltas</option></SelectField><Link className="button button-secondary" to="/agenda"><CalendarDays size={16}/> Abrir agenda</Link></div>
     <ErrorMessage>{error}</ErrorMessage>
-    <section className="stats-grid finance-stats">
-      <StatCard title="Meus atendimentos" value={data.totals.appointments} note="Agendados ou realizados no período" icon={CalendarDays} />
-      <StatCard title="Serviços realizados" value={data.totals.completed} note="Concluídos" icon={CheckCheck} tone="green"/>
-      <StatCard title="Valor dos serviços realizados" value={money(data.totals.serviceValueCents)}
+    <section className="stats-grid finance-stats professional-stats">
+      <StatCard title="Meus atendimentos" value={current?data.totals.appointments:"—"} note="Agendados ou realizados no período" icon={CalendarDays} />
+      <StatCard title="A realizar" value={current?services.filter(canComplete).length:"—"} note="Agendados ou confirmados" icon={Clock3} tone="orange"/>
+      <StatCard title="Serviços realizados" value={current?data.totals.completed:"—"} note="Concluídos" icon={CheckCheck} tone="green"/>
+      <StatCard title="Valor dos serviços realizados" value={current?money(data.totals.serviceValueCents):"—"}
         note="Valor bruto; veja comissões em Meus ganhos" icon={Scissors} tone="blue"/>
     </section>
-    <section className="panel management-panel">
+    <section className="panel management-panel professional-list-panel">
       <div className="panel-heading"><div><p className="eyebrow">REGISTRO DE SERVIÇOS</p>
-        <h2>Atendimentos atribuídos a mim</h2></div></div>
-      {data.services.length ? <div className="management-list">
-        {data.services.map(item => <article className="service-row" key={item.id}>
-          <span className="service-row-icon"><ClipboardCheck size={18}/></span>
-          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
-            <small>{dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Registro direto" : "Agendado"} · {statusNames[item.status]}{item.status === "concluido" && item.completedOn ? ` · Realizado em ${dateLabel(item.completedOn)}` : ""}</small></div>
-          <span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span>
-          {canComplete(item) && <Button disabled={saving === item.id} onClick={() => complete(item.id)}>
+        <h2>Atendimentos atribuídos a mim</h2></div><span className="count-chip">{visible.length} resultado(s)</span></div>
+      {!current&&!error?<Loading label="Carregando atendimentos..."/>:visible.length ? <div className="professional-card-grid">
+        {visible.map(item => <article className="professional-service-card" data-status={item.status} key={item.id}>
+          <div className="professional-card-head"><span className="professional-card-icon"><ClipboardCheck size={19}/></span><div><b>{item.clientName}</b><small>{item.serviceName}</small></div><span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span></div>
+          <div className="professional-card-date"><CalendarDays size={16}/><small>{item.bookingSource==="direct"?"Registro direto":dateTimeLabel(item.startsAt)}{item.status==="concluido"&&item.completedOn?` · Realizado em ${dateLabel(item.completedOn)}`:""} · {statusNames[item.status]}</small></div>
+          <div className="professional-card-amounts"><div><small>Valor do serviço</small><strong>{money(item.priceCents)}</strong></div><div><small>Origem</small><b>{item.bookingSource==="direct"?"Registro direto":"Agendado"}</b></div></div>
+          {canComplete(item) && <Button disabled={saving !== null} onClick={() => complete(item.id)}>
             {saving === item.id ? "Salvando..." : "Concluir serviço"}
           </Button>}
         </article>)}
-      </div> : <EmptyState icon={CalendarDays} title="Nenhum serviço neste mês"
-        description="Atendimentos agendados e serviços registrados aparecerão aqui."/>}
+      </div> : <EmptyState icon={CalendarDays} title="Nenhum serviço neste filtro"
+        description="Altere o filtro ou registre um atendimento realizado."/>}
     </section>
     {direct && <AppointmentForm direct user={user} onClose={() => setDirect(false)} onSaved={(day) => { setDirect(false); if (day.slice(0,7) === month) refresh(); else setMonth(day.slice(0,7)); }} />}
-  </>;
+  </div>;
 }
 
 function ServicesPage({ user, section = "services" }) {
