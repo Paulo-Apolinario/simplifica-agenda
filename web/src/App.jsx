@@ -762,14 +762,14 @@ function EmptyState({ icon: Icon = CalendarDays, title, description, action }) {
   return <div className="empty-state"><span className="empty-icon"><Icon size={22} /></span><b>{title}</b><p>{description}</p>{action}</div>;
 }
 
-function AppointmentForm({ onClose, onSaved, initialDate, initialHour, initialProfessional = "", user }) {
+function AppointmentForm({ onClose, onSaved, initialDate = localDate(), initialHour, initialProfessional = "", user, direct = false }) {
   const isProfessional = user.role === "profissional";
   const [clients, setClients] = useState([]);
   const [services, setServices] = useState([]);
   const [professionals, setProfessionals] = useState([]);
   const [values, setValues] = useState({
     clientId: "", serviceId: "", professionalId: isProfessional ? user.id : initialProfessional,
-    startsAt: initialHour ? `${initialDate}T${initialHour}` : initialDate === localDate() ? "" : `${initialDate}T09:00`, notes: "",
+    startsAt: initialHour ? `${initialDate}T${initialHour}` : initialDate === localDate() ? "" : `${initialDate}T09:00`, notes: "", paymentMethod: "",
   });
   const [quickClient, setQuickClient] = useState(false);
   const [newClient, setNewClient] = useState({ name: "", phone: "" });
@@ -806,13 +806,14 @@ function AppointmentForm({ onClose, onSaved, initialDate, initialHour, initialPr
         setValues(previous => ({ ...previous, clientId }));
         setQuickClient(false);
       }
-      await api("/appointments", { method: "POST", body: { ...values, clientId } });
-      onSaved(values.startsAt.slice(0, 10));
+      const result = await api(direct ? "/direct-services" : "/appointments", { method: "POST", body: { ...values, clientId } });
+      onSaved(direct ? result.completedOn : values.startsAt.slice(0, 10));
     } catch (reason) { setError(reason.message); }
     finally { setSaving(false); }
   };
-  return <Modal title="Novo agendamento" onClose={onClose}>
+  return <Modal title={direct ? "Registrar serviço avulso" : "Novo agendamento"} onClose={onClose}>
     <form className="form-stack" onSubmit={submit}>
+      {direct && <p className="booking-share-notice">Registre um serviço já realizado, sem reservar horário na agenda. A comissão será calculada automaticamente e o recebimento controlado pelo caixa.</p>}
       <SelectField label="Cliente (opcional)" value={quickClient ? "__new__" : values.clientId}
         onChange={event => {
           if (event.target.value === "__new__") { setQuickClient(true); setValues(v => ({ ...v, clientId: "" })); }
@@ -847,18 +848,25 @@ function AppointmentForm({ onClose, onSaved, initialDate, initialHour, initialPr
         <p className="booking-share-notice">Não há serviços ativos cadastrados neste estabelecimento. Solicite ao administrador que cadastre ou ative um serviço.</p>}
       {!options.length &&
         <p className="booking-share-notice">Não há profissionais ativos disponíveis no estabelecimento. Solicite ao administrador que verifique a equipe.</p>}
-      <Field label="Data e horário" type="datetime-local" required value={values.startsAt}
-        onChange={event => setValues(v => ({ ...v, startsAt: event.target.value }))}/>
-      {selectedService && values.startsAt && <p className="booking-share-notice">
+      {!direct && <Field label="Data e horário" type="datetime-local" required value={values.startsAt}
+        onChange={event => setValues(v => ({ ...v, startsAt: event.target.value }))}/>}
+      {!direct && selectedService && values.startsAt && <p className="booking-share-notice">
         Duração: {selectedService.durationMinutes} min · Término previsto: {dateTimeLabel(new Date(new Date(values.startsAt).getTime() + selectedService.durationMinutes * 60000))}
       </p>}
+      {direct && selectedService && <p className="booking-share-notice">Valor do serviço: {money(selectedService.priceCents)}</p>}
+      {direct && !isProfessional && <SelectField label="Forma de pagamento" value={values.paymentMethod}
+        onChange={event => setValues(v => ({...v, paymentMethod:event.target.value}))}>
+        <option value="">Em aberto — receber depois</option>
+        {Object.entries(paymentNames).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+      </SelectField>}
+      {direct && isProfessional && <p className="panel-subtitle">Pagamento será registrado pela recepção ou administrador.</p>}
       <Field label="Observações" placeholder="Algum detalhe importante?" value={values.notes}
         onChange={event => setValues(v => ({ ...v, notes: event.target.value }))}/>
       <ErrorMessage>{error}</ErrorMessage>
       <div className="modal-actions">
         <Button type="button" variant="secondary" onClick={onClose}>Cancelar</Button>
         <Button disabled={saving || !services.length || !options.length}>
-          {saving ? "Salvando..." : "Salvar agendamento"}
+          {saving ? "Salvando..." : direct ? "Registrar serviço realizado" : "Salvar agendamento"}
         </Button>
       </div>
     </form>
@@ -1088,7 +1096,7 @@ function AgendaPage({ user }) {
   const move = (offset) => setDate(shiftDate(date, offset));
   return <>
     <PageTitle eyebrow="SUA ROTINA EM UM SÓ LUGAR" title="Agenda" description={dateLabel(date)}
-      actions={<>{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => createAt(date, null, professionalId)}><Plus size={17} /> Novo agendamento</Button>}</>} />
+      actions={<>{canEdit && <Button variant="secondary" onClick={() => setModal("direct")}><Scissors size={16} /> Serviço avulso</Button>}{user.tenantId !== "tenant-salao-demo" && <Button variant="secondary" onClick={() => setModal("block")}><CalendarX2 size={16} /> Bloquear horário</Button>}{user.tenantId !== "tenant-salao-demo" && <Button onClick={() => createAt(date, null, professionalId)}><Plus size={17} /> Novo agendamento</Button>}</>} />
     <div className="agenda-toolbar">
       <div className="date-nav"><button className="icon-button" onClick={() => move(-1)} aria-label="Anterior"><ChevronLeft size={18} /></button>
         <button className="date-today" onClick={() => setDate(localDate())}>Hoje</button><button className="icon-button" onClick={() => move(1)} aria-label="Próximo"><ChevronRight size={18} /></button></div>
@@ -1118,6 +1126,7 @@ function AgendaPage({ user }) {
       })}
     </div>
     {modal === "new" && <AppointmentForm initialDate={newSlot.day} initialHour={newSlot.hour} initialProfessional={newSlot.professional} user={user} onClose={() => setModal("")} onSaved={(savedDate) => { setModal(""); if (savedDate === date) refresh(); else setDate(savedDate); }} />}
+    {modal === "direct" && <AppointmentForm direct initialProfessional={professionalId} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {modal === "block" && <BlockForm initialDate={date} user={user} onClose={() => setModal("")} onSaved={() => { setModal(""); refresh(); }} />}
     {selected && <AppointmentDetails appointment={selected} readOnly={user.role === "profissional" || user.tenantId === "tenant-salao-demo"} canCompleteService={user.role === "profissional"} onClose={() => setSelected(null)} onUpdated={() => { setSelected(null); refresh(); }} />}
   </>;
@@ -1354,7 +1363,7 @@ function ProfessionalEarningsPage() {
           <article className="service-row" key={item.id}>
             <span className="service-row-icon"><Wallet size={18}/></span>
             <div className="min-w-0 flex-1"><b>{item.serviceName} · {item.clientName}</b>
-              <small>{dateTimeLabel(item.startsAt)} · {Math.max(0,item.commissionPercent - (item.houseSharePercent || 0))}% líquido de comissão</small></div>
+              <small>{dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Avulso" : "Agendado"} · {money(item.priceCents)} bruto · {Math.max(0,item.commissionPercent - (item.houseSharePercent || 0))}% líquido · Cliente {item.paymentMethod ? "pagou" : "a pagar"}</small></div>
             <strong>{money(item.earnedCents)}</strong>
             <span className={`status-badge ${item.paid ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
               {item.paid ? "Pago" : "A receber"}</span>
@@ -1398,7 +1407,8 @@ function TeamCommissionsPage() {
         <article className="service-row" key={item.id}>
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
           <div className="min-w-0 flex-1"><b>{item.professionalName} · {item.serviceName}</b>
-            <small>{dateTimeLabel(item.startsAt)} · {item.commissionPercent}% de comissão</small></div>
+            <small>{item.clientName} · {dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Avulso" : "Agendado"}</small>
+            <small>Valor {money(item.priceCents)} · Comissão {item.commissionPercent}% − retenção {item.houseSharePercent || 0} p.p. = {Math.max(0,item.commissionPercent - (item.houseSharePercent || 0))}% · Cliente {item.paymentMethod ? "pagou" : "a pagar"}</small></div>
           <strong>{money(item.earnedCents)}</strong>
           {item.paid ? <span className="status-badge bg-emerald-50 text-emerald-700">Pago</span> : <>
             <Button variant="secondary" onClick={()=>setAdjusting({...item, reason:""})}>Ajustar comissão</Button>
@@ -1433,7 +1443,8 @@ function TeamCommissionsPage() {
   </>;
 }
 
-function ProfessionalWorkPage() {
+function ProfessionalWorkPage({ user }) {
+  const [direct, setDirect] = useState(false);
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [data, setData] = useState({ services: [], totals: { appointments: 0, completed: 0, serviceValueCents: 0 } });
   const [error, setError] = useState("");
@@ -1464,7 +1475,8 @@ function ProfessionalWorkPage() {
   const canComplete = item => ["agendado", "confirmado"].includes(item.status);
   return <>
     <PageTitle eyebrow="ÁREA DO PROFISSIONAL" title="Meus atendimentos"
-      description="Visualize seus serviços e registre os que foram efetivamente realizados." />
+      description="Visualize seus serviços e registre os que foram efetivamente realizados."
+      actions={<Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço avulso</Button>} />
     <div className="month-filter"><label htmlFor="professional-month">Mês</label>
       <input id="professional-month" className="input month-input" type="month" value={month}
         onChange={e => setMonth(e.target.value)}/></div>
@@ -1482,15 +1494,16 @@ function ProfessionalWorkPage() {
         {data.services.map(item => <article className="service-row" key={item.id}>
           <span className="service-row-icon"><ClipboardCheck size={18}/></span>
           <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
-            <small>{dateTimeLabel(item.startsAt)} · {statusNames[item.status]}{item.status === "concluido" && item.completedOn ? ` · Realizado em ${dateLabel(item.completedOn)}` : ""}</small></div>
+            <small>{dateTimeLabel(item.startsAt)} · {item.bookingSource === "direct" ? "Avulso" : "Agendado"} · {statusNames[item.status]}{item.status === "concluido" && item.completedOn ? ` · Realizado em ${dateLabel(item.completedOn)}` : ""}</small></div>
           <span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span>
           {canComplete(item) && <Button disabled={saving === item.id} onClick={() => complete(item.id)}>
             {saving === item.id ? "Salvando..." : "Concluir serviço"}
           </Button>}
         </article>)}
       </div> : <EmptyState icon={CalendarDays} title="Nenhum serviço neste mês"
-        description="Seus atendimentos agendados aparecerão aqui."/>}
+        description="Atendimentos agendados e serviços avulsos aparecerão aqui."/>}
     </section>
+    {direct && <AppointmentForm direct user={user} onClose={() => setDirect(false)} onSaved={(day) => { setDirect(false); if (day.slice(0,7) === month) refresh(); else setMonth(day.slice(0,7)); }} />}
   </>;
 }
 
@@ -1996,10 +2009,13 @@ function FinancialHubPage({ user }) {
 }
 
 function ReceivablesPage({ user }) {
-  const { pending, loaded, error } = usePendingPayments();
+  const { pending, loaded, error, refresh } = usePendingPayments();
   const [cashRevision, setCashRevision] = useState(0);
+  const [direct, setDirect] = useState(false);
   return <>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
+    <div className="modal-actions"><Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço avulso</Button></div>
+    {direct && <AppointmentForm direct user={user} onClose={() => setDirect(false)} onSaved={() => { setDirect(false); refresh(); setCashRevision(n => n + 1); }} />}
     {pending.length > 0 && <Link className="cash-pending-summary cash-pending-link" to={pendingPaymentsPath}>
       <Clock3 size={22}/><div><b>{pending.length} pagamento(s) pendente(s)</b>
         <strong>{money(pending.reduce((sum, item) => sum + item.priceCents, 0))} a receber</strong></div>
@@ -2064,7 +2080,7 @@ function PendingPaymentsList({ user, pending, loaded, loadError, refresh }) {
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
           <div className="cash-payment-info"><b>{item.clientName} · {item.serviceName}</b>
             <small>Profissional: {item.professionalName}</small>
-            <small>Agendado: {dateTimeLabel(item.startsAt)}{item.completedOn ? ` · Realizado: ${dateLabel(item.completedOn)}` : ""}</small></div>
+            <small>{item.bookingSource === "direct" ? "Serviço avulso" : `Agendado: ${dateTimeLabel(item.startsAt)}`}{item.completedOn ? ` · Realizado: ${dateLabel(item.completedOn)}` : ""}</small></div>
           <strong>{money(item.priceCents)}</strong>
           <label className="field cash-payment-method"><span className="field-label">Forma de pagamento</span>
             <select className="input" value={methods[item.id] || ""} onChange={event => setMethods(previous => ({ ...previous, [item.id]: event.target.value }))}>
@@ -2090,7 +2106,7 @@ function AppointmentAuditReport({ month }) {
       .catch(reason => { if (alive) setError(reason.message); });
     return () => { alive = false; };
   }, [month, action]);
-  const labels = { criacao: "Criado", confirmacao: "Confirmado", cancelamento: "Cancelado",
+  const labels = { criacao: "Criado", servico_avulso: "Serviço avulso", confirmacao: "Confirmado", cancelamento: "Cancelado",
     remarcacao: "Remarcado", conclusao: "Concluído", pagamento: "Pagamento", conciliacao: "Data do pagamento conciliada", status: "Status alterado",
     edicao: "Editado", comissao: "Comissão ajustada" };
   const detail = event => {
@@ -2738,7 +2754,7 @@ function SettlementsPage() {
         <article className="service-row request-item" key={pro.professionalId}>
           <span className="service-row-icon"><Wallet size={18}/></span>
           <div className="min-w-0 flex-1"><b>{pro.professionalName}</b>
-            <small>{pro.completed} serviço(s) · recebido pela empresa {money(pro.grossCents)} · comissão gerada {money(pro.earnedCents)} · repassado confirmado {money(pro.paidCents)}</small>
+            <small>{pro.completed} serviço(s) · produção {money(pro.grossCents)} · clientes pagaram {money(pro.receivedCents)} · clientes a pagar {money(pro.customerPendingCents)} · comissão gerada {money(pro.earnedCents)} · repasse confirmado {money(pro.paidCents)}</small>
           </div>
           <strong>{money(pro.dueCents)} a receber</strong>
           {pro.pendingServices > 0 && <Button disabled={busy === pro.professionalId || !ended}
@@ -2934,7 +2950,7 @@ export default function App() {
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
-      <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage /> : <AccessDenied />} />
+      <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage user={user} /> : <AccessDenied />} />
       <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>
       <Route path="/comissoes" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=comissoes" replace/> : <AccessDenied/>}/>
       <Route path="/regras-comissao" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=regras" replace/> : <AccessDenied/>}/>

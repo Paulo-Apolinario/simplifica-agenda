@@ -17,6 +17,7 @@ export function findScheduleConflict(db, {
     FROM appointments a
     WHERE tenant_id = ?
       AND professional_id = ?
+      AND booking_source != 'direct'
       AND status NOT IN ('cancelado', 'faltou')
       AND NOT (${completedEarlySql})
       AND starts_at < ?

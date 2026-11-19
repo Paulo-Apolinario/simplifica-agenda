@@ -13,18 +13,19 @@ test("libera cancelamentos, faltas e conclusões em data anterior e permite excl
   const db = new Database(":memory:");
   db.exec(`
     CREATE TABLE appointments (
-      id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, status TEXT, completed_on TEXT
+      id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, status TEXT, completed_on TEXT, booking_source TEXT DEFAULT 'internal'
     );
     CREATE TABLE blocked_slots (
       id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, reason TEXT
     );
-    INSERT INTO appointments VALUES
+    INSERT INTO appointments (id, tenant_id, professional_id, starts_at, ends_at, status, completed_on) VALUES
       ('cancelled', 't', 'p', '2026-10-10T09:00:00', '2026-10-10T10:00:00', 'cancelado', NULL),
       ('missed', 't', 'p', '2026-10-10T09:00:00', '2026-10-10T10:00:00', 'faltou', NULL),
       ('active', 't', 'p', '2026-10-10T10:00:00', '2026-10-10T11:00:00', 'agendado', NULL),
       ('early', 't', 'p', '2026-10-10T09:00:00', '2026-10-10T10:00:00', 'concluido', '2026-10-09'),
       ('same-day', 't', 'p', '2026-10-10T11:00:00', '2026-10-10T12:00:00', 'concluido', '2026-10-10'),
       ('legacy', 't', 'p', '2026-10-10T12:00:00', '2026-10-10T13:00:00', 'concluido', NULL);
+    INSERT INTO appointments VALUES ('direct', 't', 'p', '2026-10-10T09:00:00', '2026-10-10T10:00:00', 'concluido', '2026-10-10', 'direct');
   `);
 
   assert.equal(findScheduleConflict(db, {
@@ -65,7 +66,7 @@ test("reconhece bloqueio global ou individual do profissional", () => {
   const db = new Database(":memory:");
   db.exec(`
     CREATE TABLE appointments (
-      id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, status TEXT, completed_on TEXT
+      id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, status TEXT, completed_on TEXT, booking_source TEXT DEFAULT 'internal'
     );
     CREATE TABLE blocked_slots (
       id TEXT, tenant_id TEXT, professional_id TEXT, starts_at TEXT, ends_at TEXT, reason TEXT

@@ -540,7 +540,7 @@ app.get("/api/overview", requireAuth, (req, res) => {
   const summary = db.prepare(`
     SELECT
       count(*) FILTER (WHERE substr(starts_at, 1, 10) = substr(?, 1, 10)
-        AND status NOT IN ('cancelado', 'faltou') AND NOT (${completedEarlySql})) AS today_count,
+        AND booking_source != 'direct' AND status NOT IN ('cancelado', 'faltou') AND NOT (${completedEarlySql})) AS today_count,
       count(DISTINCT client_id) FILTER (WHERE substr(starts_at, 1, 7) = ?
         AND status NOT IN ('cancelado', 'faltou')) AS active_clients,
       coalesce(sum(price_cents) FILTER (
@@ -989,7 +989,7 @@ app.get("/api/schedule", requireAuth, (req, res) => {
   if (!validDateTime(from) || !validDateTime(to) || from >= to) return fail(res, 400, "Período da agenda inválido.");
   const appointmentFilter = req.user.role === "profissional" ? "AND a.professional_id = ?" : "";
   const appointments = appointmentRows(tenant(req),
-    `AND a.starts_at < ? AND a.ends_at > ? AND NOT (${completedEarlySql}) ${appointmentFilter}`,
+    `AND a.booking_source != 'direct' AND a.starts_at < ? AND a.ends_at > ? AND NOT (${completedEarlySql}) ${appointmentFilter}`,
     req.user.role === "profissional" ? [to, from, req.user.id] : [to, from]);
   const blockedSlots = db.prepare(`
     SELECT b.id, b.professional_id AS professionalId, b.starts_at AS startsAt,
@@ -1014,7 +1014,7 @@ function professionalEarnings(tenantId, professionalId, month = null) {
   const whereMonth = month ? " AND substr(COALESCE(a.completed_on, a.starts_at), 1, 7) = ?" : "";
   const params = month ? [tenantId, professionalId, month] : [tenantId, professionalId];
   const rows = db.prepare(`SELECT a.id, a.starts_at AS startsAt, s.name AS serviceName,
-    c.name AS clientName, a.price_cents AS priceCents,
+    c.name AS clientName, a.price_cents AS priceCents, a.booking_source AS bookingSource, a.payment_method AS paymentMethod,
     a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent,
     CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents, cp.paid_at AS paidAt
     FROM appointments a
@@ -1041,10 +1041,11 @@ app.get("/api/commissions", requireAuth, allowRoles("dono"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const rows = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
-    a.starts_at AS startsAt, a.price_cents AS priceCents,
+    a.starts_at AS startsAt, a.price_cents AS priceCents, a.booking_source AS bookingSource, a.payment_method AS paymentMethod, c.name AS clientName,
     a.commission_percent AS commissionPercent, a.house_share_percent AS houseSharePercent, s.name AS serviceName,
     CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents, cp.paid_at AS paidAt
     FROM appointments a JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
+    JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
     JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
     LEFT JOIN commission_payments cp ON cp.appointment_id = a.id AND cp.tenant_id = a.tenant_id
     WHERE a.tenant_id = ? AND a.status = 'concluido' AND substr(COALESCE(a.completed_on, a.starts_at), 1, 7) = ?
@@ -1103,7 +1104,7 @@ function fortnightServices(tenantId, period) {
   if (!window) return null;
   const items = db.prepare(`SELECT a.id, a.professional_id AS professionalId, u.name AS professionalName,
     a.price_cents AS priceCents, a.commission_percent AS commissionPercent,
-    a.house_share_percent AS houseSharePercent, a.starts_at AS startsAt,
+    a.house_share_percent AS houseSharePercent, a.starts_at AS startsAt, a.payment_method AS paymentMethod,
     COALESCE(a.completed_on, substr(a.starts_at, 1, 10)) AS earnedOn,
     CASE WHEN cp.transfer_confirmed = 1 THEN cp.amount_cents ELSE NULL END AS paidCents,
     CASE WHEN cp.transfer_confirmed = 0 THEN 1 ELSE 0 END AS legacyUnverified
@@ -1124,11 +1125,13 @@ app.get("/api/settlements", requireAuth, allowRoles("dono"), (req, res) => {
     const current = summaries.get(item.professionalId) || {
       professionalId: item.professionalId, professionalName: item.professionalName,
       completed: 0, pendingServices: 0, grossCents: 0, earnedCents: 0, paidCents: 0,
-      dueCents: 0, legacyUnverified: 0,
+      dueCents: 0, legacyUnverified: 0, receivedCents: 0, customerPendingCents: 0,
     };
     const earned = commissionCents(item);
     current.completed++;
     current.grossCents += item.priceCents;
+    if (item.paymentMethod) current.receivedCents += item.priceCents;
+    else current.customerPendingCents += item.priceCents;
     current.earnedCents += earned;
     current.paidCents += item.paidCents ?? 0;
     current.dueCents += item.paidCents === null ? earned : 0;
@@ -1226,6 +1229,50 @@ app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("
   res.json({ ok: true });
 });
 
+function serviceTerms(tenantId, serviceId, professionalId) {
+  return db.prepare(`
+    SELECT s.duration_minutes AS duration, s.price_cents AS price,
+      COALESCE(psc.commission_percent, CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END) AS commission,
+      COALESCE(psc.house_share_percent,s.house_share_percent) AS houseShare
+    FROM services s
+    JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
+    LEFT JOIN professional_service_commissions psc ON psc.tenant_id=s.tenant_id AND psc.service_id=s.id AND psc.professional_id=u.id
+    WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
+  `).get(tenantId, serviceId, professionalId);
+}
+
+app.post("/api/direct-services", requireAuth, allowRoles("dono", "profissional", "recepcao"), (req, res) => {
+  const { clientId, professionalId, serviceId } = req.body ?? {};
+  if (!professionalId || !serviceId) return fail(res, 400, "Informe o serviço e o profissional.");
+  if (req.user.role === "profissional" && professionalId !== req.user.id)
+    return fail(res, 403, "Registre somente seus próprios serviços.");
+  const method = req.body?.paymentMethod ?? "";
+  if (method !== "" && !paymentMethods.includes(method)) return fail(res, 400, "Forma de pagamento inválida.");
+  if (method && req.user.role === "profissional") return fail(res, 403, "O recebimento deve ser registrado pelo caixa.");
+  if (!requireOpenCash(req, res)) return;
+  const business = tenant(req);
+  const chosen = serviceTerms(business, serviceId, professionalId);
+  const client = clientId ? db.prepare("SELECT id FROM clients WHERE id = ? AND tenant_id = ?").get(clientId, business) : null;
+  if (!chosen || (clientId && !client)) return fail(res, 400, "Cliente, serviço ou profissional inválido.");
+  const id = createId();
+  const finishedAt = localNow(business);
+  const day = finishedAt.slice(0, 10);
+  db.transaction(() => {
+    const resolvedClientId = client?.id ?? createId();
+    if (!client) db.prepare("INSERT INTO clients (id, tenant_id, name, notes) VALUES (?, ?, ?, ?)")
+      .run(resolvedClientId, business, "Cliente não informado", "__internal_anonymous__");
+    db.prepare(`INSERT INTO appointments
+      (id, tenant_id, client_id, professional_id, service_id, starts_at, ends_at, status,
+       price_cents, commission_percent, house_share_percent, notes, booking_source, completed_on, payment_method, paid_on, paid_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'concluido', ?, ?, ?, ?, 'direct', ?, ?, ?, ?)`)
+      .run(id, business, resolvedClientId, professionalId, serviceId,
+        addLocalMinutes(finishedAt, -chosen.duration), finishedAt, chosen.price, chosen.commission, chosen.houseShare,
+        String(req.body?.notes ?? "").trim(), day, method, method ? day : null, method ? new Date().toISOString() : null);
+    recordAppointmentAudit(business, id, "servico_avulso", req.user);
+  })();
+  res.status(201).json({ id, completedOn: day });
+});
+
 app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "recepcao"), (req, res) => {
   const { clientId, professionalId, serviceId } = req.body ?? {};
   const startsAt = String(req.body?.startsAt ?? "");
@@ -1235,15 +1282,7 @@ app.post("/api/appointments", requireAuth, allowRoles("dono", "profissional", "r
   if (req.user.role === "profissional" && professionalId !== req.user.id) {
     return fail(res, 403, "Profissionais só podem agendar na própria agenda.");
   }
-  const chosen = db.prepare(`
-    SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      COALESCE(psc.commission_percent, CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END) AS commission,
-      COALESCE(psc.house_share_percent,s.house_share_percent) AS houseShare
-    FROM services s
-    JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
-    LEFT JOIN professional_service_commissions psc ON psc.tenant_id=s.tenant_id AND psc.service_id=s.id AND psc.professional_id=u.id
-    WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND u.active = 1
-  `).get(tenant(req), serviceId, professionalId);
+  const chosen = serviceTerms(tenant(req), serviceId, professionalId);
   const client = clientId ? db.prepare("SELECT id FROM clients WHERE id = ? AND tenant_id = ?").get(clientId, tenant(req)) : null;
   if (!chosen || (clientId && !client)) return fail(res, 400, "Cliente, serviço ou profissional inválido.");
   const normalizedStart = startsAt.length === 16 ? `${startsAt}:00` : startsAt;
@@ -1307,6 +1346,8 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
     : null;
   const resetConsent = clientChanged && appointment.bookingSource === "public" && replacementClient.phone !== previousPhone;
   const status = req.body?.status ?? appointment.status;
+  if (appointment.bookingSource === "direct" && (status !== "concluido" || (req.body?.startsAt !== undefined && req.body.startsAt !== appointment.startsAt)))
+    return fail(res, 409, "Serviço avulso não pode ser convertido em agendamento.");
   const method = req.body?.paymentMethod === undefined ? appointment.paymentMethod : req.body.paymentMethod;
   const priceCents = req.body?.priceCents === undefined ? appointment.priceCents : Number(req.body.priceCents);
   if (!statuses.includes(status)) return fail(res, 400, "Status inválido.");
@@ -1401,6 +1442,7 @@ app.post("/api/blocked-slots", requireAuth, allowRoles("dono", "recepcao", "prof
     .get(professionalId, tenant(req))) return fail(res, 400, "Profissional inválido.");
   const conflict = db.prepare(`
     SELECT id FROM appointments a WHERE tenant_id = ?
+      AND booking_source != 'direct'
       AND status NOT IN ('cancelado', 'faltou')
       AND NOT (${completedEarlySql})
       AND (? IS NULL OR professional_id = ?)
@@ -1595,7 +1637,7 @@ app.get("/api/receivables/pending", requireAuth, allowRoles("dono", "recepcao"),
   res.json({ receivables: rows.map(row => ({
     id: row.id, clientName: row.clientName, serviceName: row.serviceName,
     professionalName: row.professionalName, startsAt: row.startsAt,
-    completedOn: row.completedOn, priceCents: row.priceCents,
+    completedOn: row.completedOn, priceCents: row.priceCents, bookingSource: row.bookingSource,
   })) });
 });
 app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
@@ -1824,7 +1866,7 @@ app.get("/api/reports/appointment-audit", requireAuth, allowRoles("dono"), (req,
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const action = String(req.query.action ?? "").trim();
-  const permitted = ["criacao", "confirmacao", "cancelamento", "remarcacao", "conclusao", "pagamento", "conciliacao", "status", "edicao", "comissao"];
+  const permitted = ["criacao", "servico_avulso", "confirmacao", "cancelamento", "remarcacao", "conclusao", "pagamento", "conciliacao", "status", "edicao", "comissao"];
   if (action && !permitted.includes(action)) return fail(res, 400, "Ação inválida.");
   const rows = db.prepare(`
     SELECT audit.id, audit.appointment_id AS appointmentId, audit.actor_name AS actorName,
