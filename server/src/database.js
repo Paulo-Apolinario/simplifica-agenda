@@ -297,6 +297,22 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS cash_movements_date_idx
     ON daily_cash_movements(tenant_id, cash_date, created_at);
+  CREATE TABLE IF NOT EXISTS operating_expenses (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    description TEXT NOT NULL, category TEXT NOT NULL,
+    expense_type TEXT NOT NULL CHECK(expense_type IN ('fixa','variavel')),
+    vendor TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+    amount_cents INTEGER NOT NULL CHECK(amount_cents > 0),
+    due_on TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pendente' CHECK(status IN ('pendente','pago','cancelado')),
+    created_by TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    paid_on TEXT, payment_method TEXT, paid_by TEXT REFERENCES users(id),
+    cash_movement_id TEXT UNIQUE REFERENCES daily_cash_movements(id),
+    canceled_at TEXT, canceled_by TEXT REFERENCES users(id)
+  );
+  CREATE INDEX IF NOT EXISTS operating_expenses_due_idx ON operating_expenses(tenant_id,status,due_on);
+  CREATE INDEX IF NOT EXISTS operating_expenses_paid_idx ON operating_expenses(tenant_id,paid_on);
 `);
 ensureColumn("daily_cash_closings", "supply_cents", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("daily_cash_closings", "withdrawal_cents", "INTEGER NOT NULL DEFAULT 0");

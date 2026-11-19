@@ -1713,6 +1713,94 @@ function cashDaySummary(tenantId, date) {
   return { date, receiptCount: rows.length, methods, expectedCashCents: methods.dinheiro,
     expectedTotalCents: rows.reduce((sum, row) => sum + row.priceCents, 0), receipts: rows };
 }
+const expenseCategories = ["aluguel","energia","agua","internet","materiais","fornecedores","manutencao","marketing","impostos","outros"];
+const expenseMethods = ["cash_drawer", ...paymentMethods, "boleto"];
+function expenseCashFlow(tenantId, month) {
+  const receivedCents = db.prepare("SELECT coalesce(sum(price_cents),0) AS total FROM appointments WHERE tenant_id=? AND status='concluido' AND payment_method!='' AND substr(paid_on,1,7)=?").get(tenantId,month).total;
+  const expensesCents = db.prepare("SELECT coalesce(sum(amount_cents),0) AS total FROM operating_expenses WHERE tenant_id=? AND status='pago' AND substr(paid_on,1,7)=?").get(tenantId,month).total;
+  const timezone = db.prepare("SELECT timezone FROM business_settings WHERE tenant_id=?").get(tenantId)?.timezone || "America/Sao_Paulo";
+  const payoutsCents = db.prepare(`SELECT cp.amount_cents AS amount, cp.paid_at AS paidAt, b.receipt_snapshot_json AS snapshot
+    FROM commission_payments cp LEFT JOIN payout_batches b ON b.id=cp.batch_id AND b.tenant_id=cp.tenant_id
+    WHERE cp.tenant_id=? AND cp.transfer_confirmed=1`).all(tenantId).reduce((sum,row)=>{
+      let day;
+      try { day=JSON.parse(row.snapshot)?.paidOn; } catch {}
+      if (!day && row.paidAt) {
+        const timestamp = new Date(row.paidAt.endsWith("Z") ? row.paidAt : row.paidAt.replace(" ","T")+"Z");
+        if (!Number.isNaN(timestamp.getTime())) {
+          const parts=Object.fromEntries(new Intl.DateTimeFormat("en-US",{timeZone:timezone,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(timestamp).map(p=>[p.type,p.value]));
+          day=parts.year+"-"+parts.month+"-"+parts.day;
+        }
+      }
+      return sum+(typeof day==="string"&&day.slice(0,7)===month?row.amount:0);
+    },0);
+  return {receivedCents,expensesCents,payoutsCents,balanceCents:receivedCents-expensesCents-payoutsCents};
+}
+function expenseFields(body) {
+  const description=String(body?.description??"").trim(), category=String(body?.category??"");
+  const expenseType=String(body?.expenseType??""), vendor=String(body?.vendor??"").trim(), notes=String(body?.notes??"").trim();
+  const amountCents=body?.amountCents, dueOn=String(body?.dueOn??"");
+  if (!description || description.length>200 || !expenseCategories.includes(category) || !["fixa","variavel"].includes(expenseType)
+      || vendor.length>200 || notes.length>1000 || !Number.isSafeInteger(amountCents) || amountCents<=0 || amountCents>100000000000 || !validCashDate(dueOn)) return null;
+  return {description,category,expenseType,vendor,notes,amountCents,dueOn};
+}
+app.get("/api/expenses", requireAuth, allowRoles("dono"), (req,res)=>{
+  const id=tenant(req), today=cashDay(id), month=String(req.query.month??today.slice(0,7));
+  if (!validMonth(month)) return fail(res,400,"Mês inválido.");
+  const expenses=db.prepare(`SELECT id,description,category,expense_type AS expenseType,vendor,notes,amount_cents AS amountCents,
+    due_on AS dueOn,status,paid_on AS paidOn,payment_method AS paymentMethod,cash_movement_id AS cashMovementId
+    FROM operating_expenses WHERE tenant_id=? AND (status='pendente' OR substr(due_on,1,7)=? OR substr(paid_on,1,7)=?)
+    ORDER BY CASE status WHEN 'pendente' THEN 0 WHEN 'pago' THEN 1 ELSE 2 END,due_on,id`).all(id,month,month);
+  const pending=expenses.filter(row=>row.status==="pendente");
+  res.setHeader("Cache-Control","no-store");
+  res.json({month,today,expenses,cashFlow:expenseCashFlow(id,month),
+    pendingCents:pending.reduce((s,r)=>s+r.amountCents,0),
+    overdueCents:pending.filter(r=>r.dueOn<today).reduce((s,r)=>s+r.amountCents,0)});
+});
+app.post("/api/expenses", requireAuth, allowRoles("dono"), (req,res)=>{
+  const fields=expenseFields(req.body);
+  if (!fields) return fail(res,400,"Confira descrição, categoria, tipo, valor e vencimento.");
+  const id=createId();
+  db.prepare(`INSERT INTO operating_expenses (id,tenant_id,description,category,expense_type,vendor,notes,amount_cents,due_on,created_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id,tenant(req),fields.description,fields.category,fields.expenseType,fields.vendor,fields.notes,fields.amountCents,fields.dueOn,req.user.id);
+  res.status(201).json({id});
+});
+app.patch("/api/expenses/:id", requireAuth, allowRoles("dono"), (req,res)=>{
+  const fields=expenseFields(req.body);
+  if (!fields) return fail(res,400,"Confira os dados da despesa.");
+  const result=db.prepare(`UPDATE operating_expenses SET description=?,category=?,expense_type=?,vendor=?,notes=?,amount_cents=?,due_on=?
+    WHERE id=? AND tenant_id=? AND status='pendente'`).run(fields.description,fields.category,fields.expenseType,fields.vendor,fields.notes,fields.amountCents,fields.dueOn,req.params.id,tenant(req));
+  if (!result.changes) return fail(res,409,"Conta não disponível para edição.");
+  res.json({ok:true});
+});
+app.post("/api/expenses/:id/cancel", requireAuth, allowRoles("dono"), (req,res)=>{
+  const result=db.prepare("UPDATE operating_expenses SET status='cancelado',canceled_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),canceled_by=? WHERE id=? AND tenant_id=? AND status='pendente'").run(req.user.id,req.params.id,tenant(req));
+  if (!result.changes) return fail(res,409,"Conta não disponível para cancelamento.");
+  res.json({ok:true});
+});
+app.post("/api/expenses/:id/pay", requireAuth, allowRoles("dono"), (req,res)=>{
+  const id=tenant(req),today=cashDay(id),paidOn=String(req.body?.paidOn??""),method=String(req.body?.paymentMethod??"");
+  if (!expenseMethods.includes(method)||!validCashDate(paidOn)||paidOn>today) return fail(res,400,"Informe a forma e a data real do pagamento.");
+  if (method==="cash_drawer"&&paidOn!==today) return fail(res,400,"Dinheiro da gaveta só pode ser registrado no caixa do dia.");
+  const outcome=db.transaction(()=>{
+    const expense=db.prepare("SELECT * FROM operating_expenses WHERE id=? AND tenant_id=? AND status='pendente'").get(req.params.id,id);
+    if (!expense) return "Conta não disponível para pagamento.";
+    let movementId=null;
+    if (method==="cash_drawer") {
+      const opening=cashOpening(id,today);
+      if (!opening||cashClosing(id,today)) return "Abra o caixa de hoje antes de pagar com dinheiro da gaveta.";
+      const movements=cashMovements(id,today);
+      if (expense.amount_cents>opening.openingCashCents+cashDaySummary(id,today).expectedCashCents+movements.supplyCents-movements.withdrawalCents) return "Dinheiro insuficiente na gaveta.";
+      movementId=createId();
+      db.prepare(`INSERT INTO daily_cash_movements (id,tenant_id,cash_date,movement_type,amount_cents,reason,created_by,created_by_name)
+        VALUES (?,?,?,'sangria',?,?,?,?)`).run(movementId,id,today,expense.amount_cents,"Despesa: "+expense.description,req.user.id,req.user.name||"Usuário");
+    }
+    db.prepare("UPDATE operating_expenses SET status='pago',paid_on=?,payment_method=?,paid_by=?,cash_movement_id=? WHERE id=? AND tenant_id=?")
+      .run(paidOn,method,req.user.id,movementId,expense.id,id);
+    return null;
+  })();
+  if (outcome) return fail(res,409,outcome);
+  res.json({ok:true});
+});
 app.get("/api/receivables/pending", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const rows = appointmentRows(tenant(req), "AND a.status = 'concluido' AND a.payment_method = ''");
   res.setHeader("Cache-Control", "no-store");
@@ -2020,7 +2108,7 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
     GROUP BY payment_method ORDER BY cents DESC`).all(tenant(req),month);
   res.json({ month, revenueCents: revenue.revenue_cents, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,
     productionCents, commissionTotalCents, establishmentShareCents: productionCents - commissionTotalCents,
-    byService, byProfessional, inactiveClients, daily, paymentBreakdown });
+    byService, byProfessional, inactiveClients, daily, paymentBreakdown, cashFlow:expenseCashFlow(tenant(req),month) });
 });
 
 app.get("/api/export/clients.csv", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {

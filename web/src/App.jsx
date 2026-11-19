@@ -2117,10 +2117,11 @@ function FinancialHubPage({ user }) {
   const location = useLocation();
   const navigate = useNavigate();
   const requestedTab = new URLSearchParams(location.search).get("aba") || "caixa";
-  const available = ["caixa", "comissoes", "regras", "fechamentos"];
+  const available = ["caixa", "despesas", "comissoes", "regras", "fechamentos"];
   const tab = requestedTab === "pendentes" ? "pendentes" : user.role === "dono" && available.includes(requestedTab) ? requestedTab : "caixa";
   const tabs = [
     {id:"caixa",title:"Caixa e recebimentos",icon:Wallet},
+    {id:"despesas",title:"Despesas e contas a pagar",icon:CircleDollarSign},
     {id:"comissoes",title:"Lançamentos dos profissionais",icon:CircleDollarSign},
     {id:"regras",title:"Regras de comissão",icon:Settings},
     {id:"fechamentos",title:"Fechamentos quinzenais",icon:CalendarDays},
@@ -2128,7 +2129,7 @@ function FinancialHubPage({ user }) {
   return <div className="premium-finance">
     {user.role === "dono" && <>
       <PageTitle eyebrow="CENTRAL FINANCEIRA" title="Gestão financeira"
-        description="Caixa, comissões, regras e fechamentos em um único lugar." />
+        description="Caixa, despesas, comissões e fechamentos em um único lugar." />
       <div className="settings-tab-bar premium-finance-tabs" role="tablist" aria-label="Seções da gestão financeira">
         {tabs.map(item => <button key={item.id} type="button" role="tab"
           aria-selected={tab === item.id || (tab === "pendentes" && item.id === "caixa")} className={tab === item.id || (tab === "pendentes" && item.id === "caixa") ? "active" : ""}
@@ -2139,10 +2140,99 @@ function FinancialHubPage({ user }) {
     </>}
     {tab === "caixa" && <ReceivablesPage user={user}/>}
     {tab === "pendentes" && <PendingPaymentsPage user={user}/>}
+    {tab === "despesas" && user.role === "dono" && <ExpensesPage/>}
     {tab === "comissoes" && user.role === "dono" && <TeamCommissionsPage user={user}/>}
     {tab === "regras" && user.role === "dono" && <CommissionPoliciesPage/>}
     {tab === "fechamentos" && user.role === "dono" && <SettlementsPage/>}
   </div>;
+}
+
+const expenseCategories = {aluguel:"Aluguel",energia:"Energia",agua:"Água",internet:"Internet",materiais:"Materiais",fornecedores:"Fornecedores",manutencao:"Manutenção",marketing:"Marketing",impostos:"Impostos",outros:"Outros"};
+const expensePaymentNames = {...paymentNames,dinheiro:"Dinheiro (fora da gaveta)",cash_drawer:"Dinheiro da gaveta",boleto:"Boleto"};
+function CashFlowSummary({ flow }) {
+  if (!flow) return null;
+  return <section className="panel expense-flow"><div className="panel-heading"><div><p className="eyebrow">REGIME DE CAIXA</p><h2>Entradas e saídas registradas no mês</h2><p className="panel-subtitle">Considera a data real de recebimento ou pagamento. Não representa lucro, saldo bancário ou dinheiro na gaveta.</p></div></div>
+    <div className="expense-flow-grid">
+      <div><small>Recebimentos de clientes</small><strong>{money(flow.receivedCents)}</strong></div>
+      <div><small>Despesas pagas</small><strong>{money(flow.expensesCents)}</strong></div>
+      <div><small>Repasses pagos aos profissionais</small><strong>{money(flow.payoutsCents)}</strong></div>
+      <div className={flow.balanceCents<0?"expense-negative":"expense-balance"}><small>Saldo das movimentações</small><strong>{money(flow.balanceCents)}</strong></div>
+    </div><p className="panel-subtitle">Recebimentos menos despesas pagas e repasses confirmados. Contas em aberto, sangrias e suprimentos não entram diretamente neste cálculo.</p>
+  </section>;
+}
+function ExpensesPage() {
+  const [month,setMonth]=useState(localDate().slice(0,7)), [filter,setFilter]=useState("pendente");
+  const [data,setData]=useState(null), [error,setError]=useState(""), [revision,setRevision]=useState(0);
+  const [modal,setModal]=useState(null), [busy,setBusy]=useState(false);
+  useEffect(()=>{
+    let active=true;setData(null);setError("");
+    api("/expenses?month="+encodeURIComponent(month)).then(result=>{if(active)setData(result);}).catch(err=>{if(active)setError(err.message);});
+    return ()=>{active=false;};
+  },[month,revision]);
+  const refresh=()=>setRevision(n=>n+1);
+  const cancel=async item=>{
+    if(!await confirmAction("Cancelar a conta "+item.description+"? Ela permanecerá no histórico."))return;
+    setBusy(true);setError("");
+    try{await api("/expenses/"+item.id+"/cancel",{method:"POST"});refresh();}catch(err){setError(err.message);}finally{setBusy(false);}
+  };
+  const rows=(data?.expenses||[]).filter(row=>filter==="todos"||row.status===filter);
+  return <div className="expenses-page">
+    <PageTitle title="Despesas e contas a pagar" description="Organize despesas fixas e variáveis, vencimentos e pagamentos efetivos." actions={<Button onClick={()=>setModal({mode:"edit"})}><Plus size={16}/> Nova despesa</Button>}/>
+    <div className="panel expense-filters"><Field label="Mês de referência" type="month" value={month} onChange={e=>e.target.value&&setMonth(e.target.value)}/><SelectField label="Exibir" value={filter} onChange={e=>setFilter(e.target.value)}><option value="pendente">Contas em aberto</option><option value="pago">Pagas</option><option value="cancelado">Canceladas</option><option value="todos">Todas</option></SelectField><Button variant="secondary" onClick={refresh}>Atualizar</Button></div>
+    <ErrorMessage>{error}</ErrorMessage>
+    {!data ? !error&&<Loading label="Carregando despesas..."/> : <>
+      <section className="stats-grid finance-stats">
+        <StatCard title="Contas em aberto" value={money(data.pendingCents)} note="Todos os vencimentos" icon={Wallet} tone="orange"/>
+        <StatCard title="Contas vencidas" value={money(data.overdueCents)} note="Ainda não pagas" icon={Clock3} tone="orange"/>
+        <StatCard title="Despesas pagas no mês" value={money(data.cashFlow.expensesCents)} note="Data efetiva do pagamento" icon={CheckCheck} tone="green"/>
+      </section>
+      <section className="panel expense-list"><div className="panel-heading"><div><h2>Contas e histórico</h2><p className="panel-subtitle">Todas as pendências, inclusive futuras, e histórico referente ao vencimento ou pagamento no mês escolhido.</p></div><span className="count-chip">{rows.length} registro(s)</span></div>
+        {rows.length===0?<EmptyState icon={Wallet} title="Nenhuma conta nesta seleção" description="Cadastre uma despesa ou altere o filtro."/>:rows.map(item=><div className="expense-row" key={item.id}>
+          <div className="expense-row-details"><b>{item.description}</b><small>{expenseCategories[item.category]} · {item.expenseType==="fixa"?"Fixa":"Variável"}{item.vendor?" · "+item.vendor:""}</small><small>Vencimento: {dateLabel(item.dueOn)}{item.paidOn?" · Pago em "+dateLabel(item.paidOn)+" · "+expensePaymentNames[item.paymentMethod]:""}</small>{item.notes&&<small>{item.notes}</small>}</div>
+          <div className="expense-row-money"><strong>{money(item.amountCents)}</strong><span className={"expense-status "+(item.status==="pendente"&&item.dueOn<data.today?"vencido":item.status)}>{item.status==="pago"?"Pago":item.status==="cancelado"?"Cancelado":item.dueOn<data.today?"Vencido":"Em aberto"}</span></div>
+          {item.status==="pendente"&&<div className="expense-row-actions"><Button onClick={()=>setModal({mode:"pay",item})}>Dar baixa</Button><Button variant="secondary" onClick={()=>setModal({mode:"edit",item})}>Editar</Button><Button variant="secondary" disabled={busy} onClick={()=>cancel(item)}>Cancelar</Button></div>}
+        </div>)}
+      </section>
+      <CashFlowSummary flow={data.cashFlow}/>
+    </>}
+    {modal&&<ExpenseForm key={modal.mode+String(modal.item?.id)} mode={modal.mode} item={modal.item} today={data?.today||localDate()} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);refresh();}}/>}
+  </div>;
+}
+function ExpenseForm({mode,item,today,onClose,onSaved}) {
+  const [form,setForm]=useState({description:item?.description||"",category:item?.category||"outros",expenseType:item?.expenseType||"variavel",vendor:item?.vendor||"",notes:item?.notes||"",amount:item?(item.amountCents/100).toFixed(2):"",dueOn:item?.dueOn||today,paidOn:today,paymentMethod:""});
+  const [busy,setBusy]=useState(false),[error,setError]=useState("");
+  const set=(key,value)=>setForm(x=>({...x,[key]:value}));
+  const close=()=>{if(!busy)onClose();};
+  const submit=async e=>{
+    e.preventDefault();if(busy)return;setBusy(true);setError("");
+    try {
+      if(mode==="pay")await api("/expenses/"+item.id+"/pay",{method:"POST",body:{paidOn:form.paidOn,paymentMethod:form.paymentMethod}});
+      else {
+        const amountCents=Math.round(Number(form.amount)*100);
+        if(!Number.isSafeInteger(amountCents)||amountCents<=0)throw new Error("Informe um valor positivo.");
+        await api(item?"/expenses/"+item.id:"/expenses",{method:item?"PATCH":"POST",body:{...form,amountCents}});
+      }
+      onSaved();
+    }catch(err){setError(err.message);}finally{setBusy(false);}
+  };
+  return <Modal title={mode==="pay"?"Registrar pagamento":item?"Editar despesa":"Nova despesa"} onClose={close}>
+    <form className="expense-form" onSubmit={submit}>
+      {mode==="pay"?<>
+        <p className="panel-subtitle">{item.description} · <b>{money(item.amountCents)}</b></p>
+        <SelectField label="Forma de pagamento" required value={form.paymentMethod} onChange={e=>{set("paymentMethod",e.target.value);if(e.target.value==="cash_drawer")set("paidOn",today);}}><option value="">Selecione</option>{Object.entries(expensePaymentNames).map(([key,label])=><option key={key} value={key}>{label}</option>)}</SelectField>
+        <Field label="Data efetiva do pagamento" type="date" required max={today} disabled={form.paymentMethod==="cash_drawer"} value={form.paidOn} onChange={e=>set("paidOn",e.target.value)}/>
+        <p className="panel-subtitle">{form.paymentMethod==="cash_drawer"?"A baixa registrará uma sangria no caixa aberto de hoje.":"Pagamentos externos não alteram o dinheiro da gaveta."} Confirme somente se o pagamento já ocorreu.</p>
+      </>:<>
+        <Field label="Descrição" required maxLength={200} value={form.description} onChange={e=>set("description",e.target.value)} />
+        <div className="expense-form-grid"><SelectField label="Categoria" value={form.category} onChange={e=>set("category",e.target.value)}>{Object.entries(expenseCategories).map(([key,label])=><option key={key} value={key}>{label}</option>)}</SelectField><SelectField label="Tipo" value={form.expenseType} onChange={e=>set("expenseType",e.target.value)}><option value="fixa">Fixa</option><option value="variavel">Variável</option></SelectField></div>
+        <div className="expense-form-grid"><Field label="Valor (R$)" required type="number" min="0.01" max="1000000000" step="0.01" value={form.amount} onChange={e=>set("amount",e.target.value)}/><Field label="Vencimento" required type="date" value={form.dueOn} onChange={e=>set("dueOn",e.target.value)}/></div>
+        <Field label="Fornecedor (opcional)" maxLength={200} value={form.vendor} onChange={e=>set("vendor",e.target.value)}/>
+        <Field label="Observações (opcional)"><textarea className="input" maxLength={1000} value={form.notes} onChange={e=>set("notes",e.target.value)}/></Field>
+      </>}
+      <ErrorMessage>{error}</ErrorMessage>
+      <div className="modal-actions"><Button type="button" variant="secondary" disabled={busy} onClick={close}>Cancelar</Button><Button type="submit" disabled={busy}>{busy?"Salvando...":mode==="pay"?"Confirmar pagamento":"Salvar despesa"}</Button></div>
+    </form>
+  </Modal>;
 }
 
 function ReceivablesPage({ user }) {
@@ -2340,6 +2430,7 @@ function FinancePage() {
       <StatCard title="Tipos de serviço realizados" value={report?.byService?.length ?? "—"} note="Serviços diferentes, não quantidade de atendimentos" icon={Scissors} tone="purple" />
       <StatCard title="Clientes para reativar" value={report?.inactiveClients?.length ?? "—"} note="Sem voltar há 30 dias ou mais" icon={Users} tone="orange" />
     </section>
+    <CashFlowSummary flow={report.cashFlow}/>
     <ReportDailyChart key={month} daily={report.daily||[]}/>
     <div className="reports-grid">
       <ReportSplit report={report}/>

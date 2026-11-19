@@ -379,7 +379,28 @@
 /* Finance — separate cash inflow, service production and professional payouts. */
 .premium-finance {display:grid;gap:17px;min-width:0;}
 .premium-finance > .page-title-row {margin-bottom:3px;}
-.premium-finance .premium-finance-tabs {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:0;margin:0 0 9px;background:transparent;border:0;overflow:visible;}
+.premium-finance .premium-finance-tabs {display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;padding:0;margin:0 0 9px;background:transparent;border:0;overflow:visible;}
+.expenses-page,.expense-form {display:grid;gap:16px;min-width:0;}
+.expense-filters {display:flex;gap:14px;align-items:end;flex-wrap:wrap;padding:18px;}
+.expense-filters .field {flex:1;min-width:160px;}
+.expense-list,.expense-flow {padding:20px;margin-bottom:16px;}
+.expense-row {display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:15px 0;border-bottom:1px solid var(--line);}
+.expense-row:last-child {border-bottom:0;}
+.expense-row-details {flex:1;min-width:180px;display:grid;gap:5px;overflow-wrap:anywhere;}
+.expense-row-details small,.expense-flow-grid small {color:var(--muted);}
+.expense-row-money {display:grid;justify-items:end;gap:6px;}
+.expense-row-actions {display:flex;gap:7px;flex-wrap:wrap;}
+.expense-status {font-size:11px;font-weight:600;border-radius:999px;padding:5px 9px;background:#eaf2ff;color:#2256cc;}
+.expense-status.pago {background:#d9f8e8;color:#087849;}
+.expense-status.vencido {background:#fff1dc;color:#9a4600;}
+.expense-status.cancelado {background:#eef0f3;color:#525b6b;}
+.expense-flow-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:16px 0;}
+.expense-flow-grid>div {border:1px solid var(--line);border-radius:12px;padding:14px;display:grid;gap:8px;}
+.expense-flow-grid strong {font-size:20px;overflow-wrap:anywhere;}
+.expense-flow-grid .expense-balance strong {color:#07966a;}
+.expense-flow-grid .expense-negative strong {color:#c24139;}
+.expense-form-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;}
+@media(max-width:600px){.expense-row-actions{width:100%;}.expense-row-actions .button{flex:1;}.expense-row-money{justify-items:start;}.expense-filters .field{min-width:100%;}}
 .premium-finance-tabs [role="tab"] {min-height:78px;display:flex;align-items:center;text-align:left;gap:10px;white-space:normal;min-width:0;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--muted);box-shadow:var(--premium-shadow);font-size:12px;font-weight:600;}
 .premium-finance-tabs [role="tab"].active {background:#2256cc;color:#fff;border-color:#2256cc;box-shadow:0 6px 18px #2256cc30;}
 .finance-tab-icon {display:grid;place-items:center;flex:0 0 35px;width:35px;height:35px;border-radius:10px;background:#edf3ff;color:#2563eb;}

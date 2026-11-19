@@ -85,6 +85,10 @@ test("SaaS operator, individual commissions, settlement and WhatsApp notice stat
     const closed=await request("/settlements","POST",{professionalId:proId,period:"2026-10-1",expectedTotalCents:7500});
     assert.equal(closed.status,201,JSON.stringify(closed.body));
     assert.equal(closed.body.batch.totalCents,7500);
+    const payoutDate=JSON.parse(db.prepare("SELECT receipt_snapshot_json FROM payout_batches WHERE id=?").get(closed.body.batch.id).receipt_snapshot_json).paidOn;
+    const flow=(await request("/reports?month="+payoutDate.slice(0,7))).body.cashFlow;
+    assert.equal(flow.payoutsCents,7500);
+    assert.equal(flow.balanceCents,flow.receivedCents-flow.expensesCents-7500);
     assert.equal((await request("/settlements","POST",{professionalId:proId,period:"2026-10-1"})).status,409);
     const paid=(await request("/settlements?period=2026-10-1")).body;
     assert.equal(paid.professionals[0].dueCents,0);
