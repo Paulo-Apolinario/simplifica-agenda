@@ -426,6 +426,14 @@ const navItems = [
 
 function Shell({ user, onLogout, children }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem("simplifica:sidebar-collapsed") === "true"; } catch { return false; }
+  });
+  const toggleSidebar = () => setCollapsed(previous => {
+    const next = !previous;
+    try { localStorage.setItem("simplifica:sidebar-collapsed", String(next)); } catch {}
+    return next;
+  });
   const location = useLocation();
   const [businessName, setBusinessName] = useState("Simplifica Agenda");
   const [businessLogo, setBusinessLogo] = useState("");
@@ -469,10 +477,10 @@ function Shell({ user, onLogout, children }) {
     ? "Caixa e recebimentos"
     : (visibleNavItems.find((item) => item.to === location.pathname)?.label ?? "Simplifica Agenda");
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${collapsed ? "app-shell-collapsed" : ""}`}>
       {mobileOpen && <button className="sidebar-scrim" onClick={() => setMobileOpen(false)} aria-label="Fechar menu" />}
       <aside id="menu-principal" className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
-        <Link to="/" className="brand-lockup" onClick={() => setMobileOpen(false)}>
+        <Link to="/" className="brand-lockup" aria-label="Simplifica Agenda — visão geral" onClick={() => setMobileOpen(false)}>
           <span className="brand-mark"><img src="/assets/simplifica-perfil.svg" alt="" /></span>
           <span className="brand-type"><b>simplifica<span>.</span></b><small>AGENDA INTELIGENTE</small></span>
         </Link>
@@ -484,6 +492,8 @@ function Shell({ user, onLogout, children }) {
           <span className="nav-caption">MENU PRINCIPAL</span>
           {visibleNavItems.map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} onClick={() => setMobileOpen(false)}
+              title={to === "/recebimentos" && user.role === "recepcao" ? "Caixa e recebimentos" : label}
+              aria-label={to === "/recebimentos" && user.role === "recepcao" ? "Caixa e recebimentos" : label}
               className={({ isActive }) => `nav-link ${isActive ? "nav-link-active" : ""}`}>
               <Icon size={18} strokeWidth={1.8} /><span>{to === "/recebimentos" && user.role === "recepcao" ? "Caixa e recebimentos" : label}</span>
               {to==="/solicitacoes" && pendingOnline>0 && <span className="nav-request-count" aria-label={`${pendingOnline} solicitações pendentes`}>{pendingOnline>99?"99+":pendingOnline}</span>}
@@ -507,6 +517,7 @@ function Shell({ user, onLogout, children }) {
         }}>Ambiente demonstrativo · somente visualização. Para cadastrar, alterar e receber pagamentos, utilize uma conta comercial.</div>}
         <header className="topbar">
           <button className="icon-button mobile-menu-button" onClick={() => setMobileOpen(!mobileOpen)} aria-expanded={mobileOpen} aria-controls="menu-principal" aria-label="Menu principal"><Menu size={21} /></button>
+          <button type="button" className="icon-button desktop-sidebar-toggle" onClick={toggleSidebar} aria-expanded={!collapsed} aria-controls="menu-principal" aria-label={collapsed ? "Expandir menu lateral" : "Recolher menu lateral"} title={collapsed ? "Expandir menu lateral" : "Recolher menu lateral"}>{collapsed ? <ChevronRight size={19}/> : <ChevronLeft size={19}/>}</button>
           <div className="topbar-breadcrumb"><span>{businessName}</span><ChevronRight size={14} /><b>{pageName}</b></div>
           <div className="topbar-right">
             <span className="today-pill"><span /> Sistema funcionando</span>
@@ -529,15 +540,15 @@ function Shell({ user, onLogout, children }) {
   );
 }
 
-function PageTitle({ eyebrow, title, description, actions, actionClassName = "" }) {
-  return <div className="page-title-row">
+function PageTitle({ eyebrow, title, description, actions, actionClassName = "", dashboard = false }) {
+  return <div className={`page-title-row ${dashboard ? "dashboard-hero" : ""}`}>
     <div><p className="eyebrow">{eyebrow}</p><h1>{title}</h1>{description && <p className="page-description">{description}</p>}</div>
     {actions && <div className={`page-actions ${actionClassName}`.trim()}>{actions}</div>}
   </div>;
 }
 
 function StatCard({ title, value, note, icon: Icon, tone = "blue" }) {
-  return <article className="stat-card">
+  return <article className="stat-card" data-tone={tone}>
     <div className={`stat-icon stat-${tone}`}><Icon size={19} /></div>
     <div className="stat-copy"><span>{title}</span><strong>{value}</strong><small>{note}</small></div>
   </article>;
@@ -579,7 +590,7 @@ function PendingPaymentsCard({ user }) {
   const [open, setOpen] = useState(false);
   if (user.tenantId === "tenant-salao-demo") return <StatCard title="Pagamentos pendentes" value="—" note="Disponível na operação comercial" icon={Wallet}/>;
   return <>
-    <button type="button" className={`stat-card pending-dashboard-card ${pending.length ? "has-pending" : ""}`}
+    <button type="button" data-tone={pending.length ? "orange" : "green"} className={`stat-card pending-dashboard-card ${pending.length ? "has-pending" : ""}`}
       onClick={() => { setOpen(true); refresh(); }}>
       <div className={`stat-icon stat-${pending.length ? "orange" : "green"}`}><Wallet size={19}/></div>
       <div className="stat-copy"><span>Pagamentos pendentes</span>
@@ -657,7 +668,7 @@ function ReceptionDashboard({ user }) {
   const waiting = schedule.appointments.filter(item => item.status === "agendado");
   const confirmed = schedule.appointments.filter(item => item.status === "confirmado");
   return <>
-    <PageTitle actionClassName="dashboard-top-actions" eyebrow="CENTRAL DE ATENDIMENTO" title={`Bom trabalho, ${user.name.split(" ")[0]} 👋`}
+    <PageTitle dashboard actionClassName="dashboard-top-actions" eyebrow="CENTRAL DE ATENDIMENTO" title={`Bom trabalho, ${user.name.split(" ")[0]} 👋`}
       description="Acompanhe os horários, confirme solicitações e organize o atendimento ao cliente."
       actions={<Link className="button button-primary dashboard-action-button" to="/solicitacoes"><ClipboardCheck size={16}/> Solicitações online</Link>}/>
     <ErrorMessage>{error}</ErrorMessage>
@@ -700,9 +711,9 @@ function OverviewPage({ user }) {
   const refresh = useCallback(() => api("/overview").then(setData).catch((reason) => setError(reason.message)), []);
   useEffect(() => { refresh(); }, [refresh]);
   const navigate = useNavigate();
-  if (!data && !error) return <Loading />;
+  if (!data && !error) return <div className="dashboard-skeleton" aria-busy="true" aria-label="Carregando visão geral"><div/><section>{Array.from({length:4},(_,i)=><div key={i}/>)}</section><div/></div>;
   return <>
-    <PageTitle actionClassName={user.role === "dono" ? "dashboard-top-actions" : ""} eyebrow={`${user.role === "profissional" ? "MINHA ROTINA" : "RESUMO DO NEGÓCIO"} · ${dateLabel(localDate(), { weekday: "long" }).toUpperCase()}`} title={`Olá, ${user.name.split(" ")[0]} 👋`}
+    <PageTitle dashboard actionClassName={user.role === "dono" ? "dashboard-top-actions" : ""} eyebrow={`${user.role === "profissional" ? "MINHA ROTINA" : "RESUMO DO NEGÓCIO"} · ${dateLabel(localDate(), { weekday: "long" }).toUpperCase()}`} title={`Olá, ${user.name.split(" ")[0]} 👋`}
       description={user.role === "profissional" ? "Seus horários, serviços concluídos e comissões em um só lugar." : "Aqui está um resumo do seu negócio. Tenha um ótimo dia!"}
       actions={<Button className={user.role === "dono" ? "dashboard-action-button" : ""} onClick={() => navigate(user.role === "profissional" ? "/meus-atendimentos" : "/agenda")}>
         <CalendarDays size={17} /> {user.role === "profissional" ? "Meus atendimentos" : "Ver agenda"}
@@ -737,7 +748,7 @@ function OverviewPage({ user }) {
       <div className="panel shortcut-panel">
         <div className="panel-heading"><div><p className="eyebrow">ACESSO RÁPIDO</p><h2>Atalhos de trabalho</h2></div></div>
         <div className="shortcuts">
-          <Link to="/agenda" className="shortcut-item"><span className="shortcut-icon blue"><CalendarDays size={18} /></span><span><b>Organizar agenda</b><small>Visualize sua semana</small></span><ArrowRight size={15} /></Link>
+          <Link to="/agenda" className="shortcut-item"><span className="shortcut-icon blue"><CalendarDays size={18} /></span><span><b>Organizar agenda</b><small>Visualize os horários do dia</small></span><ArrowRight size={15} /></Link>
           {user.role === "profissional" ? <>
             <Link to="/meus-atendimentos" className="shortcut-item"><span className="shortcut-icon violet"><ClipboardCheck size={18}/></span><span><b>Registrar serviços</b><small>Concluir atendimentos realizados</small></span><ArrowRight size={15}/></Link>
             <Link to="/meus-ganhos" className="shortcut-item"><span className="shortcut-icon green"><Wallet size={18}/></span><span><b>Meus ganhos</b><small>Comissões pagas e a receber</small></span><ArrowRight size={15}/></Link>
