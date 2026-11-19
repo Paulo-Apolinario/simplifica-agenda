@@ -1703,7 +1703,7 @@ function CashOpeningPanel({ revision, onOpened }) {
   </section>;
 }
 
-function DailyCashClosing({ revision, user, children }) {
+function DailyCashClosing({ revision, user, children, onClosed }) {
   const [date, setDate] = useState(localDate().slice(0, 10));
   const [summary, setSummary] = useState(null);
   const [closings, setClosings] = useState([]);
@@ -1778,13 +1778,14 @@ function DailyCashClosing({ revision, user, children }) {
       await api("/cash/closings", {method:"POST", body:{date, countedCashCents, notes}});
       setUpdated(n => n + 1);
       setNotes("");
+      onClosed();
     } catch (reason) { setError(reason.message); }
     finally { setBusy(false); }
   };
   const methods = summary?.closing?.methods || summary?.methods || {};
   return <>
-  <section className="panel management-panel" id="caixa-do-dia">
-    <div className="panel-heading">
+  <section className="panel management-panel cash-daily" id="caixa-do-dia">
+    <div className="panel-heading cash-daily-heading">
       <div><p className="eyebrow">CONFERÊNCIA DIÁRIA</p><h2>{summary?.today && date !== summary.today ? "Caixa da data selecionada" : "Caixa de hoje"}</h2>
         <p className="panel-subtitle">Registre a abertura em espécie, confira os recebimentos e encerre o dia. O saldo inicial não é faturamento.</p></div>
       <input className="input" type="date" aria-label="Data do caixa" value={date}
@@ -1803,28 +1804,42 @@ function DailyCashClosing({ revision, user, children }) {
         {summary.opening.notes && <p className="panel-subtitle">{summary.opening.notes}</p>}
       </div>}
 
-      {summary.cashState === "open" && date === summary.today && <div className="panel" style={{marginTop:16}}>
+      <section className="cash-detail-section" id="pagamentos-do-dia">
+        <div className="panel-heading"><div><h3>Pagamentos registrados</h3>
+          <p className="panel-subtitle">Recebimentos de {dateLabel(date)}.</p></div></div>
+        {summary.receipts.length ? <div className="management-list">
+          {summary.receipts.map(item => <article className="service-row cash-payment-row" key={item.id}>
+            <span className="service-row-icon"><Check size={18}/></span>
+            <div className="cash-payment-info"><b>{item.clientName} · {item.serviceName}</b>
+              <small>Profissional: {item.professionalName}</small>
+              <small>Atendimento: {dateTimeLabel(item.startsAt)}{item.paidAt ? ` · Recebido: ${cashTimestamp(item.paidAt, summary.timezone)}` : ""}</small></div>
+            <span className="cash-method-chip">{paymentNames[item.paymentMethod] || item.paymentMethod}</span>
+            <strong>{money(item.priceCents)}</strong>
+          </article>)}
+        </div> : <p className="report-empty">Nenhum pagamento registrado nesta data.</p>}
+      </section>
+
+      {summary.cashState === "open" && date === summary.today && <div className="panel cash-movement-panel">
         <h3>Movimentação em espécie</h3>
         <p className="panel-subtitle">Sangria é retirada; suprimento é entrada de troco. Nenhum dos dois é faturamento.</p>
-        <div className="month-filter">
-          <label htmlFor="cash-movement-type">Tipo</label>
+        <div className="cash-form-grid">
+          <label className="field" htmlFor="cash-movement-type"><span className="field-label">Tipo</span>
           <select className="input" id="cash-movement-type" value={movementType}
             onChange={e=>setMovementType(e.target.value)}>
             <option value="sangria">Sangria — retirada</option>
             <option value="suprimento">Suprimento — entrada</option>
-          </select>
-          <label htmlFor="cash-movement-amount">Valor (R$)</label>
-          <input id="cash-movement-amount" className="input month-input" inputMode="decimal"
-            value={movementAmount} onChange={e=>setMovementAmount(e.target.value)} placeholder="0,00"/>
-        </div>
-        <div className="month-filter">
-          <label htmlFor="cash-movement-reason">Motivo</label>
+          </select></label>
+          <label className="field" htmlFor="cash-movement-amount"><span className="field-label">Valor (R$)</span>
+          <input id="cash-movement-amount" className="input" inputMode="decimal"
+            value={movementAmount} onChange={e=>setMovementAmount(e.target.value)} placeholder="0,00"/></label>
+          <label className="field cash-form-wide" htmlFor="cash-movement-reason"><span className="field-label">Motivo</span>
           <input id="cash-movement-reason" className="input" maxLength={250} value={movementReason}
-            onChange={e=>setMovementReason(e.target.value)} placeholder="Ex.: retirada para depósito"/>
+            onChange={e=>setMovementReason(e.target.value)} placeholder="Ex.: retirada para depósito"/></label>
         </div>
         <Button disabled={busy} onClick={recordMovement}>Registrar movimentação</Button>
       </div>}
-      <div className="management-list">
+      <div className="management-list cash-detail-section">
+        <h3>Movimentações registradas</h3>
         <div className="service-row"><b>Suprimentos</b>
           <strong>{money(summary.closing?.supplyCents ?? summary.supplyCents ?? 0)}</strong></div>
         <div className="service-row"><b>Sangrias</b>
@@ -1837,7 +1852,8 @@ function DailyCashClosing({ revision, user, children }) {
           <strong>{money(movement.amountCents)}</strong>
         </article>)}
       </div>
-      <div className="management-list">
+      <div className="management-list cash-detail-section">
+        <h3>Total por forma de pagamento</h3>
         {Object.entries(paymentNames).map(([key,label]) => <div className="service-row" key={key}>
           <span className="service-row-icon"><Wallet size={18}/></span>
           <div className="min-w-0 flex-1"><b>{label}</b></div>
@@ -1851,15 +1867,13 @@ function DailyCashClosing({ revision, user, children }) {
         <p className="panel-subtitle">Dinheiro contado: {money(summary.closing.countedCashCents)} · Diferença: {money(summary.closing.differenceCents)}</p>
         {summary.closing.notes && <p className="panel-subtitle">Observação: {summary.closing.notes}</p>}
       </div> : summary.opening ? <>
-        <div className="month-filter" style={{marginTop:16}}>
-          <label htmlFor="counted-cash">Dinheiro contado (R$)</label>
-          <input id="counted-cash" className="input month-input" inputMode="decimal"
-            value={counted} onChange={e => setCounted(e.target.value)} placeholder="0,00"/>
-        </div>
-        <div className="month-filter">
-          <label htmlFor="cash-notes">Observações da conferência</label>
+        <div className="cash-form-grid cash-detail-section">
+          <label className="field" htmlFor="counted-cash"><span className="field-label">Dinheiro contado (R$)</span>
+          <input id="counted-cash" className="input" inputMode="decimal"
+            value={counted} onChange={e => setCounted(e.target.value)} placeholder="0,00"/></label>
+          <label className="field" htmlFor="cash-notes"><span className="field-label">Observações da conferência</span>
           <textarea id="cash-notes" className="input" maxLength={500} value={notes}
-            onChange={e => setNotes(e.target.value)} placeholder="Informe uma justificativa se houver diferença no dinheiro contado."/>
+            onChange={e => setNotes(e.target.value)} placeholder="Informe uma justificativa se houver diferença no dinheiro contado."/></label>
         </div>
         <Button disabled={busy || date > (summary.today || date)} onClick={closeDay}>
           {busy ? "Fechando..." : "Confirmar fechamento do dia"}
@@ -1915,22 +1929,35 @@ function FinancialHubPage({ user }) {
 }
 
 function ReceivablesPage({ user }) {
-  const [month, setMonth] = useState(localDate().slice(0, 7));
-  const [items, setItems] = useState([]);
-  const [completedCount, setCompletedCount] = useState(0);
+  const [pending, setPending] = useState([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
   const [cashRevision, setCashRevision] = useState(0);
-  const [method, setMethod] = useState("pix");
-  const refresh = useCallback(() =>
-    api(`/receivables?month=${encodeURIComponent(month)}`)
-      .then(data => { setItems(data.receivables); setCompletedCount(data.completedCount); })
-      .catch(reason => setError(reason.message)), [month]);
-  useEffect(() => { refresh(); }, [refresh]);
-  const pending = items.filter(item => !item.paid);
-  const paid = items.filter(item => item.paid);
-  const total = (rows) => rows.reduce((sum, item) => sum + item.priceCents, 0);
+  const [methods, setMethods] = useState({});
+  const refreshVersion = useRef(0);
+  const refresh = useCallback(async () => {
+    const version = ++refreshVersion.current;
+    try {
+      const data = await api("/receivables/pending");
+      if (version === refreshVersion.current) {
+        setPending(data.receivables);
+        setLoaded(true);
+      }
+    } catch (reason) {
+      if (version === refreshVersion.current) setError(reason.message);
+    }
+  }, []);
+  useEffect(() => {
+    refresh();
+    const interval = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refresh);
+    return () => { ++refreshVersion.current; window.clearInterval(interval); window.removeEventListener("focus", refresh); };
+  }, [refresh]);
   const receive = async (item) => {
+    const method = methods[item.id];
+    if (!method || busy) return;
+    if (!await confirmAction(`Confirmar recebimento de ${money(item.priceCents)} de ${item.clientName} por ${paymentNames[method]}?`)) return;
     setBusy(item.id); setError("");
     try {
       await api(`/receivables/${item.id}/pay`, { method: "POST", body: { paymentMethod: method } });
@@ -1941,53 +1968,36 @@ function ReceivablesPage({ user }) {
   return <>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
     <nav className="cash-section-nav" aria-label="Seções de caixa">
-      <a href="#caixa-do-dia">Caixa de hoje</a><a href="#recebimentos-do-mes">Recebimentos do mês</a>
+      <a href="#pagamentos-pendentes">Pagamentos pendentes</a><a href="#caixa-do-dia">Caixa de hoje</a><a href="#pagamentos-do-dia">Pagamentos registrados</a>
       {user.role === "dono" && <a href="#historico-do-caixa">Histórico de fechamentos</a>}
     </nav>
-    <DailyCashClosing revision={cashRevision} user={user}>
-    <div id="recebimentos-do-mes" className="cash-receivables">
-    <h2>Recebimentos do mês</h2>
-    <p className="panel-subtitle">O recebido usa a data do pagamento. Os atendimentos concluídos e os pendentes usam a data de realização.</p>
-    <div className="month-filter"><label htmlFor="cash-month">Mês de referência</label>
-      <input id="cash-month" className="input month-input" type="month" value={month}
-        onChange={e => setMonth(e.target.value)} /></div>
-    <ErrorMessage>{error}</ErrorMessage>
-    <section className="stats-grid finance-stats">
-      <StatCard title="Recebido no mês" value={money(total(paid))} note="Por data de pagamento" icon={Wallet} tone="green" />
-      <StatCard title="A receber" value={money(total(pending))} note={`${pending.length} atendimento(s) pendente(s)`} icon={Clock3} tone="orange" />
-      <StatCard title="Concluídos no mês" value={completedCount} note="No período selecionado" icon={CheckCheck} tone="blue" />
-    </section>
-    <section className="panel management-panel">
-      <div className="panel-heading"><div><p className="eyebrow">RECEBIMENTOS PENDENTES</p><h2>Registrar recebimento</h2>
-        <p className="panel-subtitle">O sistema não registra pagamentos automaticamente ao concluir um atendimento.</p></div>
-        <select className="input" style={{ maxWidth: 200 }} aria-label="Forma de recebimento" value={method}
-          onChange={event => setMethod(event.target.value)}>
-          {Object.entries(paymentNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
-        </select>
+    <section className="panel management-panel cash-pending" id="pagamentos-pendentes">
+      <div className="panel-heading"><div><h2>Pagamentos pendentes</h2>
+        <p className="panel-subtitle">Serviços concluídos que ainda aguardam pagamento, inclusive de dias anteriores.</p></div>
+        <Button type="button" variant="secondary" onClick={refresh}>Atualizar</Button>
       </div>
+      <div className="cash-pending-summary" role="status"><Clock3 size={22}/><div><b>{loaded ? `${pending.length} pagamento(s) pendente(s)` : "Consultando pagamentos..."}</b>
+        <strong>{money(pending.reduce((sum, item) => sum + item.priceCents, 0))} a receber</strong></div></div>
+      <ErrorMessage>{error}</ErrorMessage>
       {pending.length ? <div className="management-list">{pending.map(item =>
-        <article className="service-row" key={item.id}>
+        <article className="service-row cash-payment-row" key={item.id}>
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
-          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
-            <small>{dateTimeLabel(item.startsAt)} · {item.professionalName}</small></div>
+          <div className="cash-payment-info"><b>{item.clientName} · {item.serviceName}</b>
+            <small>Profissional: {item.professionalName}</small>
+            <small>Agendado: {dateTimeLabel(item.startsAt)}{item.completedOn ? ` · Realizado: ${dateLabel(item.completedOn)}` : ""}</small></div>
           <strong>{money(item.priceCents)}</strong>
-          <Button disabled={busy === item.id || user.tenantId === "tenant-salao-demo"}
+          <label className="field cash-payment-method"><span className="field-label">Forma de pagamento</span>
+            <select className="input" value={methods[item.id] || ""} onChange={event => setMethods(previous => ({ ...previous, [item.id]: event.target.value }))}>
+              <option value="">Selecione</option>
+              {Object.entries(paymentNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+            </select></label>
+          <Button disabled={Boolean(busy) || !methods[item.id] || user.tenantId === "tenant-salao-demo"}
             onClick={() => receive(item)}>{busy === item.id ? "Registrando..." : "Receber"}</Button>
         </article>)}</div> :
-        <p className="report-empty">Nenhum recebimento pendente neste período.</p>}
+        loaded && <p className="report-empty">Nenhum pagamento pendente.</p>}
     </section>
-    <section className="panel management-panel">
-      <div className="panel-heading"><div><p className="eyebrow">HISTÓRICO</p><h2>Pagamentos registrados</h2></div></div>
-      {paid.length ? <div className="management-list">{paid.map(item =>
-        <article className="service-row" key={item.id}>
-          <span className="service-row-icon"><Check size={18}/></span>
-          <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
-            <small>Atendimento: {dateTimeLabel(item.startsAt)} · Recebido em: {item.paidOn ? item.paidOn.split("-").reverse().join("/") : "data a conciliar"} · {paymentNames[item.paymentMethod] || item.paymentMethod}</small></div>
-          <strong>{money(item.priceCents)}</strong>
-        </article>)}</div> : <p className="report-empty">Nenhum pagamento registrado neste período.</p>}
-    </section>
+    <DailyCashClosing revision={cashRevision} user={user} onClosed={() => setCashRevision(n => n + 1)}>
     <UnreconciledCash user={user} onChange={() => setCashRevision(n => n + 1)}/>
-    </div>
     </DailyCashClosing>
   </>;
 }

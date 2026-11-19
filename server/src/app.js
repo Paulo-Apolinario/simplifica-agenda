@@ -1572,13 +1572,28 @@ function cashClosing(tenantId, date) {
 }
 function cashDaySummary(tenantId, date) {
   const methods = Object.fromEntries(paymentMethods.map(method => [method, 0]));
-  const rows = db.prepare(`SELECT id, price_cents AS priceCents, payment_method AS paymentMethod, paid_at AS paidAt, starts_at AS startsAt
-    FROM appointments WHERE tenant_id = ? AND paid_on = ? AND status = 'concluido' AND payment_method != ''
-    ORDER BY paid_at DESC, id DESC`).all(tenantId, date);
+  const rows = db.prepare(`SELECT a.id, a.price_cents AS priceCents, a.payment_method AS paymentMethod,
+    a.paid_at AS paidAt, a.paid_on AS paidOn, a.starts_at AS startsAt,
+    c.name AS clientName, s.name AS serviceName, u.name AS professionalName
+    FROM appointments a
+    JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
+    JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
+    JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
+    WHERE a.tenant_id = ? AND a.paid_on = ? AND a.status = 'concluido' AND a.payment_method != ''
+    ORDER BY a.paid_at DESC, a.id DESC`).all(tenantId, date);
   for (const row of rows) methods[row.paymentMethod] = (methods[row.paymentMethod] || 0) + row.priceCents;
   return { date, receiptCount: rows.length, methods, expectedCashCents: methods.dinheiro,
     expectedTotalCents: rows.reduce((sum, row) => sum + row.priceCents, 0), receipts: rows };
 }
+app.get("/api/receivables/pending", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
+  const rows = appointmentRows(tenant(req), "AND a.status = 'concluido' AND a.payment_method = ''");
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ receivables: rows.map(row => ({
+    id: row.id, clientName: row.clientName, serviceName: row.serviceName,
+    professionalName: row.professionalName, startsAt: row.startsAt,
+    completedOn: row.completedOn, priceCents: row.priceCents,
+  })) });
+});
 app.get("/api/receivables", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
@@ -1792,13 +1807,7 @@ app.post("/api/cash/closings", requireAuth, allowRoles("dono", "recepcao"), (req
       id, tenant(req), date, req.user.id, req.user.name || "Usuário",
       summary.expectedTotalCents, summary.expectedCashCents, counted, difference,
       JSON.stringify(summary.methods), summary.receiptCount, notes, openingCashCents,
-      JSON.stringify(db.prepare(`SELECT a.id, a.paid_at AS paidAt, a.starts_at AS startsAt,
-        a.price_cents AS priceCents, a.payment_method AS paymentMethod,
-        c.name AS clientName, s.name AS serviceName
-        FROM appointments a JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
-        JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
-        WHERE a.tenant_id = ? AND a.paid_on = ? AND a.status = 'concluido' AND a.payment_method != ''
-        ORDER BY a.paid_at, a.id`).all(tenant(req), date)),
+      JSON.stringify([...summary.receipts].reverse()),
       movements.supplyCents,movements.withdrawalCents,JSON.stringify(movements.rows));
     return { id, date, differenceCents: difference };
   })();

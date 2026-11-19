@@ -745,3 +745,39 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
 .agenda-toolbar { flex-wrap: wrap; }
 .agenda-toolbar .field { min-width: 150px; }
 @media (max-width: 760px) { .agenda-toolbar .field { flex: 1; } }
+
+.cash-daily-heading { align-items: flex-start; flex-wrap: wrap; }
+.cash-daily-heading > div { flex: 1 1 280px; min-width: 0; }
+.cash-daily-heading > input { width: min(100%, 185px); flex: 0 1 185px; }
+.cash-daily .finance-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.cash-daily .stat-copy :is(strong, small) { white-space: normal; overflow-wrap: anywhere; }
+.cash-daily .panel-subtitle, .cash-pending .panel-subtitle { font-size: 12px; line-height: 1.55; color: var(--muted); }
+.cash-detail-section { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
+.cash-detail-section h3, .cash-movement-panel h3 { font-size: 16px; font-weight: 650; margin: 0 0 10px; }
+.cash-movement-panel { margin-top: 20px; }
+.cash-form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; margin: 16px 0; align-items: start; }
+.cash-form-grid .field { min-width: 0; }
+.cash-form-wide { grid-column: 1 / -1; }
+.cash-form-grid textarea { min-height: 80px; }
+.cash-pending-summary { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid #f59e0b70; border-radius: 10px; background: var(--surface); color: #b45309; margin-bottom: 18px; }
+.cash-pending-summary > div { display: grid; gap: 4px; }
+.cash-pending-summary b { font-size: 13px; }
+.cash-pending-summary strong { font-size: 20px; }
+.cash-payment-row { gap: 12px; align-items: center; }
+.cash-payment-info { flex: 1 1 200px; min-width: 0; }
+.cash-payment-info :is(b, small) { white-space: normal; overflow-wrap: anywhere; }
+.cash-payment-info b { font-size: 13px; }
+.cash-payment-info small { color: var(--muted); font-size: 11px; }
+.cash-payment-row > strong { font-size: 14px; color: var(--text); }
+.cash-payment-method { flex: 0 1 190px; min-width: 135px; }
+.cash-method-chip { background: var(--soft); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; font-size: 12px; font-weight: 600; }
+#pagamentos-pendentes, #pagamentos-do-dia { scroll-margin-top: 80px; }
+.dark .cash-pending-summary { color: #fbbf24; }
+@media (max-width: 760px) {
+  .cash-daily .finance-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cash-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .cash-payment-row { flex-wrap: wrap; }
+  .cash-payment-info { flex-basis: calc(100% - 55px); }
+  .cash-payment-method { flex: 1 1 130px; }
+  .cash-payment-row .button { min-height: 44px; }
+}

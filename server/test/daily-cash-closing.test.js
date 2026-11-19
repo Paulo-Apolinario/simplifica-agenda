@@ -60,6 +60,10 @@ test("fechamento diário por data de recebimento, permissões e bloqueio de lan�
     db.prepare("UPDATE appointments SET completed_on = ? WHERE id = 'cash-b'").run(priorDay);
     const priorMonth = priorDay.slice(0, 7);
     assert.equal((await request("/receivables?month=" + priorMonth)).body.receivables.find(row => row.id === "cash-b")?.paid, false);
+    const pendingBefore = await request("/receivables/pending");
+    assert.equal(pendingBefore.status, 200);
+    assert.deepEqual(pendingBefore.body.receivables.map(row => row.id).sort(), ["cash-a", "cash-b", "cash-c"]);
+    assert.equal(pendingBefore.body.receivables.find(row => row.id === "cash-b").professionalName, "Profissional");
 
     assert.equal((await request("/cash/openings","POST",{date:today,openingCashCents:0})).status,201);
     assert.equal((await request("/receivables/cash-a/pay", "POST", {paymentMethod:"dinheiro"})).status, 200);
@@ -79,6 +83,13 @@ test("fechamento diário por data de recebimento, permissões e bloqueio de lan�
     assert.equal(report.body.expectedCashCents, 8500);
     assert.equal(report.body.methods.pix, 1500);
     assert.equal(report.body.receiptCount, 2);
+    assert.deepEqual(report.body.receipts.map(row => row.id).sort(), ["cash-a", "cash-b"]);
+    assert.ok(report.body.receipts.every(row => row.paidOn === today && row.clientName === "Cliente" && row.serviceName === "Corte" && row.professionalName === "Profissional"));
+    assert.deepEqual((await request("/receivables/pending")).body.receivables.map(row => row.id), ["cash-c"]);
+    add.run("cash-previous",tenant,"cash-client","cash-pro","cash-service",priorDay+"T09:00:00",priorDay+"T09:30:00",5000);
+    db.prepare("UPDATE appointments SET payment_method = 'pix', paid_on = ? WHERE id = 'cash-previous'").run(priorDay);
+    assert.deepEqual((await request("/cash/daily?date=" + priorDay)).body.receipts.map(row => row.id), ["cash-previous"]);
+    assert.deepEqual((await request("/cash/daily?date=" + today)).body.receipts.map(row => row.id).sort(), ["cash-a", "cash-b"]);
     assert.equal((await request("/cash/closings", "POST", {date:today,countedCashCents:8300,notes:"Diferença conferida"})).status, 201);
     assert.equal((await request("/cash/closings", "POST", {date:today,countedCashCents:8500})).status, 409);
     assert.equal((await request("/receivables/cash-c/pay", "POST", {paymentMethod:"pix"})).status, 409);
