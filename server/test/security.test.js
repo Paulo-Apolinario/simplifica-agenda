@@ -199,8 +199,10 @@ test("commercial setup, authenticated account and staff password rotation", asyn
     assert.equal(futureCompleted.status, "concluido");
     assert.equal(futureCompleted.paymentMethod, "");
 
-    const staffWork = await request("/professional/my-services?month=2026-11");
-    assert.equal(staffWork.body.totals.completed, 2);
+    const realizedDate = db.prepare("SELECT completed_on FROM appointments WHERE id = 'future-prof-service'").get().completed_on;
+    const staffWork = await request("/professional/my-services?month=" + realizedDate.slice(0, 7));
+    assert.equal(staffWork.body.services.some(row => row.id === "future-prof-service"), true);
+    assert.equal((await request("/professional/my-services?month=2031-11")).body.services.some(row => row.id === "future-prof-service"), false);
     // Only personal blocks are permitted for staff. Blocking with a reason does not need a client.
     const deniedBlock = await request("/blocked-slots", "POST", {
       professionalId: "another-professional", startsAt: "2030-01-08T12:00:00",

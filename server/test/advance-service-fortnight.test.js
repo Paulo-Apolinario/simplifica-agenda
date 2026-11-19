@@ -58,9 +58,12 @@ test("atendimento antecipado entra no caixa da empresa e gera saldo quinzenal se
     assert.equal(unopened.status,409);
     assert.match(unopened.body.error,/Abra o caixa/);
     assert.equal((await request("/cash/openings","POST",{date:current,openingCashCents:0})).status,201);
-    const complete = await request("/appointments/anticipated","PATCH",{status:"concluido"});
+    const complete = await request("/appointments/anticipated","PATCH",{status:"concluido",paymentMethod:""});
     assert.equal(complete.status,200);
     assert.equal(db.prepare("SELECT completed_on FROM appointments WHERE id='anticipated'").get().completed_on,current);
+    assert.equal((await request("/receivables/pending")).body.receivables.some(row => row.id === "anticipated"), true);
+    assert.equal((await request("/cash/daily?date="+current)).body.expectedTotalCents,0);
+    assert.equal((await request("/clients")).body.clients.find(row => row.id === "client-1").lastVisit,current);
     const overview = await request("/overview");
     assert.equal(overview.status,200);
     assert.equal(overview.body.upcoming.some(item=>item.id==="anticipated"),false);

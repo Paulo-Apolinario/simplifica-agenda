@@ -574,17 +574,24 @@ function usePendingPayments(enabled = true) {
 
 const pendingPaymentsPath = "/recebimentos?aba=pendentes";
 
-function AttendanceWithPending({ value, note, user }) {
-  const {pending} = usePendingPayments(user.tenantId !== "tenant-salao-demo");
-  const Card = pending.length ? Link : "article";
-  return <Card className="stat-card attendance-payment-card" {...(pending.length ? {to: pendingPaymentsPath} : {})}>
-    <div className="stat-icon stat-blue"><CalendarDays size={19}/></div>
-    <div className="stat-copy"><span>Atendimentos hoje</span><strong>{value}</strong><small>{note}</small></div>
-    {pending.length > 0 && <span className="pending-dashboard-badge">
-      <Clock3 size={14}/><span>{pending.length} {pending.length === 1 ? "pagamento pendente" : "pagamentos pendentes"}</span>
-      <ArrowRight size={14}/>
-    </span>}
-  </Card>;
+function PendingPaymentsCard({ user }) {
+  const {pending, loaded, error, refresh} = usePendingPayments(user.tenantId !== "tenant-salao-demo");
+  const [open, setOpen] = useState(false);
+  if (user.tenantId === "tenant-salao-demo") return <StatCard title="Pagamentos pendentes" value="—" note="Disponível na operação comercial" icon={Wallet}/>;
+  return <>
+    <button type="button" className={`stat-card pending-dashboard-card ${pending.length ? "has-pending" : ""}`}
+      onClick={() => { setOpen(true); refresh(); }}>
+      <div className={`stat-icon stat-${pending.length ? "orange" : "green"}`}><Wallet size={19}/></div>
+      <div className="stat-copy"><span>Pagamentos pendentes</span>
+        <strong>{loaded ? money(pending.reduce((sum, item) => sum + item.priceCents, 0)) : "—"}</strong>
+        <small>{error ? "Consultar pendências" : loaded ? `${pending.length} pagamento(s) em aberto` : "Consultando..."}</small>
+      </div>
+      <ArrowRight className="pending-card-arrow" size={16}/>
+    </button>
+    {open && <Modal title="Pagamentos pendentes" onClose={() => setOpen(false)} wide>
+      <PendingPaymentsList user={user} pending={pending} loaded={loaded} loadError={error} refresh={refresh}/>
+    </Modal>}
+  </>;
 }
 
 function AppointmentCard({ appointment, onOpen, compact = false }) {
@@ -656,7 +663,7 @@ function ReceptionDashboard({ user }) {
     <ErrorMessage>{error}</ErrorMessage>
     <CashStatusBanner user={user}/>
     <section className="stats-grid">
-      <AttendanceWithPending value={overview?.todayCount ?? "—"} note="Agenda do estabelecimento" user={user}/>
+      <PendingPaymentsCard user={user}/>
       <StatCard title="Aguardando confirmação" value={waiting.length} icon={Clock3}
         tone="orange" note="Horários ainda agendados"/>
       <StatCard title="Confirmados hoje" value={confirmed.length} icon={CheckCheck}
@@ -710,7 +717,7 @@ function OverviewPage({ user }) {
         <StatCard title="Próximo atendimento" value={data?.upcoming?.[0] ? new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(data.upcoming[0].startsAt)) : "Livre"}
           note={data?.upcoming?.[0]?.clientName ?? "Sem próximos horários"} icon={Clock3} tone="orange"/>
       </> : <>
-        <AttendanceWithPending value={data?.todayCount ?? "—"} note="Na agenda de hoje" user={user}/>
+        <PendingPaymentsCard user={user}/>
         <StatCard title={user.role === "dono" ? "Recebido no mês" : "Agendamentos no mês"}
           value={user.role === "dono" ? money(data?.monthRevenueCents) : data?.monthCount ?? "—"}
           note={user.role === "dono" ? "Por data de pagamento" : "Na agenda do negócio"}
@@ -966,7 +973,7 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
       <ErrorMessage>{error}</ErrorMessage>
       <div className="modal-actions modal-actions-split">
         {whatsApp && <a href={whatsApp} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={16} /> WhatsApp</a>}
-        <Button disabled={saving} onClick={() => save({ status, paymentMethod: method, priceCents: price, ...(clientId !== appointment.clientId ? { clientId } : {}), ...(startsAt !== appointment.startsAt.slice(0, 16) ? { startsAt } : {}) })}>{saving ? "Salvando..." : "Salvar alterações"}</Button>
+        <Button disabled={saving} onClick={() => save({ status, paymentMethod: method, priceCents: price, ...(clientId !== appointment.clientId ? { clientId } : {}), ...(startsAt !== appointment.startsAt.slice(0, 16) ? { startsAt } : {}) })}>{saving ? "Salvando..." : status === "concluido" && !method ? "Concluir em aberto" : "Salvar alterações"}</Button>
       </div>
     </div>}
   </Modal>;
@@ -1170,7 +1177,7 @@ function ClientsPage({ user }) {
         <tbody role="rowgroup">{clients.map((client) => <tr role="row" key={client.id}>
           <td role="cell" className="client-record-name"><div className="table-person"><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span><div><b>{client.name}</b><small>{user.role === "profissional" ? "Cliente do estabelecimento" : client.email || client.notes || "Cliente Simplifica"}</small></div></div></td>
           <td role="cell" data-label="Contato">{client.phone || "Sem telefone"}</td>{user.role !== "profissional" && <td role="cell" data-label="Atendimentos"><span className="count-chip">{client.appointmentCount}</span></td>}
-          {user.role !== "profissional" && <td role="cell" data-label="Última visita">{client.lastVisit ? dateTimeLabel(client.lastVisit) : "Ainda sem visita"}</td>}
+          {user.role !== "profissional" && <td role="cell" data-label="Última visita">{client.lastVisit ? dateLabel(client.lastVisit.slice(0, 10)) : "Ainda sem visita"}</td>}
           <td role="cell" className="client-record-actions"><div className="row-actions">{user.role !== "profissional" && <button className="text-link" onClick={() => showHistory(client)}>Histórico</button>}
             {user.role !== "profissional" && <button className="icon-button compact" onClick={() => setModal(client)} aria-label="Editar cliente"><MoreHorizontal size={18} /></button>}
             {client.phone && <a className="icon-button compact" aria-label="Enviar mensagem" href={whatsappUrl(client.phone, `Olá, ${client.name}! Tudo bem?`) } target="_blank" rel="noreferrer"><Phone size={15} /></a>}</div></td>
@@ -1448,7 +1455,7 @@ function ProfessionalWorkPage() {
         onChange={e => setMonth(e.target.value)}/></div>
     <ErrorMessage>{error}</ErrorMessage>
     <section className="stats-grid finance-stats">
-      <StatCard title="Meus agendamentos" value={data.totals.appointments} note="No período" icon={CalendarDays} />
+      <StatCard title="Meus atendimentos" value={data.totals.appointments} note="Agendados ou realizados no período" icon={CalendarDays} />
       <StatCard title="Serviços realizados" value={data.totals.completed} note="Concluídos" icon={CheckCheck} tone="green"/>
       <StatCard title="Valor dos serviços realizados" value={money(data.totals.serviceValueCents)}
         note="Valor bruto; veja comissões em Meus ganhos" icon={Scissors} tone="blue"/>
@@ -1460,7 +1467,7 @@ function ProfessionalWorkPage() {
         {data.services.map(item => <article className="service-row" key={item.id}>
           <span className="service-row-icon"><ClipboardCheck size={18}/></span>
           <div className="min-w-0 flex-1"><b>{item.clientName} · {item.serviceName}</b>
-            <small>{dateTimeLabel(item.startsAt)} · {statusNames[item.status]}</small></div>
+            <small>{dateTimeLabel(item.startsAt)} · {statusNames[item.status]}{item.status === "concluido" && item.completedOn ? ` · Realizado em ${dateLabel(item.completedOn)}` : ""}</small></div>
           <span className={`status-badge ${statusStyles[item.status]}`}>{statusNames[item.status]}</span>
           {canComplete(item) && <Button disabled={saving === item.id} onClick={() => complete(item.id)}>
             {saving === item.id ? "Salvando..." : "Concluir serviço"}
@@ -1996,26 +2003,39 @@ function ReceivablesPage({ user }) {
 
 function PendingPaymentsPage({ user }) {
   const { pending, loaded, error: loadError, refresh } = usePendingPayments();
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState("");
   const [cashRevision, setCashRevision] = useState(0);
-  const [methods, setMethods] = useState({});
-  const receive = async (item) => {
-    const method = methods[item.id];
-    if (!method || busy) return;
-    if (!await confirmAction(`Confirmar recebimento de ${money(item.priceCents)} de ${item.clientName} por ${paymentNames[method]}?`)) return;
-    setBusy(item.id); setError("");
-    try {
-      await api(`/receivables/${item.id}/pay`, { method: "POST", body: { paymentMethod: method } });
-      await refresh();
-      setCashRevision(n => n + 1);
-    } catch (reason) { setError(reason.message); } finally { setBusy(""); }
-  };
   return <>
     <PageTitle title="Pagamentos pendentes" description="Confirme os recebimentos quando o cliente efetuar o pagamento."
       actions={<Link className="button button-secondary" to="/recebimentos"><ArrowLeft size={16}/> Voltar ao caixa</Link>}/>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
     <section className="panel management-panel cash-pending" id="pagamentos-pendentes">
+      <PendingPaymentsList user={user} pending={pending} loaded={loaded} loadError={loadError} refresh={refresh}/>
+    </section>
+  </>;
+}
+
+function PendingPaymentsList({ user, pending, loaded, loadError, refresh }) {
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState("");
+  const [methods, setMethods] = useState({});
+  const receive = async (item) => {
+    const method = methods[item.id];
+    if (busy) return;
+    setError(""); setNotice("");
+    if (!method) {
+      setNotice(`Pagamento de ${item.clientName} mantido em aberto. Nenhum valor foi lançado no caixa.`);
+      return;
+    }
+    if (!await confirmAction(`Confirmar recebimento de ${money(item.priceCents)} de ${item.clientName} por ${paymentNames[method]}?`)) return;
+    setBusy(item.id); setError("");
+    try {
+      await api(`/receivables/${item.id}/pay`, { method: "POST", body: { paymentMethod: method } });
+      await refresh();
+      setNotice(`Recebimento de ${item.clientName} confirmado.`);
+    } catch (reason) { setError(reason.message); } finally { setBusy(""); }
+  };
+  return <>
       <div className="panel-heading"><div><h2>Pagamentos pendentes</h2>
         <p className="panel-subtitle">Serviços concluídos que ainda aguardam pagamento, inclusive de dias anteriores.</p></div>
         <Button type="button" variant="secondary" onClick={refresh}>Atualizar</Button>
@@ -2023,6 +2043,7 @@ function PendingPaymentsPage({ user }) {
       <div className="cash-pending-summary" role="status"><Clock3 size={22}/><div><b>{loaded ? `${pending.length} pagamento(s) pendente(s)` : "Consultando pagamentos..."}</b>
         <strong>{money(pending.reduce((sum, item) => sum + item.priceCents, 0))} a receber</strong></div></div>
       <ErrorMessage>{error || loadError}</ErrorMessage>
+      {notice && <p className="success-message" role="status">{notice}</p>}
       {pending.length ? <div className="management-list">{pending.map(item =>
         <article className="service-row cash-payment-row" key={item.id}>
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
@@ -2035,11 +2056,10 @@ function PendingPaymentsPage({ user }) {
               <option value="">Em aberto — pagar depois</option>
               {Object.entries(paymentNames).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
             </select></label>
-          <Button disabled={Boolean(busy) || !methods[item.id] || user.tenantId === "tenant-salao-demo"}
-            onClick={() => receive(item)}>{busy === item.id ? "Registrando..." : methods[item.id] ? "Receber" : "Em aberto"}</Button>
+          <Button variant={methods[item.id] ? "primary" : "secondary"} disabled={Boolean(busy) || user.tenantId === "tenant-salao-demo"}
+            onClick={() => receive(item)}>{busy === item.id ? "Registrando..." : methods[item.id] ? "Receber" : "Manter em aberto"}</Button>
         </article>)}</div> :
         loaded && <p className="report-empty">Nenhum pagamento pendente.</p>}
-    </section>
   </>;
 }
 
@@ -2125,7 +2145,7 @@ function FinancePage() {
     </div>
     <section className="panel inactive-panel"><div className="panel-heading"><div><p className="eyebrow">HORA DE MATAR A SAUDADE</p><h2>Clientes que estão sumidos</h2><p className="panel-subtitle">Quem não aparece há pelo menos 30 dias merece uma mensagem especial.</p></div><span className="count-chip">{report?.inactiveClients?.length ?? 0} clientes</span></div>
       {report?.inactiveClients?.length ? <div className="inactive-list">{report.inactiveClients.map((client) => <div className="inactive-row" key={client.id}><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
-        <div className="min-w-0 flex-1"><b>{client.name}</b><small>Última visita em {dateTimeLabel(client.lastVisit)}</small></div>
+        <div className="min-w-0 flex-1"><b>{client.name}</b><small>Última visita em {dateLabel(client.lastVisit.slice(0, 10))}</small></div>
         {client.phone && <a href={whatsappUrl(client.phone, `Oi, ${client.name}! Sentimos sua falta por aqui 💚 Que tal agendar um novo horário?`)} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={15} /> Chamar no WhatsApp</a>}</div>)}</div>
         : <p className="report-empty">Nenhum cliente sumido por enquanto. Seu relacionamento está em dia! 💚</p>}
     </section>

@@ -64,12 +64,18 @@ test("fechamento diário por data de recebimento, permissões e bloqueio de lan�
     assert.equal(pendingBefore.status, 200);
     assert.deepEqual(pendingBefore.body.receivables.map(row => row.id).sort(), ["cash-a", "cash-b", "cash-c"]);
     assert.equal(pendingBefore.body.receivables.find(row => row.id === "cash-b").professionalName, "Profissional");
+    // A previous cash closing must succeed even with an outstanding service.
+    const previousClosing = await request("/cash/closings", "POST", {date:priorDay,countedCashCents:0});
+    assert.equal(previousClosing.status, 201);
+    assert.equal((await request("/cash/daily?date=" + priorDay)).body.closing.expectedTotalCents, 0);
 
     assert.equal((await request("/cash/openings","POST",{date:today,openingCashCents:0})).status,201);
     assert.equal((await request("/receivables/cash-a/pay", "POST", {paymentMethod:"dinheiro"})).status, 200);
     assert.equal((await request("/receivables/cash-b/pay", "POST", {paymentMethod:"pix"})).status, 200);
     const currentReceipts = await request("/receivables?month=" + today.slice(0, 7));
     assert.equal(currentReceipts.body.receivables.find(row => row.id === "cash-b")?.paidOn, today);
+    assert.equal((await request("/cash/daily?date=" + priorDay)).body.expectedTotalCents, 0);
+    assert.equal((await request("/cash/daily?date=" + priorDay)).body.closing.expectedTotalCents, 0);
     const priorReceipts = await request("/receivables?month=" + priorMonth);
     assert.equal(priorReceipts.body.completedCount >= 1, true);
     assert.equal(priorReceipts.body.receivables.some(row => row.id === "cash-b"), false);
@@ -86,9 +92,12 @@ test("fechamento diário por data de recebimento, permissões e bloqueio de lan�
     assert.deepEqual(report.body.receipts.map(row => row.id).sort(), ["cash-a", "cash-b"]);
     assert.ok(report.body.receipts.every(row => row.paidOn === today && row.clientName === "Cliente" && row.serviceName === "Corte" && row.professionalName === "Profissional"));
     assert.deepEqual((await request("/receivables/pending")).body.receivables.map(row => row.id), ["cash-c"]);
-    add.run("cash-previous",tenant,"cash-client","cash-pro","cash-service",priorDay+"T09:00:00",priorDay+"T09:30:00",5000);
-    db.prepare("UPDATE appointments SET payment_method = 'pix', paid_on = ? WHERE id = 'cash-previous'").run(priorDay);
-    assert.deepEqual((await request("/cash/daily?date=" + priorDay)).body.receipts.map(row => row.id), ["cash-previous"]);
+    const earlierDate = new Date(priorDay + "T12:00:00Z");
+    earlierDate.setUTCDate(earlierDate.getUTCDate() + 1);
+    const earlierDay = earlierDate.toISOString().slice(0, 10);
+    add.run("cash-previous",tenant,"cash-client","cash-pro","cash-service",earlierDay+"T09:00:00",earlierDay+"T09:30:00",5000);
+    db.prepare("UPDATE appointments SET payment_method = 'pix', paid_on = ? WHERE id = 'cash-previous'").run(earlierDay);
+    assert.deepEqual((await request("/cash/daily?date=" + earlierDay)).body.receipts.map(row => row.id), ["cash-previous"]);
     assert.deepEqual((await request("/cash/daily?date=" + today)).body.receipts.map(row => row.id).sort(), ["cash-a", "cash-b"]);
     assert.equal((await request("/cash/closings", "POST", {date:today,countedCashCents:8300,notes:"Diferença conferida"})).status, 201);
     assert.equal((await request("/cash/closings", "POST", {date:today,countedCashCents:8500})).status, 409);
@@ -97,7 +106,7 @@ test("fechamento diário por data de recebimento, permissões e bloqueio de lan�
     const closed = await request("/cash/daily?date=" + today);
     assert.equal(closed.body.closing.differenceCents, -200);
     assert.equal(closed.body.closing.expectedTotalCents, 10000);
-    assert.equal((await request("/cash/closings")).body.closings.length, 1);
+    assert.equal((await request("/cash/closings")).body.closings.length, 2);
     assert.equal((await request("/cash/daily?date=2030-02-30")).status, 400);
     const recep = await request("/auth/login", "POST", {email:"reception@cash.local",password:"Senha-Recepcao-123"});
     assert.equal(recep.status, 200);

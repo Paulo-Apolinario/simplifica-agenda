@@ -540,14 +540,14 @@ app.get("/api/overview", requireAuth, (req, res) => {
   const summary = db.prepare(`
     SELECT
       count(*) FILTER (WHERE substr(starts_at, 1, 10) = substr(?, 1, 10)
-        AND status NOT IN ('cancelado', 'faltou')) AS today_count,
+        AND status NOT IN ('cancelado', 'faltou') AND NOT (${completedEarlySql})) AS today_count,
       count(DISTINCT client_id) FILTER (WHERE substr(starts_at, 1, 7) = ?
         AND status NOT IN ('cancelado', 'faltou')) AS active_clients,
       coalesce(sum(price_cents) FILTER (
         WHERE substr(paid_on, 1, 7) = ? AND payment_method != '' AND status = 'concluido'), 0) AS month_revenue,
       count(*) FILTER (WHERE substr(starts_at, 1, 7) = ?
         AND status NOT IN ('cancelado', 'faltou')) AS month_count
-    FROM appointments WHERE tenant_id = ?
+    FROM appointments a WHERE tenant_id = ?
       AND (? != 'profissional' OR professional_id = ?)
   `).get(localNow(tenant(req)), month, month, month, tenant(req), req.user.role, req.user.id);
   const upcoming = appointmentRows(tenant(req),
@@ -557,7 +557,7 @@ app.get("/api/overview", requireAuth, (req, res) => {
   ).slice(0, 6);
   const blockedToday = req.user.role === "profissional"
     ? db.prepare(`SELECT count(*) AS total FROM blocked_slots
-      WHERE tenant_id = ? AND professional_id = ? AND starts_at < ? AND ends_at > ?`)
+      WHERE tenant_id = ? AND (professional_id = ? OR professional_id IS NULL) AND starts_at < ? AND ends_at > ?`)
       .get(tenant(req), req.user.id, `${localNow(tenant(req)).slice(0, 10)}T23:59:59`, `${localNow(tenant(req)).slice(0, 10)}T00:00:00`).total
     : null;
   const earnings = req.user.role === "profissional" ? professionalEarnings(tenant(req), req.user.id) : null;
@@ -579,7 +579,7 @@ app.get("/api/clients", requireAuth, (req, res) => {
   const clients = db.prepare(`
     SELECT c.id, c.name, c.phone, c.email, c.notes, c.created_at AS createdAt,
       count(a.id) AS appointmentCount,
-      max(a.starts_at) FILTER (WHERE a.status = 'concluido') AS lastVisit
+      max(COALESCE(a.completed_on, substr(a.starts_at, 1, 10))) FILTER (WHERE a.status = 'concluido') AS lastVisit
     FROM clients c
     LEFT JOIN appointments a ON a.client_id = c.id AND a.tenant_id = c.tenant_id
     WHERE c.tenant_id = ? AND c.notes != '__internal_anonymous__' AND (? = '%%' OR c.name LIKE ? OR c.phone LIKE ?)
@@ -1190,7 +1190,8 @@ app.get("/api/professional/my-services", requireAuth, allowRoles("profissional")
   const month = String(req.query.month ?? localNow(tenant(req)).slice(0, 7));
   if (!validMonth(month)) return fail(res, 400, "Mês inválido.");
   const rows = appointmentRows(tenant(req),
-    "AND a.professional_id = ? AND substr(a.starts_at, 1, 7) = ?",
+    `AND a.professional_id = ? AND CASE WHEN a.status = 'concluido'
+      THEN ${appointmentCompletionMonth} ELSE substr(a.starts_at, 1, 7) END = ?`,
     [req.user.id, month]);
   const completed = rows.filter(row => row.status === "concluido");
   res.json({
@@ -1865,11 +1866,11 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
     GROUP BY u.id ORDER BY revenueCents DESC
   `).all(tenant(req), month);
   const inactiveClients = db.prepare(`
-    SELECT c.id, c.name, c.phone, max(a.starts_at) AS lastVisit
+    SELECT c.id, c.name, c.phone, max(COALESCE(a.completed_on, substr(a.starts_at, 1, 10))) AS lastVisit
     FROM clients c JOIN appointments a ON a.client_id = c.id AND a.tenant_id = c.tenant_id
     WHERE c.tenant_id = ? AND a.status = 'concluido'
     GROUP BY c.id
-    HAVING date(max(a.starts_at)) <= date(?, '-30 days')
+    HAVING date(max(COALESCE(a.completed_on, substr(a.starts_at, 1, 10)))) <= date(?, '-30 days')
     ORDER BY lastVisit
   `).all(tenant(req), localNow(tenant(req)).slice(0, 10));
   res.json({ month, revenueCents: revenue.revenue_cents, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,

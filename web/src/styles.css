@@ -773,17 +773,20 @@ table { width: 100%; border-collapse: collapse; text-align: left; }
 .cash-method-chip { background: var(--soft); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; font-size: 12px; font-weight: 600; }
 #pagamentos-pendentes, #pagamentos-do-dia { scroll-margin-top: 80px; }
 .dark .cash-pending-summary { color: #fbbf24; }
-.attendance-payment-card { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; text-decoration: none; }
-.attendance-payment-card[href]:hover { border-color: #f59e0b; }
-.pending-dashboard-badge { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; padding: 8px; border-radius: 7px; color: #92400e; background: #fffbeb; font-size: 11px; font-weight: 600; line-height: 1.4; }
-.pending-dashboard-badge > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.dark .pending-dashboard-badge { background: #451a03; color: #fcd34d; }
+.pending-dashboard-card { text-align: left; width: 100%; cursor: pointer; }
+.pending-dashboard-card .stat-copy { flex: 1; }
+.pending-dashboard-card .stat-copy :is(strong, small) { white-space: normal; overflow-wrap: anywhere; }
+.pending-dashboard-card.has-pending { border-color: #f59e0b; }
+.pending-dashboard-card:hover { border-color: #d97706; }
+.pending-card-arrow { flex: 0 0 auto; color: var(--muted); align-self: center; }
+.pending-dashboard-card.has-pending .pending-card-arrow { color: #d97706; }
+.modal-body .cash-pending-summary { margin-top: 12px; }
+.modal-body .cash-payment-row { flex-wrap: wrap; }
 .cash-pending-link { text-decoration: none; }
 .cash-pending-link:hover { border-color: #d97706; }
 .cash-pending-action { display: flex; align-items: center; margin-left: auto; gap: 7px; font-size: 12px; font-weight: 600; }
 @media (max-width: 760px) {
-  .attendance-payment-card { grid-template-columns: minmax(0, 1fr); }
-  .pending-dashboard-badge { font-size: 10px; }
+  .pending-dashboard-card { grid-template-columns: minmax(0, 1fr) auto; }
   .cash-pending-link { flex-wrap: wrap; }
   .cash-daily .finance-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cash-form-grid { grid-template-columns: minmax(0, 1fr); }
