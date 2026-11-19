@@ -156,6 +156,13 @@ test("atendimento antecipado entra no caixa da empresa e gera saldo quinzenal se
     assert.equal(report.productionCents,report.byService.reduce((sum,row)=>sum+row.revenueCents,0));
     assert.equal(report.establishmentShareCents+report.commissionTotalCents,report.productionCents);
     assert.equal(report.revenueCents,12500);
+    assert.equal(report.daily.length,new Date(Date.UTC(Number(current.slice(0,4)),Number(current.slice(5,7)),0)).getUTCDate());
+    assert.equal(report.daily.reduce((sum,row)=>sum+row.receivedCents,0),report.revenueCents);
+    assert.equal(report.daily.reduce((sum,row)=>sum+row.productionCents,0),report.productionCents);
+    assert.equal(report.daily.reduce((sum,row)=>sum+row.completedCount,0),report.completedCount);
+    assert.equal(report.daily.find(row=>row.date===current).receivedCents,12500);
+    assert.equal(report.paymentBreakdown.reduce((sum,row)=>sum+row.cents,0),report.revenueCents);
+    assert.equal(report.paymentBreakdown.find(row=>row.method==="pix").cents,12500);
     const summary = (await request("/settlements?period="+period)).body.professionals[0];
     assert.ok(summary.customerPendingCents >= 5000);
     assert.ok(summary.receivedCents >= 5000);

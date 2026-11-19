@@ -454,6 +454,73 @@
 .dark .premium-cash-opening[data-state="open"] .cash-state-pill {background:#143a32;color:#9debc9;border-color:#23594b;}
 .dark .premium-cash-opening[data-state="unopened"] .cash-state-pill,.dark .premium-finance .cash-pending-summary {background:#382a18;color:#ffcf83;border-color:#745126;}
 .dark .settlement-avatar {background:#382c59;color:#d2baff;}
+
+/* Analytical reports — native charts, exact values and accessible day selection. */
+.premium-reports {display:grid;gap:18px;min-width:0;}
+.premium-reports > .page-title-row,.premium-reports .stats-grid {margin-bottom:0;}
+.report-period-bar {display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 18px;}
+.report-period-bar > div:first-child {display:grid;gap:4px;}
+.report-period-bar b {font-size:14px;color:var(--text);}
+.report-period-bar small {font-size:11px;color:var(--muted);}
+.report-period-bar .month-filter {margin:0;flex:0 0 auto;}
+.report-period-bar .input {min-height:42px;font-size:12px;}
+.premium-reports .report-panel {min-width:0;}
+.premium-reports .report-panel .panel-heading {padding-bottom:13px;border-bottom:1px solid var(--line);}
+.report-chart-legend {display:flex;gap:17px;flex-wrap:wrap;margin-bottom:15px;color:var(--muted);font-size:12px;}
+.report-chart-legend span {display:flex;align-items:center;gap:6px;}
+.report-dot {display:inline-block;flex:0 0 10px;width:10px;height:10px;border-radius:3px;}
+.report-dot.received,.report-bar.received,.report-progress .received {background:#10b981;}
+.report-dot.production,.report-bar.production,.report-progress .production {background:#3976ec;}
+.report-dot.commission,.report-progress .commission {background:#8b5cf6;}
+.report-day-detail {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:13px;background:var(--soft);border:1px solid var(--line);border-radius:13px;margin-bottom:24px;}
+.report-day-detail > div {display:grid;gap:5px;min-width:0;}
+.report-day-detail small {font-size:11px;color:var(--muted);}
+.report-day-detail b {font-size:14px;color:var(--text);overflow-wrap:anywhere;}
+.report-chart-scroll {overflow-x:auto;padding:4px 0 10px;}
+.report-chart-frame {display:flex;gap:9px;min-width:690px;}
+.report-chart-axis {display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;min-width:83px;height:200px;color:var(--muted);font-size:10px;white-space:nowrap;}
+.report-chart-plot {position:relative;flex:1;min-width:0;}
+.report-chart-lines {position:absolute;display:flex;flex-direction:column;justify-content:space-between;height:200px;inset:0 0 auto;pointer-events:none;}
+.report-chart-lines span {border-bottom:1px dashed var(--line);}
+.report-chart-bars {position:relative;display:grid;grid-template-columns:repeat(var(--days),minmax(0,1fr));gap:2px;}
+.report-chart-day {display:grid;grid-template-rows:200px 24px;gap:4px;min-width:0;border:0;background:transparent;border-radius:5px;padding:0 2px;color:var(--muted);}
+.report-chart-day:hover,.report-chart-day.selected {background:var(--soft);color:var(--brand);}
+.report-chart-pair {display:flex;gap:2px;align-items:flex-end;justify-content:center;overflow:hidden;}
+.report-bar {display:block;width:42%;max-width:15px;border-radius:3px 3px 0 0;transition:height .2s ease;}
+.report-chart-day small {font-size:10px;align-self:center;}
+.report-chart-day.selected small {font-weight:700;}
+.report-split-body {display:flex;align-items:center;justify-content:space-around;gap:18px;flex-wrap:wrap;padding:8px 0 16px;}
+.report-donut {width:175px;height:175px;flex:0 0 175px;display:grid;place-items:center;border-radius:50%;}
+.report-donut > div {display:grid;place-content:center;text-align:center;width:134px;height:134px;background:var(--surface);border-radius:50%;padding:10px;}
+.report-donut small {color:var(--muted);font-size:11px;}
+.report-donut strong {font-size:17px;font-weight:700;color:var(--text);overflow-wrap:anywhere;}
+.report-split-values {display:grid;gap:13px;flex:1 1 175px;min-width:0;}
+.report-split-values > div {display:flex;align-items:center;gap:8px;min-width:0;}
+.report-split-values > div > span {display:grid;gap:3px;flex:1;min-width:0;}
+.report-split-values small {font-size:11px;color:var(--muted);}
+.report-split-values b {font-size:15px;color:var(--text);overflow-wrap:anywhere;}
+.report-split-values strong {font-size:12px;color:var(--muted);}
+.report-metric-list {display:grid;gap:16px;}
+.report-metric {display:grid;gap:7px;}
+.report-metric > div:first-child {display:flex;justify-content:space-between;align-items:center;gap:10px;}
+.report-metric b,.report-metric strong {font-size:13px;color:var(--text);}
+.report-metric strong {white-space:nowrap;}
+.report-metric small {font-size:11px;color:var(--muted);}
+.report-progress {height:9px;background:var(--soft);border:1px solid var(--line);border-radius:9px;overflow:hidden;}
+.report-progress span {display:block;height:100%;border-radius:9px;}
+.premium-reports .inactive-row,.premium-reports .service-row {padding:13px 8px;border-color:var(--line);}
+.premium-reports .inactive-row b,.premium-reports .service-row b {color:var(--text);font-size:13px;}
+.premium-reports .inactive-row small,.premium-reports .service-row small {color:var(--muted);font-size:11px;}
+@media(max-width:760px){
+  .premium-reports {gap:13px;}
+  .report-period-bar {flex-wrap:wrap;}
+  .report-period-bar .month-filter {width:100%;}
+  .report-day-detail {grid-template-columns:repeat(2,minmax(0,1fr));}
+  .report-chart-frame {min-width:750px;}
+  .report-chart-axis {min-width:70px;}
+  .report-split-body {justify-content:center;}
+  .report-split-values {flex-basis:100%;}
+}
 @media(max-width:1120px){
   .premium-finance .premium-finance-tabs,.commission-overview,.settlement-overview {grid-template-columns:repeat(2,minmax(0,1fr));}
   .cash-method-grid,.settlement-breakdown {grid-template-columns:repeat(3,minmax(0,1fr));}

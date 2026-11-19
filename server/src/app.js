@@ -1980,16 +1980,32 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
   const inactiveClients = db.prepare(`
     SELECT c.id, c.name, c.phone, max(COALESCE(a.completed_on, substr(a.starts_at, 1, 10))) AS lastVisit
     FROM clients c JOIN appointments a ON a.client_id = c.id AND a.tenant_id = c.tenant_id
-    WHERE c.tenant_id = ? AND a.status = 'concluido'
+    WHERE c.tenant_id = ? AND c.notes != '__internal_anonymous__' AND a.status = 'concluido'
     GROUP BY c.id
     HAVING date(max(COALESCE(a.completed_on, substr(a.starts_at, 1, 10)))) <= date(?, '-30 days')
     ORDER BY lastVisit
   `).all(tenant(req), localNow(tenant(req)).slice(0, 10));
   const productionCents = byService.reduce((sum, item) => sum + item.revenueCents, 0);
   const commissionTotalCents = byProfessional.reduce((sum, item) => sum + item.commissionCents, 0);
+  const receivedDays = db.prepare(`SELECT paid_on AS date, sum(price_cents) AS cents
+    FROM appointments WHERE tenant_id=? AND status='concluido' AND payment_method!='' AND substr(paid_on,1,7)=?
+    GROUP BY paid_on`).all(tenant(req),month);
+  const productionDays = db.prepare(`SELECT substr(COALESCE(a.completed_on,a.starts_at),1,10) AS date,
+    sum(a.price_cents) AS cents, count(*) AS count FROM appointments a WHERE a.tenant_id=? AND a.status='concluido'
+    AND ${appointmentCompletionMonth}=? GROUP BY date`).all(tenant(req),month);
+  const receivedMap=new Map(receivedDays.map(row=>[row.date,row.cents]));
+  const productionMap=new Map(productionDays.map(row=>[row.date,row]));
+  const [year,monthNumber]=month.split("-").map(Number);
+  const daily=Array.from({length:new Date(Date.UTC(year,monthNumber,0)).getUTCDate()},(_,i)=>{
+    const date=month+"-"+String(i+1).padStart(2,"0");
+    return {date,receivedCents:receivedMap.get(date)||0,productionCents:productionMap.get(date)?.cents||0,completedCount:productionMap.get(date)?.count||0};
+  });
+  const paymentBreakdown = db.prepare(`SELECT payment_method AS method,sum(price_cents) AS cents,count(*) AS count
+    FROM appointments WHERE tenant_id=? AND status='concluido' AND payment_method!='' AND substr(paid_on,1,7)=?
+    GROUP BY payment_method ORDER BY cents DESC`).all(tenant(req),month);
   res.json({ month, revenueCents: revenue.revenue_cents, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,
     productionCents, commissionTotalCents, establishmentShareCents: productionCents - commissionTotalCents,
-    byService, byProfessional, inactiveClients });
+    byService, byProfessional, inactiveClients, daily, paymentBreakdown });
 });
 
 app.get("/api/export/clients.csv", requireAuth, allowRoles("dono", "recepcao"), (req, res) => {

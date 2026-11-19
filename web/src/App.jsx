@@ -2253,12 +2253,47 @@ function AppointmentAuditReport({ month }) {
   </section>;
 }
 
+function ReportDailyChart({ daily }) {
+  const [selected,setSelected]=useState("");
+  const active=daily.find(row=>row.date===selected) || daily.find(row=>row.date===localDate()) || daily.filter(row=>row.receivedCents||row.productionCents).at(-1) || daily[0];
+  const maximum=Math.ceil(Math.max(100,...daily.flatMap(row=>[row.receivedCents,row.productionCents]))/4)*4;
+  return <section className="panel report-panel report-daily-chart">
+    <div className="panel-heading"><div><p className="eyebrow">EVOLUÇÃO DIÁRIA</p><h2>Recebimentos e produção</h2><p className="panel-subtitle">Recebimentos pela data do pagamento; produção pela data da realização.</p></div></div>
+    <div className="report-chart-legend"><span><i className="report-dot received"/> Clientes pagaram</span><span><i className="report-dot production"/> Serviços realizados</span></div>
+    {active && <div className="report-day-detail" aria-live="polite"><div><small>Dia selecionado</small><b>{dateLabel(active.date)}</b></div><div><small>Recebimentos</small><b>{money(active.receivedCents)}</b></div><div><small>Produção</small><b>{money(active.productionCents)}</b></div><div><small>Atendimentos realizados</small><b>{active.completedCount}</b></div></div>}
+    <div className="report-chart-scroll"><div className="report-chart-frame">
+      <div className="report-chart-axis">{[1,.75,.5,.25,0].map(fraction=><span key={fraction}>{money(Math.round(maximum*fraction))}</span>)}</div>
+      <div className="report-chart-plot"><div className="report-chart-lines" aria-hidden="true">{Array.from({length:5},(_,i)=><span key={i}/>)}</div><div className="report-chart-bars" style={{"--days":daily.length}}>{daily.map(row=><button type="button" key={row.date} className={`report-chart-day ${row.date===active?.date?"selected":""}`} aria-pressed={row.date===active?.date} aria-label={`${dateLabel(row.date)}: recebimentos ${money(row.receivedCents)}, produção ${money(row.productionCents)}`} title={`${dateLabel(row.date)} · Pagaram ${money(row.receivedCents)} · Produção ${money(row.productionCents)}`} onClick={()=>setSelected(row.date)}>
+        <span className="report-chart-pair"><i className="report-bar received" style={{height:`${row.receivedCents/maximum*100}%`}}/><i className="report-bar production" style={{height:`${row.productionCents/maximum*100}%`}}/></span><small>{row.date.slice(-2)}</small>
+      </button>)}</div></div>
+    </div></div>
+    <p className="panel-subtitle">Selecione um dia no gráfico para conferir os valores exatos.</p>
+  </section>;
+}
+
+function ReportSplit({ report }) {
+  const production=report.productionCents||0;
+  const commission=report.commissionTotalCents||0;
+  const share=report.establishmentShareCents||0;
+  const percentage=production>0?commission/production*100:0;
+  return <section className="panel report-panel report-split">
+    <div className="panel-heading"><div><p className="eyebrow">DISTRIBUIÇÃO DA PRODUÇÃO</p><h2>Comissões e estabelecimento</h2><p className="panel-subtitle">Valores calculados sobre serviços concluídos, não sobre o caixa.</p></div></div>
+    <div className="report-split-body"><div role="img" aria-label={`Comissões: ${money(commission)}; parcela do estabelecimento: ${money(share)}`} className="report-donut" style={{background:production?"conic-gradient(#8b5cf6 0% "+percentage+"%,#3976ec "+percentage+"% 100%)":"var(--line)"}}><div><small>Produção</small><strong>{money(production)}</strong></div></div>
+      <div className="report-split-values"><div><i className="report-dot commission"/><span><small>Comissões geradas</small><b>{money(commission)}</b></span><strong>{production?percentage.toFixed(1).replace(".",","):"0"}%</strong></div><div><i className="report-dot production"/><span><small>Parcela do estabelecimento</small><b>{money(share)}</b></span><strong>{production?(100-percentage).toFixed(1).replace(".",","):"0"}%</strong></div></div></div>
+    <p className="panel-subtitle">A parcela da empresa não representa lucro líquido: outras despesas não estão deduzidas.</p>
+  </section>;
+}
+
 function FinancePage() {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [report, setReport] = useState(null);
   const [error, setError] = useState("");
-  const refresh = useCallback(() => api(`/reports?month=${month}`).then(setReport).catch((reason) => setError(reason.message)), [month]);
-  useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => {
+    let active=true;setReport(null);setError("");
+    api(`/reports?month=${encodeURIComponent(month)}`).then(result=>{if(active)setReport(result);}).catch(reason=>{if(active)setError(reason.message);});
+    return ()=>{active=false;};
+  }, [month]);
+  const loaded=report?.month===month;
   const downloadBackup = async () => {
     try {
       const blob = await api("/export/backup");
@@ -2268,39 +2303,48 @@ function FinancePage() {
       URL.revokeObjectURL(url);
     } catch (reason) { setError(reason.message); }
   };
-  return <>
-    <PageTitle eyebrow="RESULTADOS DO ESTABELECIMENTO" title="Financeiro e relatórios" description="Recebimentos, atendimentos realizados e histórico de alterações."
-      actions={<><a className="button button-secondary" href="/api/export/appointments.csv"><Download size={16} /> Exportar atendimentos</a><Button onClick={downloadBackup}><ArrowDownToLine size={16} /> Backup do banco</Button></>} />
-    <div className="month-filter"><label htmlFor="report-month">Mês de referência</label><input id="report-month" className="input month-input" type="month" value={month} onChange={(e) => setMonth(e.target.value)} /></div>
+  return <div className="premium-reports">
+    <PageTitle eyebrow="INTELIGÊNCIA DO NEGÓCIO" title="Financeiro e relatórios" description="Acompanhe desempenho, recebimentos, serviços e comissões com dados reais do estabelecimento."
+      actions={<><a className="button button-secondary" href="/api/export/appointments.csv"><Download size={16} /> Exportar todos atendimentos</a><Button onClick={downloadBackup}><ArrowDownToLine size={16} /> Backup do banco</Button></>} />
+    <div className="panel report-period-bar"><div><b>Período de análise</b><small>Os indicadores e gráficos de serviços são referentes ao mês selecionado.</small></div><div className="month-filter"><label htmlFor="report-month">Mês de referência</label><input id="report-month" className="input month-input" type="month" value={month} onChange={(e) => {if(e.target.value)setMonth(e.target.value);}} /></div></div>
     <ErrorMessage>{error}</ErrorMessage>
+    {!loaded ? !error&&<Loading label="Carregando relatórios..."/> : <>
     <section className="stats-grid finance-stats">
       <StatCard title="Clientes pagaram no mês" value={money(report?.revenueCents)} note="Data do pagamento · antes dos repasses" icon={CircleDollarSign} tone="green" />
       <StatCard title="Clientes devem" value={money(report?.pendingCents)} note="Serviços realizados neste mês e não pagos" icon={Clock3} tone="orange" />
       <StatCard title="Produção do mês" value={money(report?.productionCents)} note="Serviços realizados, pagos ou não" icon={Scissors}/>
-      <StatCard title="Comissões dos profissionais" value={money(report?.commissionTotalCents)} note="Geradas pelos serviços do mês" icon={Wallet}/>
+      <StatCard title="Comissões dos profissionais" value={money(report?.commissionTotalCents)} note="Geradas pelos serviços do mês" icon={Wallet} tone="purple"/>
       <StatCard title="Parcela do estabelecimento" value={money(report?.establishmentShareCents)} note="Produção menos comissões; não é lucro" icon={Wallet}/>
       <StatCard title="Atendimentos concluídos" value={report?.completedCount ?? "—"} note="Neste mês" icon={CheckCheck} tone="blue" />
       <StatCard title="Tipos de serviço realizados" value={report?.byService?.length ?? "—"} note="Serviços diferentes, não quantidade de atendimentos" icon={Scissors} tone="purple" />
       <StatCard title="Clientes para reativar" value={report?.inactiveClients?.length ?? "—"} note="Sem voltar há 30 dias ou mais" icon={Users} tone="orange" />
     </section>
+    <ReportDailyChart key={month} daily={report.daily||[]}/>
+    <div className="reports-grid">
+      <ReportSplit report={report}/>
+      <section className="panel report-panel"><div className="panel-heading"><div><p className="eyebrow">ENTRADAS NO CAIXA</p><h2>Formas de pagamento</h2><p className="panel-subtitle">Pagamentos efetivamente registrados no mês.</p></div></div>
+        {report.paymentBreakdown?.length ? <div className="report-metric-list">{report.paymentBreakdown.map(item=><div className="report-metric" key={item.method}><div><b>{paymentNames[item.method]||item.method}</b><strong>{money(item.cents)}</strong></div><div className="report-progress"><span className="received" style={{width:`${report.revenueCents?item.cents/report.revenueCents*100:0}%`}}/></div><small>{item.count} recebimento(s) · {report.revenueCents?(item.cents/report.revenueCents*100).toFixed(1).replace(".",","):"0"}%</small></div>)}</div>:<EmptyState icon={Wallet} title="Sem pagamentos no período" description="Os recebimentos registrados aparecerão aqui."/>}
+      </section>
+    </div>
     <div className="reports-grid">
       <section className="panel report-panel"><div className="panel-heading"><div><p className="eyebrow">O QUE MAIS SAI</p><h2>Serviços em destaque</h2></div></div>
-        {report?.byService?.length ? <div className="report-list">{report.byService.map((item, index) => <div className="report-row" key={item.id}><span className={`rank rank-${index + 1}`}>{String(index + 1).padStart(2, "0")}</span><div className="min-w-0 flex-1"><b>{item.name}</b><small>{item.count} atendimentos</small></div><strong>{money(item.revenueCents)}</strong></div>)}
+        {report?.byService?.length ? <div className="report-metric-list">{report.byService.map((item, index) => <div className="report-metric" key={item.id}><div><b>{String(index+1).padStart(2,"0")} · {item.name}</b><strong>{money(item.revenueCents)}</strong></div><div className="report-progress"><span className="production" style={{width:`${item.count/Math.max(1,...report.byService.map(s=>s.count))*100}%`}}/></div><small>{item.count} atendimento(s) · valor dos serviços realizados</small></div>)}
         </div> : <p className="report-empty">Os serviços realizados aparecerão aqui.</p>}
       </section>
       <section className="panel report-panel"><div className="panel-heading"><div><p className="eyebrow">SEU TIME</p><h2>Comissão gerada por profissional</h2><p className="panel-subtitle">Valores registrados nos serviços concluídos; não são repasses confirmados.</p></div></div>
-        {report?.byProfessional?.length ? <div className="report-list">{report.byProfessional.map((item) => <div className="report-row" key={item.id}><span className="table-avatar">{item.name[0]}</span><div className="min-w-0 flex-1"><b>{item.name}</b><small>{item.count} atendimentos · {money(item.revenueCents)} realizados · {money(item.revenueCents-item.commissionCents)} parcela da empresa</small></div><strong>{money(item.commissionCents)}</strong></div>)}
+        {report?.byProfessional?.length ? <div className="report-metric-list">{report.byProfessional.map((item) => <div className="report-metric" key={item.id}><div><b>{item.name}</b><strong>{money(item.commissionCents)}</strong></div><div className="report-progress"><span className="commission" style={{width:`${item.commissionCents/Math.max(1,...report.byProfessional.map(p=>p.commissionCents))*100}%`}}/></div><small>{item.count} atendimento(s) · {money(item.revenueCents)} realizados · {money(item.revenueCents-item.commissionCents)} parcela da empresa</small></div>)}
         </div> : <p className="report-empty">As comissões dos atendimentos concluídos aparecerão aqui.</p>}
       </section>
     </div>
-    <section className="panel inactive-panel"><div className="panel-heading"><div><p className="eyebrow">HORA DE MATAR A SAUDADE</p><h2>Clientes que estão sumidos</h2><p className="panel-subtitle">Quem não aparece há pelo menos 30 dias merece uma mensagem especial.</p></div><span className="count-chip">{report?.inactiveClients?.length ?? 0} clientes</span></div>
+    <section className="panel inactive-panel"><div className="panel-heading"><div><p className="eyebrow">RELACIONAMENTO</p><h2>Clientes para reativar</h2><p className="panel-subtitle">Lista atual de clientes sem visita há 30 dias ou mais, independente do mês selecionado.</p></div><span className="count-chip">{report?.inactiveClients?.length ?? 0} clientes</span></div>
       {report?.inactiveClients?.length ? <div className="inactive-list">{report.inactiveClients.map((client) => <div className="inactive-row" key={client.id}><span className="table-avatar">{client.name.split(" ").map((part) => part[0]).slice(0, 2).join("")}</span>
         <div className="min-w-0 flex-1"><b>{client.name}</b><small>Última visita em {dateLabel(client.lastVisit.slice(0, 10))}</small></div>
         {client.phone && <a href={whatsappUrl(client.phone, `Oi, ${client.name}! Sentimos sua falta por aqui 💚 Que tal agendar um novo horário?`)} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={15} /> Chamar no WhatsApp</a>}</div>)}</div>
         : <p className="report-empty">Nenhum cliente sumido por enquanto. Seu relacionamento está em dia! 💚</p>}
     </section>
     <AppointmentAuditReport month={month}/>
-  </>;
+    </>}
+  </div>;
 }
 
 const weekdays = ["Domingo", "Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado"];
