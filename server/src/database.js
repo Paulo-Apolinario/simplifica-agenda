@@ -218,6 +218,31 @@ db.exec(`
     notes TEXT NOT NULL DEFAULT '',
     due_date TEXT
   );
+  CREATE TABLE IF NOT EXISTS saas_plans (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, monthly_cents INTEGER CHECK(monthly_cents>=0),
+    professional_limit INTEGER CHECK(professional_limit>=1),
+    features_json TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1
+  );
+  CREATE TABLE IF NOT EXISTS saas_subscription_payments (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    period TEXT NOT NULL, amount_cents INTEGER NOT NULL CHECK(amount_cents>0),
+    paid_on TEXT NOT NULL, method TEXT NOT NULL, plan_name TEXT NOT NULL,
+    previous_due_date TEXT, next_due_date TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
+    actor_name TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    UNIQUE(tenant_id,period)
+  );
+  CREATE TABLE IF NOT EXISTS saas_operators (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1
+  );
+  CREATE TABLE IF NOT EXISTS saas_operator_sessions (
+    token_hash TEXT PRIMARY KEY, operator_id TEXT NOT NULL REFERENCES saas_operators(id) ON DELETE CASCADE,
+    expires_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS saas_audit (
+    id TEXT PRIMARY KEY, actor_name TEXT NOT NULL, action TEXT NOT NULL, target_id TEXT,
+    details_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
   CREATE TABLE IF NOT EXISTS whatsapp_notifications (
     id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -248,6 +273,13 @@ db.exec(`
 `);
 ensureColumn("clients","whatsapp_consent","INTEGER NOT NULL DEFAULT 0");
 ensureColumn("clients","whatsapp_marketing_consent","INTEGER NOT NULL DEFAULT 0");
+ensureColumn("tenant_subscriptions","enforce_plan","INTEGER NOT NULL DEFAULT 0");
+ensureColumn("tenant_subscriptions","trial_until","TEXT");
+ensureColumn("tenant_subscriptions","monthly_cents","INTEGER");
+const insertSaasPlan=db.prepare("INSERT OR IGNORE INTO saas_plans(id,name,professional_limit,features_json) VALUES(?,?,?,?)");
+insertSaasPlan.run("comercial","Comercial",3,JSON.stringify({expenses:false,inventory:false,packages:false,advancedReports:false,automaticWhatsapp:false}));
+insertSaasPlan.run("profissional","Profissional",10,JSON.stringify({expenses:true,inventory:true,packages:true,advancedReports:true,automaticWhatsapp:false}));
+insertSaasPlan.run("premium","Premium",null,JSON.stringify({expenses:true,inventory:true,packages:true,advancedReports:true,automaticWhatsapp:true}));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS appointment_audit (

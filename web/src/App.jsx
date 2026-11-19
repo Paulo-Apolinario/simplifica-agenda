@@ -465,6 +465,8 @@ function Shell({ user, onLogout, children }) {
   },[user.role,user.tenantId,location.pathname]);
 
   const visibleNavItems = navItems.filter((item) => {
+    if(item.to==="/estoque"&&user.subscription?.features?.inventory===false)return false;
+    if(item.to==="/pacotes"&&user.subscription?.features?.packages===false)return false;
     if (user.role === "dono" && item.to === "/minha-conta") return false;
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
@@ -2128,7 +2130,7 @@ function FinancialHubPage({ user }) {
   const location = useLocation();
   const navigate = useNavigate();
   const requestedTab = new URLSearchParams(location.search).get("aba") || "caixa";
-  const available = ["caixa", "despesas", "comissoes", "regras", "fechamentos"];
+  const available = ["caixa", ...(user.subscription?.features?.expenses===false?[]:["despesas"]), "comissoes", "regras", "fechamentos"];
   const tab = requestedTab === "pendentes" ? "pendentes" : user.role === "dono" && available.includes(requestedTab) ? requestedTab : "caixa";
   const tabs = [
     {id:"caixa",title:"Caixa e recebimentos",icon:Wallet},
@@ -2142,7 +2144,7 @@ function FinancialHubPage({ user }) {
       <PageTitle eyebrow="CENTRAL FINANCEIRA" title="Gestão financeira"
         description="Caixa, despesas, comissões e fechamentos em um único lugar." />
       <div className="settings-tab-bar premium-finance-tabs" role="tablist" aria-label="Seções da gestão financeira">
-        {tabs.map(item => <button key={item.id} type="button" role="tab"
+        {tabs.filter(item=>available.includes(item.id)).map(item => <button key={item.id} type="button" role="tab"
           aria-selected={tab === item.id || (tab === "pendentes" && item.id === "caixa")} className={tab === item.id || (tab === "pendentes" && item.id === "caixa") ? "active" : ""}
           onClick={() => navigate(`/recebimentos?aba=${item.id}`)}>
           <span className="finance-tab-icon"><item.icon size={21}/></span><span>{item.title}</span><ChevronRight size={15} className="finance-tab-arrow"/>
@@ -2364,7 +2366,7 @@ function ReceivablesPage({ user }) {
   const [direct, setDirect] = useState(false);
   return <>
     <CashOpeningPanel revision={cashRevision} onOpened={() => setCashRevision(n => n + 1)}/>
-    <div className="finance-cash-actions"><div><b>Operação do caixa</b><small>Registre serviços e acompanhe os recebimentos.</small></div><div className="expense-row-actions"><Link className="button button-secondary" to="/estoque?aba=vendas"><Package size={16}/> Vender produtos</Link><Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button></div></div>
+    <div className="finance-cash-actions"><div><b>Operação do caixa</b><small>Registre serviços e acompanhe os recebimentos.</small></div><div className="expense-row-actions">{user.subscription?.features?.inventory!==false&&<Link className="button button-secondary" to="/estoque?aba=vendas"><Package size={16}/> Vender produtos</Link>}<Button onClick={() => setDirect(true)}><Plus size={16}/> Registrar serviço</Button></div></div>
     {direct && <AppointmentForm direct user={user} onClose={() => setDirect(false)} onSaved={() => { setDirect(false); refresh(); setCashRevision(n => n + 1); }} />}
     {pending.length > 0 && <Link className="cash-pending-summary cash-pending-link" to={pendingPaymentsPath}>
       <Clock3 size={22}/><div><b>{pending.length} pagamento(s) pendente(s)</b>
@@ -2519,7 +2521,7 @@ function ReportSplit({ report }) {
   </section>;
 }
 
-function FinancePage() {
+function FinancePage({user}) {
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const [report, setReport] = useState(null);
   const [error, setError] = useState("");
@@ -2580,7 +2582,7 @@ function FinancePage() {
         {client.phone && client.whatsappMarketingConsent && <a href={whatsappUrl(client.phone, `Oi, ${client.name}! Sentimos sua falta por aqui 💚 Que tal agendar um novo horário?`)} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={15} /> Chamar no WhatsApp</a>}</div>)}</div>
         : <p className="report-empty">Nenhum cliente sumido por enquanto. Seu relacionamento está em dia! 💚</p>}
     </section>
-    <AppointmentAuditReport month={month}/>
+    {user.subscription?.features?.advancedReports!==false&&<AppointmentAuditReport month={month}/>}
     </>}
   </div>;
 }
@@ -2939,7 +2941,7 @@ function WhatsAppCenter({user}){
     <ErrorMessage>{error}</ErrorMessage>{notice&&<p className="success-message">{notice}</p>}
     {tab==="config"&&owner&&prefs?<section className="panel expense-list"><form className="expense-form" onSubmit={save}>
       <div><h2>Preferências do estabelecimento</h2><p className="panel-subtitle">Manual é o padrão. A modalidade automática mantém a integração existente para confirmações e cancelamentos públicos; exige credenciais e modelos aprovados. Os demais avisos continuam manuais.</p></div>
-      <SelectField label="Modalidade" value={prefs.mode} onChange={e=>setPrefs(p=>({...p,mode:e.target.value}))}><option value="manual">Manual — sem API</option><option value="automatic">Automática — API oficial configurada no servidor</option></SelectField>
+      <SelectField label="Modalidade" value={prefs.mode} onChange={e=>setPrefs(p=>({...p,mode:e.target.value}))}><option value="manual">Manual — sem API</option><option value="automatic" disabled={user.subscription?.features?.automaticWhatsapp===false}>Automática — API oficial configurada no servidor</option></SelectField>
       {prefs.mode==="automatic"&&<p className="booking-share-notice">{prefs.automaticConfigured?"Configuração encontrada no servidor.":"API ainda não configurada. Os avisos continuarão disponíveis na fila manual."}</p>}
       <div className="expense-form-grid"><Field label="Primeiro lembrete (horas)" type="number" min="1" max="168" value={prefs.reminderHours[0]??""} onChange={e=>setPrefs(p=>({...p,reminderHours:[e.target.value===""?null:Number(e.target.value),p.reminderHours[1]??null]}))}/><Field label="Segundo lembrete (horas)" type="number" min="1" max="168" value={prefs.reminderHours[1]??""} onChange={e=>setPrefs(p=>({...p,reminderHours:[p.reminderHours[0]??null,e.target.value===""?null:Number(e.target.value)]}))}/><Field label="Avisar pacote com antecedência (dias)" type="number" min="1" max="60" required value={prefs.expiryDays} onChange={e=>setPrefs(p=>({...p,expiryDays:Number(e.target.value)}))}/></div>
       <p className="panel-subtitle">Variáveis disponíveis: para todos, {"{cliente}, {empresa}"}; para atendimentos, {"{servico}, {profissional}, {data}, {hora}"}; para pacotes, {"{pacote}, {validade}, {sessoes}"}; para fidelidade, {"{pontos}, {desconto}"}.</p>
@@ -3306,28 +3308,54 @@ function SettlementsPage() {
   </>;
 }
 
+const saasFeatureNames={expenses:"Despesas e contas a pagar",inventory:"Estoque e venda de produtos",packages:"Pacotes e fidelização",advancedReports:"Auditoria de atendimentos",automaticWhatsapp:"WhatsApp automático"};
+function SaasPlansPanel({plans,call,refresh}){
+  const [editing,setEditing]=useState(null),[error,setError]=useState(""),[busy,setBusy]=useState(false);
+  const start=p=>{setError("");setEditing(p?{...p,active:!!p.active,existing:true}:{id:"",name:"",monthlyCents:null,professionalLimit:3,features:Object.fromEntries(Object.keys(saasFeatureNames).map(k=>[k,false])),active:true,existing:false});};
+  const save=async e=>{e.preventDefault();setBusy(true);setError("");try{if(editing.existing&&!await confirmAction("As alterações de recursos e limites serão aplicadas aos estabelecimentos que já utilizam este plano. Os preços contratados permanecem."))return;await call("/plans"+(editing.existing?"/"+editing.id:""),editing.existing?"PATCH":"POST",editing);setEditing(null);await refresh();}catch(e){setError(e.message);}finally{setBusy(false);}};
+  return <section className="panel expense-list"><div className="panel-heading"><div><h2>Catálogo de planos</h2><p className="panel-subtitle">Agenda, clientes, caixa, comissões, resumo financeiro e WhatsApp manual estão incluídos em todos os planos.</p></div><Button onClick={()=>start(null)}><Plus size={16}/> Criar plano</Button></div><div className="whatsapp-queue-grid">{plans.map(p=><article className="whatsapp-queue-card" key={p.id}><div className="expense-row"><div className="expense-row-details"><b>{p.name}</b><small>{p.active?"Disponível":"Inativo"} · {p.id}</small></div><strong>{p.monthlyCents===null?"A definir":money(p.monthlyCents)+"/mês"}</strong></div><p>{p.professionalLimit??"Ilimitados"} profissionais ativos</p>{Object.entries(saasFeatureNames).map(([k,v])=><small key={k}>{p.features[k]?"✓":"—"} {v}</small>)}<Button variant="secondary" onClick={()=>start(p)}>Editar plano</Button></article>)}</div>
+  {editing&&<Modal title={editing.existing?"Editar plano":"Criar plano"} onClose={()=>{if(!busy)setEditing(null);}}><form className="expense-form" onSubmit={save}><Field label="Identificador" required disabled={editing.existing} value={editing.id} onChange={e=>setEditing(v=>({...v,id:e.target.value.toLowerCase()}))}/><Field label="Nome do plano" required value={editing.name} onChange={e=>setEditing(v=>({...v,name:e.target.value}))}/><Field label="Mensalidade (R$)" type="number" min="0" step=".01" value={editing.monthlyCents===null?"":editing.monthlyCents/100} onChange={e=>setEditing(v=>({...v,monthlyCents:e.target.value===""?null:Math.round(Number(e.target.value)*100)}))}/><Field label="Limite de profissionais (vazio = ilimitado)" type="number" min="1" step="1" value={editing.professionalLimit??""} onChange={e=>setEditing(v=>({...v,professionalLimit:e.target.value===""?null:Number(e.target.value)}))}/>{Object.entries(saasFeatureNames).map(([k,v])=><label className="choice-option" key={k}><input type="checkbox" checked={editing.features[k]} onChange={e=>setEditing(x=>({...x,features:{...x.features,[k]:e.target.checked}}))}/> {v}</label>)}<label className="choice-option"><input type="checkbox" checked={editing.active} onChange={e=>setEditing(v=>({...v,active:e.target.checked}))}/> Disponível para novas assinaturas</label><ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" disabled={busy} onClick={()=>setEditing(null)}>Cancelar</Button><Button disabled={busy}>Salvar plano</Button></div></form></Modal>}</section>;
+}
+function SaasPaymentsPanel({businesses,payments,today,call,refresh}){
+  const [form,setForm]=useState(null),[error,setError]=useState(""),[busy,setBusy]=useState(false),[month,setMonth]=useState(today.slice(0,7)),[filter,setFilter]=useState("");
+  const visible=payments.filter(p=>(!filter||p.tenantId===filter)&&(!month||p.paidOn.slice(0,7)===month));
+  const save=async e=>{e.preventDefault();if(busy)return;setBusy(true);setError("");try{await call("/businesses/"+form.tenantId+"/payments","POST",{...form,amountCents:Math.round(Number(form.amount)*100)});setForm(null);await refresh();}catch(e){setError(e.message);}finally{setBusy(false);}};
+  return <section className="panel expense-list"><div className="panel-heading"><div><h2>Mensalidades recebidas</h2><p className="panel-subtitle">Registro manual separado do caixa dos estabelecimentos. Uma baixa por competência; não efetua cobrança.</p></div><Button onClick={()=>{setError("");setForm({tenantId:"",period:today.slice(0,7),amount:"",paidOn:today,nextDueDate:"",method:"pix",notes:""});}}>Registrar mensalidade</Button></div><div className="expense-filters"><Field label="Mês de recebimento" type="month" value={month} onChange={e=>setMonth(e.target.value)}/><SelectField label="Estabelecimento" value={filter} onChange={e=>setFilter(e.target.value)}><option value="">Todos</option>{businesses.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}</SelectField><strong>{money(visible.reduce((s,p)=>s+p.amountCents,0))}</strong></div>{visible.map(p=><div className="expense-row" key={p.id}><div className="expense-row-details"><b>{p.businessName} · {p.planName}</b><small>Competência {p.period} · recebido {dateLabel(p.paidOn)} · {p.method} · próximo vencimento {dateLabel(p.nextDueDate)}</small><small>{p.actorName}{p.notes?" · "+p.notes:""}</small></div><strong>{money(p.amountCents)}</strong></div>)}{!visible.length&&<EmptyState icon={Wallet} title="Nenhuma mensalidade registrada" description="Os recebimentos confirmados aparecerão neste histórico."/>}
+  {form&&<Modal title="Registrar mensalidade" onClose={()=>{if(!busy)setForm(null);}}><form className="expense-form" onSubmit={save}><SelectField label="Estabelecimento" required value={form.tenantId} onChange={e=>{const b=businesses.find(b=>b.id===e.target.value);setForm(v=>({...v,tenantId:e.target.value,amount:b?.monthlyCents==null?"":b.monthlyCents/100}));}}><option value="">Selecione</option>{businesses.map(b=><option value={b.id} key={b.id}>{b.name}</option>)}</SelectField><Field label="Competência" type="month" required value={form.period} onChange={e=>setForm(v=>({...v,period:e.target.value}))}/><Field label="Valor recebido (R$)" type="number" min=".01" step=".01" required value={form.amount} onChange={e=>setForm(v=>({...v,amount:e.target.value}))}/><SelectField label="Forma de pagamento" value={form.method} onChange={e=>setForm(v=>({...v,method:e.target.value}))}>{Object.entries({pix:"Pix",boleto:"Boleto",dinheiro:"Dinheiro",cartao:"Cartão",transferencia:"Transferência"}).map(([k,v])=><option key={k} value={k}>{v}</option>)}</SelectField><Field label="Data do recebimento" type="date" max={today} required value={form.paidOn} onChange={e=>setForm(v=>({...v,paidOn:e.target.value}))}/><Field label="Próximo vencimento" type="date" required value={form.nextDueDate} onChange={e=>setForm(v=>({...v,nextDueDate:e.target.value}))}/><Field label="Observações (opcional)" maxLength={300} value={form.notes} onChange={e=>setForm(v=>({...v,notes:e.target.value}))}/><p className="panel-subtitle">O pagamento atualiza o vencimento, mas não reativa automaticamente um acesso suspenso.</p><ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" disabled={busy} onClick={()=>setForm(null)}>Cancelar</Button><Button disabled={busy}>Confirmar pagamento</Button></div></form></Modal>}</section>;
+}
+function SaasOperatorsPanel({operators,operator,call,refresh}){
+  const [form,setForm]=useState(null),[error,setError]=useState(""),[busy,setBusy]=useState(false);
+  const save=async e=>{e.preventDefault();setBusy(true);setError("");try{await call("/operators","POST",form);setForm(null);await refresh();}catch(e){setError(e.message);}finally{setBusy(false);}};
+  const change=async o=>{if(!await confirmAction("Alterar acesso administrativo de "+o.name+"?"))return;try{await call("/operators/"+o.id,"PATCH",{active:!o.active});await refresh();}catch(e){setError(e.message);}};
+  return <section className="panel expense-list"><div className="panel-heading"><div><h2>Operadores da plataforma</h2><p className="panel-subtitle">Acesso individual, separado das contas de estabelecimentos. Sessões expiram em oito horas.</p></div>{(operator||!operators.length)&&<Button onClick={()=>{setError("");setForm({name:"",email:"",password:""});}}>Novo operador</Button>}</div>{operators.map(o=><div className="expense-row" key={o.id}><div className="expense-row-details"><b>{o.name}</b><small>{o.email} · {o.active?"Ativo":"Inativo"}</small></div>{operator&&o.id!==operator.id&&<Button variant="secondary" onClick={()=>change(o)}>{o.active?"Desativar":"Reativar"}</Button>}</div>)}<ErrorMessage>{error}</ErrorMessage>{!operators.length&&<p className="panel-subtitle">Crie a primeira conta usando a chave de recuperação e depois entre com o e-mail e senha.</p>}
+  {form&&<Modal title="Novo operador" onClose={()=>{if(!busy)setForm(null);}}><form className="expense-form" onSubmit={save}><Field label="Nome" required value={form.name} onChange={e=>setForm(v=>({...v,name:e.target.value}))}/><Field label="E-mail" type="email" required value={form.email} onChange={e=>setForm(v=>({...v,email:e.target.value}))}/><Field label="Senha administrativa" type="password" minLength={12} maxLength={72} required value={form.password} onChange={e=>setForm(v=>({...v,password:e.target.value}))}/><ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" disabled={busy} onClick={()=>setForm(null)}>Cancelar</Button><Button disabled={busy}>Criar conta</Button></div></form></Modal>}</section>;
+}
 function SaasAdminPage() {
   const [key,setKey]=useState("");
+  const [loginMode,setLoginMode]=useState("key"),[email,setEmail]=useState(""),[password,setPassword]=useState(""),[token,setToken]=useState(""),[operator,setOperator]=useState(null);
   const [connected,setConnected]=useState(false);
   const [businesses,setBusinesses]=useState([]);
+  const [plans,setPlans]=useState([]),[payments,setPayments]=useState([]),[events,setEvents]=useState([]),[operators,setOperators]=useState([]),[today,setToday]=useState(localDate()),[tab,setTab]=useState("businesses"),[query,setQuery]=useState("");
   const [values,setValues]=useState({businessName:"",slug:"",ownerName:"",ownerEmail:"",plan:"comercial"});
   const [issued,setIssued]=useState(null);
   const [editing,setEditing]=useState(null);
   const [error,setError]=useState(""),[busy,setBusy]=useState(false);
   const call=useCallback(async(path,method="GET",body)=>{
     const response=await fetch("/api/saas"+path,{
-      method,headers:{"X-Saas-Admin-Key":key,...(body?{"Content-Type":"application/json"}:{})},
+      method,headers:{...(token?{Authorization:"Bearer "+token}:{"X-Saas-Admin-Key":key}),...(body?{"Content-Type":"application/json"}:{})},
       ...(body?{body:JSON.stringify(body)}:{}),credentials:"same-origin",
     });
     const data=await response.json();
     if(!response.ok)throw new Error(data.error||"Falha na Central SaaS.");
     return data;
-  },[key]);
+  },[key,token]);
   const refresh=useCallback(async()=>{
-    const result=await call("/businesses");setBusinesses(result.businesses);setConnected(true);
+    const [result,defs,ledger,audit,accounts]=await Promise.all([call("/businesses"),call("/plans"),call("/payments"),call("/audit"),call("/operators")]);
+    setBusinesses(result.businesses);setToday(result.today);setPlans(defs.plans);setPayments(ledger.payments);setEvents(audit.events);setOperators(accounts.operators);setConnected(true);
   },[call]);
+  useEffect(()=>{if(token)refresh().catch(e=>{setError(e.message);setConnected(false);setToken("");setOperator(null);});},[token,refresh]);
   const connect=async e=>{e.preventDefault();setError("");
-    try{await refresh();}catch(e){setError(e.message);}
+    setBusy(true);try{if(loginMode==="operator"){const result=await call("/login","POST",{email,password});setToken(result.token);setOperator(result.operator);setPassword("");setKey("");}else await refresh();}catch(e){setError(e.message);}finally{setBusy(false);}
   };
   const create=async e=>{
     e.preventDefault();setBusy(true);setError("");
@@ -3346,21 +3374,34 @@ function SaasAdminPage() {
     });await refresh();}
     catch(e){setError(e.message);}finally{setBusy(false);}
   };
+  const commercial=businesses.filter(b=>b.slug!=="studio-bela-vista");
+  const active=commercial.filter(b=>b.status==="active"),late=active.filter(b=>b.dueDate&&b.dueDate<today&&!(b.trialUntil&&b.trialUntil>=today));
+  const mrr=active.filter(b=>!(b.trialUntil&&b.trialUntil>=today)).reduce((s,b)=>s+(b.monthlyCents??0),0);
+  const received=payments.filter(p=>p.paidOn.slice(0,7)===today.slice(0,7)).reduce((s,p)=>s+p.amountCents,0);
   return <main className="saas-admin-page">
     <div className="saas-admin-header"><div className="public-brand"><img src="/assets/simplifica-perfil.svg" alt=""/> Simplifica <span>Admin</span></div>
       <a className="button button-secondary" href="/">Voltar ao sistema</a></div>
     <div className="saas-admin-content">
       <PageTitle eyebrow="ÁREA RESTRITA DO OPERADOR" title="Central SaaS"
-        description="Cadastre clientes comerciais e administre planos e acessos. A chave não é armazenada pelo navegador."/>
+        description="Administre estabelecimentos, planos, assinaturas e receita da plataforma."/>
       {!connected?<form className="panel management-panel saas-admin-login" onSubmit={connect}>
-        <Field label="Chave de acesso da plataforma" type="password" required autoComplete="off" value={key}
-          onChange={e=>setKey(e.target.value)} placeholder="Chave SAAS_ADMIN_KEY do servidor"/>
-        <ErrorMessage>{error}</ErrorMessage><Button>Acessar Central SaaS</Button>
-        <p className="panel-subtitle">Configure SAAS_ADMIN_KEY no arquivo .env do servidor. Use somente em HTTPS fora do localhost.</p>
+        <SelectField label="Forma de acesso" value={loginMode} onChange={e=>setLoginMode(e.target.value)}><option value="key">Chave administrativa / recuperação</option><option value="operator">Conta administrativa individual</option></SelectField>
+        {loginMode==="key"?<Field label="Chave de acesso da plataforma" type="password" required autoComplete="off" value={key}
+          onChange={e=>setKey(e.target.value)} placeholder="Chave SAAS_ADMIN_KEY do servidor"/>:<><Field label="E-mail administrativo" type="email" required value={email} onChange={e=>setEmail(e.target.value)}/><Field label="Senha administrativa" type="password" required value={password} onChange={e=>setPassword(e.target.value)}/></>}
+        <ErrorMessage>{error}</ErrorMessage><Button disabled={busy}>Acessar Central SaaS</Button>
+        <p className="panel-subtitle">Use somente HTTPS fora do localhost. A chave permite criar a primeira conta administrativa individual.</p>
       </form>:<>
-        <div className="saas-admin-top-actions"><Button variant="secondary" type="button" onClick={()=>{
-          setConnected(false);setKey("");setIssued(null);setBusinesses([]);
+        <div className="saas-admin-top-actions"><span>{operator?operator.name:"Acesso por chave de recuperação"}</span><Button variant="secondary" type="button" onClick={()=>refresh().catch(e=>setError(e.message))}>Atualizar</Button><Button variant="secondary" type="button" onClick={async()=>{
+          try{await call("/logout","POST");}catch{}setConnected(false);setToken("");setOperator(null);setKey("");setIssued(null);setBusinesses([]);setPayments([]);setEvents([]);setOperators([]);
         }}>Encerrar acesso à central</Button></div>
+        <ErrorMessage>{error}</ErrorMessage>
+        <section className="stats-grid finance-stats"><StatCard title="Estabelecimentos ativos" value={active.length} icon={Users}/><StatCard title="Suspensos" value={commercial.length-active.length} icon={ShieldCheck} tone="orange"/><StatCard title="Vencidos" value={late.length} note="Sem bloqueio automático" icon={Clock3} tone="orange"/><StatCard title="MRR contratado" value={money(mrr)} note="Ativos com mensalidade definida, sem teste" icon={Wallet}/><StatCard title="Recebido neste mês" value={money(received)} note="Mensalidades registradas" icon={CheckCheck} tone="green"/></section>
+        <div className="settings-tab-bar" role="tablist" aria-label="Central SaaS">{[["businesses","Estabelecimentos"],["plans","Planos"],["payments","Mensalidades"],["operators","Operadores"],["audit","Histórico administrativo"]].map(([k,v])=><button key={k} role="tab" type="button" aria-selected={tab===k} className={tab===k?"active":""} onClick={()=>{setTab(k);setError("");}}>{v}</button>)}</div>
+        {tab==="plans"&&<SaasPlansPanel plans={plans} call={call} refresh={refresh}/>}
+        {tab==="payments"&&<SaasPaymentsPanel businesses={commercial} payments={payments} today={today} call={call} refresh={refresh}/>}
+        {tab==="operators"&&<SaasOperatorsPanel operators={operators} operator={operator} call={call} refresh={refresh}/>}
+        {tab==="audit"&&<section className="panel expense-list"><h2>Histórico administrativo</h2>{events.map(e=><div className="expense-row" key={e.id}><div className="expense-row-details"><b>{e.action.replaceAll("_"," ")}</b><small>{e.actorName} · {cashTimestamp(e.createdAt)}</small><small>{businesses.find(b=>b.id===e.targetId)?.name||plans.find(p=>p.id===e.targetId)?.name||operators.find(o=>o.id===e.targetId)?.name||""}</small></div></div>)}{!events.length&&<p className="panel-subtitle">Nenhuma operação registrada.</p>}</section>}
+        {tab==="businesses"&&<>
         <section className="panel management-panel">
           <div className="panel-heading"><div><h2>Cadastrar novo estabelecimento</h2>
             <p className="panel-subtitle">O cliente receberá acesso comercial, sem interferir no ambiente de demonstração.</p></div></div>
@@ -3375,9 +3416,10 @@ function SaasAdminPage() {
               <Field label="E-mail de login do proprietário" type="email" required value={values.ownerEmail}
                 onChange={e=>setValues(v=>({...v,ownerEmail:e.target.value}))}/>
               <SelectField label="Plano" value={values.plan} onChange={e=>setValues(v=>({...v,plan:e.target.value}))}>
-                <option value="comercial">Comercial</option><option value="profissional">Profissional</option>
-                <option value="premium">Premium</option>
+                {plans.filter(p=>p.active).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
               </SelectField>
+              <Field label="Vencimento inicial" type="date" value={values.dueDate||""} onChange={e=>setValues(v=>({...v,dueDate:e.target.value}))}/>
+              <Field label="Teste até (opcional)" type="date" value={values.trialUntil||""} onChange={e=>setValues(v=>({...v,trialUntil:e.target.value}))}/>
             </div>
             <ErrorMessage>{error}</ErrorMessage><Button disabled={busy}>{busy?"Criando...":"Cadastrar comércio e gerar acesso"}</Button>
           </form>
@@ -3397,12 +3439,13 @@ function SaasAdminPage() {
         <section className="panel management-panel"><div className="panel-heading"><div>
           <h2>Estabelecimentos cadastrados</h2><p className="panel-subtitle">Status do acesso e plano de cada empresa.</p></div>
           <span className="count-chip">{businesses.length}</span></div>
-          <div className="management-list">{businesses.map(item=>
+          <Field label="Buscar estabelecimento" value={query} onChange={e=>setQuery(e.target.value)}/>
+          <div className="management-list">{businesses.filter(b=>(b.name+" "+b.slug+" "+b.ownerEmail).toLowerCase().includes(query.toLowerCase())).map(item=>
             <article key={item.id} className="service-row request-item">
               <span className="service-row-icon"><ShieldCheck size={18}/></span>
               <div className="min-w-0 flex-1"><b>{item.name}</b>
                 <small>{item.ownerName} · {item.ownerEmail}</small>
-                <small>{item.slug} · {item.plan} · {item.status==="suspended"?"Suspenso":"Ativo"}</small></div>
+                <small>{item.slug} · {item.planName||item.plan} · {item.status==="suspended"?"Suspenso":"Ativo"} · {item.enforced?"Limites aplicados":"Acesso legado"}</small><small>{item.monthlyCents===null?"Mensalidade não definida":money(item.monthlyCents)+"/mês"} · {item.professionals} profissionais · {item.dueDate?"Vence "+dateLabel(item.dueDate):"Sem vencimento"}{item.trialUntil?" · Teste até "+dateLabel(item.trialUntil):""}</small></div>
               {item.slug!=="studio-bela-vista"&&<>
                 <Button type="button" variant="secondary" onClick={()=>setEditing({...item})}>Editar plano</Button>
                 <Button type="button" variant="secondary" disabled={busy}
@@ -3416,27 +3459,30 @@ function SaasAdminPage() {
             e.preventDefault();setBusy(true);setError("");
             try{
               await call(`/businesses/${editing.id}`,"PATCH",{
-                plan:editing.plan,status:editing.status,notes:editing.notes||"",dueDate:editing.dueDate||null,
+                plan:editing.plan,status:editing.status,notes:editing.notes||"",dueDate:editing.dueDate||null,trialUntil:editing.trialUntil||null,monthlyCents:editing.monthlyCents,applyPlan:!!editing.applyPlan,
               });
               setEditing(null);await refresh();
             }catch(err){setError(err.message);}finally{setBusy(false);}
           }}>
             <SelectField label="Plano" value={editing.plan}
-              onChange={e=>setEditing(v=>({...v,plan:e.target.value}))}>
-              <option value="comercial">Comercial</option><option value="profissional">Profissional</option><option value="premium">Premium</option>
+              onChange={e=>setEditing(v=>({...v,plan:e.target.value,monthlyCents:plans.find(p=>p.id===e.target.value)?.monthlyCents??null}))}>
+              {plans.filter(p=>p.active||p.id===editing.plan).map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
             </SelectField>
+            <Field label="Mensalidade contratada (R$)" type="number" min="0" step=".01" value={editing.monthlyCents===null?"":editing.monthlyCents/100} onChange={e=>setEditing(v=>({...v,monthlyCents:e.target.value===""?null:Math.round(Number(e.target.value)*100)}))}/>
+            <Field label="Teste até" type="date" value={editing.trialUntil||""} onChange={e=>setEditing(v=>({...v,trialUntil:e.target.value}))}/>
+            {!editing.enforced&&<label className="choice-option"><input type="checkbox" checked={!!editing.applyPlan} onChange={e=>setEditing(v=>({...v,applyPlan:e.target.checked}))}/> Aplicar limites do plano ao estabelecimento legado</label>}
             <Field label="Vencimento (registro administrativo)" type="date" value={editing.dueDate||""}
               onChange={e=>setEditing(v=>({...v,dueDate:e.target.value}))}/>
             <Field label="Observações contratuais">
               <textarea className="input" rows={3} maxLength={300} value={editing.notes||""}
                 onChange={e=>setEditing(v=>({...v,notes:e.target.value}))}/>
             </Field>
-            <p className="panel-subtitle">O vencimento é apenas informativo nesta fase. Não existe cobrança automática.</p>
+            <p className="panel-subtitle">Alterar o plano aplica seus limites. Dados anteriores são preservados; vencimento e teste não suspendem automaticamente.</p>
             <ErrorMessage>{error}</ErrorMessage>
             <div className="modal-actions"><Button type="button" variant="secondary"
               onClick={()=>setEditing(null)}>Cancelar</Button><Button disabled={busy}>Salvar</Button></div>
           </form>
-        </Modal>}
+        </Modal>}</>}
       </>}
     </div>
   </main>;
@@ -3486,8 +3532,8 @@ export default function App() {
       <Route path="/solicitacoes" element={user.role!=="profissional" ? <OnlineRequestsPage/> : <AccessDenied/>}/>
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
-      <Route path="/estoque" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<InventoryPage user={user}/>:<AccessDenied/>}/>
-      <Route path="/pacotes" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<PackagesPage user={user}/>:<AccessDenied/>}/>
+      <Route path="/estoque" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"&&user.subscription?.features?.inventory!==false?<InventoryPage user={user}/>:<AccessDenied/>}/>
+      <Route path="/pacotes" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"&&user.subscription?.features?.packages!==false?<PackagesPage user={user}/>:<AccessDenied/>}/>
       <Route path="/whatsapp" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<WhatsAppCenter user={user}/>:<AccessDenied/>}/>
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage user={user} /> : <AccessDenied />} />
@@ -3496,7 +3542,7 @@ export default function App() {
       <Route path="/regras-comissao" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=regras" replace/> : <AccessDenied/>}/>
       <Route path="/fechamentos" element={user.role === "dono" ? <Navigate to="/recebimentos?aba=fechamentos" replace/> : <AccessDenied/>}/>
       <Route path="/compartilhar" element={<BookingSharePage user={user} />} />
-      <Route path="/financeiro" element={user.role === "dono" ? <FinancePage /> : <AccessDenied />} />
+      <Route path="/financeiro" element={user.role === "dono" ? <FinancePage user={user}/> : <AccessDenied />} />
       <Route path="/recebimentos" element={["dono", "recepcao"].includes(user.role) && user.tenantId !== "tenant-salao-demo" ? <FinancialHubPage user={user} /> : <AccessDenied />} />
       <Route path="/configuracoes" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <SettingsPage user={user} onUserUpdated={setUser} /> : <AccessDenied />} />
       <Route path="/minha-conta" element={user.tenantId === "tenant-salao-demo" ? <AccessDenied /> :

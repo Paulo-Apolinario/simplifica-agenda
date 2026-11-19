@@ -1,0 +1,62 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {randomBytes} from "node:crypto";
+
+test("planos, limites, assinaturas, baixa mensal e administração individual",async()=>{
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),"agenda-plans-"));
+  process.env.DATABASE_PATH=path.join(temp,"app.sqlite");process.env.SAAS_ADMIN_KEY=randomBytes(32).toString("hex");
+  process.env.INSTALL_TOKEN=randomBytes(32).toString("hex");process.env.NODE_ENV="test";process.env.DEMO_MODE="false";
+  const {default:app}=await import("../src/app.js"),{db}=await import("../src/database.js");
+  const server=app.listen(0,"127.0.0.1");await new Promise(r=>server.once("listening",r));
+  let cookie="",token="";
+  const call=async(route,method="GET",body,admin=false)=>{
+    const response=await fetch("http://127.0.0.1:"+server.address().port+"/api"+route,{method,headers:{...(body?{"Content-Type":"application/json"}:{}),...(cookie?{Cookie:cookie}:{}),...(admin==="key"?{"X-Saas-Admin-Key":process.env.SAAS_ADMIN_KEY}:admin?{Authorization:"Bearer "+token}:{})},body:body?JSON.stringify(body):undefined});
+    const next=response.headers.get("set-cookie");if(next)cookie=next.split(";")[0];return {status:response.status,body:await response.json()};
+  };
+  try{
+    assert.equal((await call("/installation/setup","POST",{businessName:"Legado",slug:"legado",ownerName:"Dono",ownerEmail:"legacy@plans.local",password:"Senha-Forte-Legado-123",installToken:process.env.INSTALL_TOKEN})).status,201);
+    const legacy=await call("/auth/login","POST",{email:"legacy@plans.local",password:"Senha-Forte-Legado-123"});assert.equal(legacy.body.user.subscription.enforced,false);
+    assert.equal((await call("/inventory")).status,200);
+    const op=await call("/saas/operators","POST",{name:"Operador",email:"admin@plans.local",password:"Senha-Forte-Admin-123"},"key");assert.equal(op.status,201);
+    const login=await call("/saas/login","POST",{email:"admin@plans.local",password:"Senha-Forte-Admin-123"});assert.equal(login.status,200);token=login.body.token;
+    assert.equal((await call("/saas/plans")).status,403);
+    const plans=(await call("/saas/plans","GET",null,true)).body.plans;
+    const commercial=plans.find(p=>p.id==="comercial");assert.equal(commercial.professionalLimit,3);
+    assert.equal((await call("/saas/plans/comercial","PATCH",{...commercial,active:true,monthlyCents:9900,professionalLimit:1},true)).status,200);
+    const created=await call("/saas/businesses","POST",{businessName:"Novo",slug:"novo-plans",ownerName:"Maria",ownerEmail:"new@plans.local",plan:"comercial",dueDate:"2020-01-01"},true);
+    assert.equal(created.status,201);const id=created.body.business.id;
+    const tenantLogin=await call("/auth/login","POST",{email:"new@plans.local",password:created.body.temporaryPassword});assert.equal(tenantLogin.status,200);
+    assert.equal(tenantLogin.body.user.subscription.enforced,true);assert.equal(tenantLogin.body.user.subscription.professionalLimit,1);
+    for(const route of ["/inventory","/expenses","/packages","/reports/appointment-audit"])assert.equal((await call(route)).status,403,route);
+    assert.equal((await call("/reports")).status,200);assert.equal((await call("/packages/eligible")).body.purchases.length,0);
+    const prefs=(await call("/whatsapp/preferences")).body;
+    assert.equal((await call("/whatsapp/preferences","PUT",{...prefs,mode:"automatic"})).status,403);
+    assert.equal((await call("/team-members","POST",{name:"Primeiro",role:"profissional"})).status,201);
+    assert.equal((await call("/team-members","POST",{name:"Segundo",role:"profissional"})).status,409);
+    const b=(await call("/saas/businesses","GET",null,true)).body.businesses.find(x=>x.id===id);assert.equal(b.monthlyCents,9900);
+    const today=(await call("/saas/businesses","GET",null,true)).body.today;
+    const next=new Date(today+"T12:00:00Z");next.setUTCDate(next.getUTCDate()+30);
+    const pay={period:today.slice(0,7),amountCents:9900,paidOn:today,method:"pix",nextDueDate:next.toISOString().slice(0,10)};
+    assert.equal((await call("/saas/businesses/"+id+"/payments","POST",pay,true)).status,201);
+    assert.equal((await call("/saas/businesses/"+id+"/payments","POST",pay,true)).status,409);
+    const ledger=(await call("/saas/payments","GET",null,true)).body.payments;assert.equal(ledger.length,1);assert.match(ledger[0].actorName,/Operador/);
+    assert.equal((await call("/cash/daily")).body.expectedTotalCents,0);
+    assert.equal((await call("/saas/businesses/"+id,"PATCH",{plan:"profissional",status:"active",dueDate:pay.nextDueDate},true)).status,200);
+    assert.equal((await call("/inventory")).status,200);
+    assert.equal((await call("/team-members","POST",{name:"Segundo",role:"profissional"})).status,201);
+    assert.equal((await call("/saas/businesses/"+id,"PATCH",{plan:"profissional",status:"suspended",dueDate:pay.nextDueDate},true)).status,200);
+    assert.equal((await call("/auth/me")).status,401);
+    assert.equal((await call("/saas/audit","GET",null,true)).body.events.some(e=>e.action==="mensalidade_registrada"&&e.actorName.includes("Operador")),true);
+    assert.equal((await call("/saas/logout","POST",null,true)).status,200);
+    assert.equal((await call("/saas/plans","GET",null,true)).status,401);
+    assert.equal(db.prepare("SELECT enforce_plan FROM tenant_subscriptions WHERE tenant_id=?").get(id).enforce_plan,1);
+    assert.equal((await call("/auth/login","POST",{email:"legacy@plans.local",password:"Senha-Forte-Legado-123"})).body.user.subscription.enforced,false);
+    assert.equal((await call("/packages")).status,200);
+    assert.equal((await call("/expenses","POST",{description:"Conta em aberto",category:"energia",expenseType:"fixa",amountCents:2000,dueOn:today})).status,201);
+    assert.equal((await call("/saas/businesses/"+legacy.body.user.tenantId,"PATCH",{plan:"comercial",status:"active",applyPlan:true},"key")).status,409);
+    assert.equal((await call("/auth/me")).body.user.subscription.enforced,false);
+  }finally{await new Promise(r=>server.close(r));db.close();fs.rmSync(temp,{recursive:true,force:true});}
+});

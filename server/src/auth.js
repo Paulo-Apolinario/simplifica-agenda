@@ -1,4 +1,5 @@
 import { db } from "./database.js";
+import {getPlanAccess,featureForPath} from "./saas-plans.js";
 
 export function publicUser(user) {
   return {
@@ -12,6 +13,7 @@ export function publicUser(user) {
     role: user.role,
     phone: user.phone,
     commissionPercent: user.commissionPercent ?? user.commission_percent,
+    subscription:getPlanAccess(user.tenantId??user.tenant_id),
   };
 }
 
@@ -32,6 +34,10 @@ export function requireAuth(req, res, next) {
     return;
   }
   req.user = publicUser(activeUser);
+  const feature=featureForPath(req.path);
+  if(feature&&!req.user.subscription.features[feature]){
+    res.status(403).json({error:"Esta funcionalidade não está incluída no plano contratado."});return;
+  }
   next();
 }
 

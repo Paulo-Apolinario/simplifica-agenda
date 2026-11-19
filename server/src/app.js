@@ -11,6 +11,7 @@ import { allowRoles, publicUser, requireAuth } from "./auth.js";
 import { SQLiteSessionStore } from "./session-store.js";
 import { completedEarlySql, findScheduleConflict } from "./schedule.js";
 import { cashClosingPdf, textPdf } from "./cash-closing-pdf.js";
+import {getPlanAccess,planFeatures,professionalLimitReached} from "./saas-plans.js";
 
 const app = express();
 const sessionSecret = process.env.SESSION_SECRET ?? "desenvolvimento-local-chave-segura-32";
@@ -294,23 +295,112 @@ app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
 // SaaS operator uses an independent high-entropy key, never a tenant user session.
 // Configure SAAS_ADMIN_KEY (>= 32 characters) locally and use HTTPS for network access.
 function requireSaasAdmin(req,res,next) {
+  res.setHeader("Cache-Control","no-store");
+  const token=String(req.get("Authorization")||"").replace(/^Bearer /,"");
+  if(token&&/^[a-f0-9]{64}$/.test(token)){
+    const operator=db.prepare(`SELECT o.id,o.name,o.email FROM saas_operator_sessions s JOIN saas_operators o ON o.id=s.operator_id
+      WHERE s.token_hash=? AND s.expires_at>? AND o.active=1`).get(crypto.createHash("sha256").update(token).digest("hex"),Date.now());
+    if(!operator)return fail(res,401,"Sessão administrativa expirada.");
+    req.saasActor=operator.name+" ("+operator.email+")";req.saasOperator=operator;return next();
+  }
   const configured=process.env.SAAS_ADMIN_KEY || "";
   const provided=String(req.get("X-Saas-Admin-Key")||"");
   if(configured.length<32)return fail(res,503,"Central SaaS não configurada no servidor.");
   const first=Buffer.from(configured),second=Buffer.from(provided);
   if(first.length!==second.length || !crypto.timingSafeEqual(first,second))
-    return fail(res,403,"Credencial da Central SaaS inválida.");
+    return saasAuthLimit(req,res,()=>fail(res,403,"Credencial da Central SaaS inválida."));
+  req.saasActor="Chave administrativa (recuperação)";
   next();
 }
+const saasAuthLimit=limitAttempts("saas-auth",20,15*60*1000);
+function saasAudit(req,action,target,details={}){
+  db.prepare("INSERT INTO saas_audit(id,actor_name,action,target_id,details_json) VALUES(?,?,?,?,?)").run(createId(),req.saasActor,action,target||null,JSON.stringify(details));
+}
+app.post("/api/saas/login",saasAuthLimit,async(req,res)=>{
+  const email=String(req.body?.email||"").trim().toLowerCase(),password=String(req.body?.password||"");
+  const operator=db.prepare("SELECT * FROM saas_operators WHERE email=? AND active=1").get(email);
+  if(!operator||password.length>72||!await bcrypt.compare(password,operator.password_hash))return fail(res,401,"Credenciais administrativas inválidas.");
+  const token=crypto.randomBytes(32).toString("hex");
+  db.transaction(()=>{
+    db.prepare("DELETE FROM saas_operator_sessions WHERE expires_at<=?").run(Date.now());
+    db.prepare("INSERT INTO saas_operator_sessions(token_hash,operator_id,expires_at) VALUES(?,?,?)").run(crypto.createHash("sha256").update(token).digest("hex"),operator.id,Date.now()+8*60*60*1000);
+    req.saasActor=operator.name+" ("+operator.email+")";saasAudit(req,"login",operator.id);
+  })();
+  res.setHeader("Cache-Control","no-store");res.json({token,operator:{id:operator.id,name:operator.name,email:operator.email}});
+});
+app.post("/api/saas/logout",requireSaasAdmin,(req,res)=>{
+  if(req.saasOperator)db.prepare("DELETE FROM saas_operator_sessions WHERE token_hash=?").run(crypto.createHash("sha256").update(String(req.get("Authorization")).slice(7)).digest("hex"));
+  res.json({ok:true});
+});
+app.get("/api/saas/operators",requireSaasAdmin,(req,res)=>res.json({operators:db.prepare("SELECT id,name,email,active FROM saas_operators ORDER BY name").all()}));
+app.post("/api/saas/operators",requireSaasAdmin,async(req,res)=>{
+  const name=String(req.body?.name||"").trim(),email=String(req.body?.email||"").trim().toLowerCase(),password=String(req.body?.password||"");
+  if(!name||name.length>120||email.length>200||!/^\S+@\S+\.\S+$/.test(email)||password.length<12||Buffer.byteLength(password)>72)return fail(res,400,"Informe nome, e-mail e senha de 12 a 72 bytes.");
+  const hash=await bcrypt.hash(password,12),id=createId();
+  if(!req.saasOperator&&db.prepare("SELECT 1 FROM saas_operators WHERE active=1").get())return fail(res,403,"Use uma conta administrativa individual para cadastrar novos operadores.");
+  try{db.transaction(()=>{db.prepare("INSERT INTO saas_operators(id,name,email,password_hash) VALUES(?,?,?,?)").run(id,name,email,hash);saasAudit(req,"operador_criado",id,{name,email});})();}catch(e){if(e.code?.startsWith("SQLITE_CONSTRAINT"))return fail(res,409,"E-mail administrativo já cadastrado.");throw e;}
+  res.status(201).json({id});
+});
+app.patch("/api/saas/operators/:id",requireSaasAdmin,(req,res)=>{
+  if(!req.saasOperator)return fail(res,403,"Entre com sua conta administrativa individual.");
+  if(typeof req.body?.active!=="boolean"||req.params.id===req.saasOperator.id)return fail(res,400,"Não é possível desativar sua própria conta.");
+  const result=db.transaction(()=>{
+    const changed=db.prepare("UPDATE saas_operators SET active=? WHERE id=?").run(req.body.active?1:0,req.params.id);
+    if(!changed.changes)return false;
+    if(!req.body.active)db.prepare("DELETE FROM saas_operator_sessions WHERE operator_id=?").run(req.params.id);
+    saasAudit(req,"operador_status",req.params.id,{active:req.body.active});return true;
+  })();
+  if(!result)return fail(res,404,"Operador não encontrado.");res.json({ok:true});
+});
+function saasPlanRows(){
+  return db.prepare("SELECT id,name,monthly_cents AS monthlyCents,professional_limit AS professionalLimit,features_json AS featuresJson,active FROM saas_plans ORDER BY rowid").all().map(({featuresJson,...p})=>({...p,features:JSON.parse(featuresJson)}));
+}
+function blockedPlanChange(id,features){
+  if(!features.expenses&&db.prepare("SELECT 1 FROM operating_expenses WHERE tenant_id=? AND status='pendente' LIMIT 1").get(id))
+    return "Existem despesas em aberto. Resolva as pendências antes de retirar o módulo financeiro.";
+  if(!features.packages&&db.prepare(`SELECT 1 FROM package_purchases p JOIN package_purchase_items i ON i.purchase_id=p.id
+    WHERE p.tenant_id=? AND p.expires_on>=? AND i.sessions>(SELECT count(*) FROM package_redemptions r WHERE r.purchase_id=p.id AND r.service_id=i.service_id) LIMIT 1`).get(id,cashDay(id)))
+    return "Existem sessões pré-pagas disponíveis. Preserve o acesso aos pacotes até concluir as obrigações com os clientes.";
+  return null;
+}
+app.get("/api/saas/plans",requireSaasAdmin,(_req,res)=>res.json({plans:saasPlanRows()}));
+function saveSaasPlan(req,res){
+  const id=req.params.id||String(req.body?.id||"").trim(),name=String(req.body?.name||"").trim(),{monthlyCents,professionalLimit,features,active}=req.body||{};
+  if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(id)||id.length>60||!name||name.length>80||
+    !(monthlyCents===null||Number.isSafeInteger(monthlyCents)&&monthlyCents>=0&&monthlyCents<=100000000)||
+    !(professionalLimit===null||Number.isSafeInteger(professionalLimit)&&professionalLimit>=1&&professionalLimit<=10000)||
+    !features||planFeatures.some(f=>typeof features[f]!=="boolean")||typeof active!=="boolean")return fail(res,400,"Confira nome, mensalidade, limites e recursos.");
+  const old=db.prepare("SELECT * FROM saas_plans WHERE id=?").get(id);
+  if(req.params.id?!old:old)return fail(res,409,"Plano inexistente ou identificador já utilizado.");
+  // Existing contract data and access remain until the operator explicitly applies the plan.
+  const sanitized=Object.fromEntries(planFeatures.map(f=>[f,features[f]]));
+  if(old)for(const sub of db.prepare("SELECT tenant_id AS id FROM tenant_subscriptions WHERE plan=? AND enforce_plan=1").all(id)){
+    const blocked=blockedPlanChange(sub.id,sanitized);if(blocked)return fail(res,409,blocked);
+  }
+  db.transaction(()=>{
+    db.prepare(`INSERT INTO saas_plans(id,name,monthly_cents,professional_limit,features_json,active) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name,monthly_cents=excluded.monthly_cents,professional_limit=excluded.professional_limit,features_json=excluded.features_json,active=excluded.active`)
+      .run(id,name,monthlyCents,professionalLimit,JSON.stringify(sanitized),active?1:0);
+    saasAudit(req,old?"plano_editado":"plano_criado",id,{name,monthlyCents,professionalLimit,features:sanitized,active});
+  })();
+  res.status(old?200:201).json({ok:true,id});
+}
+app.post("/api/saas/plans",requireSaasAdmin,saveSaasPlan);
+app.patch("/api/saas/plans/:id",requireSaasAdmin,saveSaasPlan);
 app.get("/api/saas/businesses", requireSaasAdmin, (req,res)=>{
   const businesses=db.prepare(`SELECT t.id,t.name,t.slug,t.created_at AS createdAt,
     COALESCE(ss.plan,'comercial') AS plan,COALESCE(ss.status,'active') AS status,
-    ss.due_date AS dueDate,ss.notes,u.email AS ownerEmail,u.name AS ownerName
+    ss.due_date AS dueDate,ss.notes,ss.trial_until AS trialUntil,coalesce(ss.enforce_plan,0) AS enforced,
+    p.name AS planName,ss.monthly_cents AS monthlyCents,
+    (SELECT count(*) FROM users x WHERE x.tenant_id=t.id AND x.role='profissional' AND x.active=1) AS professionals,
+    u.email AS ownerEmail,u.name AS ownerName
     FROM tenants t LEFT JOIN tenant_subscriptions ss ON ss.tenant_id=t.id
+    LEFT JOIN saas_plans p ON p.id=coalesce(ss.plan,'comercial')
     LEFT JOIN users u ON u.tenant_id=t.id AND u.role='dono'
     ORDER BY t.created_at DESC`).all();
   res.setHeader("Cache-Control","no-store");
-  res.json({businesses});
+  const today=new Intl.DateTimeFormat("sv-SE",{timeZone:"America/Sao_Paulo"}).format(new Date());
+  res.json({businesses,today});
 });
 app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",20,15*60*1000), async(req,res)=>{
   const name=requiredText(req.body?.businessName,"Estabelecimento",120);
@@ -322,8 +412,12 @@ app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",2
   const plan=String(req.body?.plan||"comercial").trim();
   if(!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)||slug.length>80||
       slug==="studio-bela-vista" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||
-      !["comercial","profissional","premium"].includes(plan))
+      !db.prepare("SELECT 1 FROM saas_plans WHERE id=? AND active=1").get(plan))
     return fail(res,400,"Revise identificador, e-mail e plano.");
+  const dueDate=req.body?.dueDate||null,trialUntil=req.body?.trialUntil||null;
+  const monthlyCents=req.body?.monthlyCents===undefined?db.prepare("SELECT monthly_cents AS amount FROM saas_plans WHERE id=?").get(plan).amount:req.body.monthlyCents;
+  if(monthlyCents!==null&&(!Number.isSafeInteger(monthlyCents)||monthlyCents<0||monthlyCents>100000000))return fail(res,400,"Mensalidade inválida.");
+  if((dueDate&&!validCashDate(dueDate))||(trialUntil&&!validCashDate(trialUntil)))return fail(res,400,"Datas inválidas.");
   // Initial credential is shown once; operator must deliver it securely to the owner.
   const password=crypto.randomBytes(18).toString("base64url");
   const hash=await bcrypt.hash(password,12),id=createId(),userId=createId();
@@ -337,7 +431,8 @@ app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",2
         VALUES (?,?,?,?,?,'dono')`).run(userId,id,ownerName,email,hash);
       const hours=db.prepare("INSERT INTO business_hours (tenant_id,weekday,opens_at,closes_at) VALUES (?,?,?,?)");
       days.forEach(d=>hours.run(id,...d));
-      db.prepare("INSERT INTO tenant_subscriptions (tenant_id,plan,status) VALUES (?,?,'active')").run(id,plan);
+      db.prepare("INSERT INTO tenant_subscriptions (tenant_id,plan,status,enforce_plan,due_date,trial_until,monthly_cents) VALUES (?,?,'active',1,?,?,?)").run(id,plan,dueDate,trialUntil,monthlyCents);
+      saasAudit(req,"estabelecimento_criado",id,{name,plan,dueDate,trialUntil,monthlyCents});
     })();
   } catch(err) {
     if(err.code?.startsWith("SQLITE_CONSTRAINT"))return fail(res,409,"Identificador já utilizado.");
@@ -350,18 +445,53 @@ app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",2
 app.patch("/api/saas/businesses/:id",requireSaasAdmin,(req,res)=>{
   const row=db.prepare("SELECT id,slug FROM tenants WHERE id=?").get(req.params.id);
   if(!row || row.slug==="studio-bela-vista")return fail(res,404,"Estabelecimento indisponível.");
-  const plan=String(req.body?.plan||"comercial"),status=String(req.body?.status||"active");
+  const existing=db.prepare("SELECT * FROM tenant_subscriptions WHERE tenant_id=?").get(row.id);
+  const plan=String(req.body?.plan||existing?.plan||"comercial"),status=String(req.body?.status||existing?.status||"active");
   const notes=String(req.body?.notes||"").trim(),dueDate=req.body?.dueDate||null;
-  if(!["comercial","profissional","premium"].includes(plan)||!["active","suspended"].includes(status)||
-     notes.length>300||(dueDate!==null && !/^\d{4}-\d{2}-\d{2}$/.test(String(dueDate))))
+  const trialUntil=req.body?.trialUntil===undefined?existing?.trial_until??null:req.body.trialUntil||null;
+  if(!db.prepare("SELECT 1 FROM saas_plans WHERE id=? AND (active=1 OR id=?)").get(plan,existing?.plan||"comercial")||!["active","suspended"].includes(status)||
+     notes.length>300||(dueDate!==null&&!validCashDate(dueDate))||(trialUntil!==null&&!validCashDate(trialUntil)))
     return fail(res,400,"Plano, status ou data inválidos.");
-  db.prepare(`INSERT INTO tenant_subscriptions (tenant_id,plan,status,notes,due_date)
-    VALUES (?,?,?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET plan=excluded.plan,
-    status=excluded.status,notes=excluded.notes,due_date=excluded.due_date`)
-    .run(row.id,plan,status,notes,dueDate);
-  if(status==="suspended") db.prepare("DELETE FROM sessions WHERE tenant_id=?").run(row.id);
+  const enforced=existing?.enforce_plan||req.body?.applyPlan===true||plan!==(existing?.plan||"comercial")?1:0;
+  if(enforced&&(req.body?.applyPlan===true||plan!==(existing?.plan||"comercial"))){
+    const features=JSON.parse(db.prepare("SELECT features_json AS json FROM saas_plans WHERE id=?").get(plan).json);
+    const blocked=blockedPlanChange(row.id,features);if(blocked)return fail(res,409,blocked);
+  }
+  const monthlyCents=req.body?.monthlyCents===undefined?(plan!==(existing?.plan||"comercial")?db.prepare("SELECT monthly_cents AS amount FROM saas_plans WHERE id=?").get(plan).amount:existing?.monthly_cents??null):req.body.monthlyCents;
+  if(monthlyCents!==null&&(!Number.isSafeInteger(monthlyCents)||monthlyCents<0||monthlyCents>100000000))return fail(res,400,"Mensalidade inválida.");
+  db.transaction(()=>{
+    db.prepare(`INSERT INTO tenant_subscriptions (tenant_id,plan,status,notes,due_date,enforce_plan,trial_until,monthly_cents)
+      VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET plan=excluded.plan,status=excluded.status,notes=excluded.notes,
+      due_date=excluded.due_date,enforce_plan=excluded.enforce_plan,trial_until=excluded.trial_until,monthly_cents=excluded.monthly_cents`).run(row.id,plan,status,notes,dueDate,enforced,trialUntil,monthlyCents);
+    if(status==="suspended") db.prepare("DELETE FROM sessions WHERE tenant_id=?").run(row.id);
+    saasAudit(req,"assinatura_editada",row.id,{plan,status,dueDate,trialUntil,enforced,monthlyCents});
+  })();
   res.json({ok:true});
 });
+app.get("/api/saas/payments",requireSaasAdmin,(_req,res)=>{
+  res.json({payments:db.prepare(`SELECT p.id,p.tenant_id AS tenantId,t.name AS businessName,p.period,p.amount_cents AS amountCents,p.paid_on AS paidOn,p.method,p.plan_name AS planName,
+    p.next_due_date AS nextDueDate,p.notes,p.actor_name AS actorName FROM saas_subscription_payments p JOIN tenants t ON t.id=p.tenant_id ORDER BY p.paid_on DESC,p.created_at DESC`).all()});
+});
+app.post("/api/saas/businesses/:id/payments",requireSaasAdmin,(req,res)=>{
+  const {period,amountCents,paidOn,method,nextDueDate}=req.body||{},notes=String(req.body?.notes||"").trim();
+  const today=new Intl.DateTimeFormat("sv-SE",{timeZone:"America/Sao_Paulo"}).format(new Date());
+  if(!validMonth(period)||!Number.isSafeInteger(amountCents)||amountCents<=0||amountCents>100000000||!validCashDate(paidOn)||paidOn>today||!validCashDate(nextDueDate)||nextDueDate<=paidOn||
+    !["pix","boleto","dinheiro","cartao","transferencia"].includes(method)||notes.length>300)return fail(res,400,"Confira competência, valor, data e próximo vencimento.");
+  const result=db.transaction(()=>{
+    const b=db.prepare(`SELECT t.id,t.slug,s.plan,s.due_date AS dueDate,p.name AS planName FROM tenants t LEFT JOIN tenant_subscriptions s ON s.tenant_id=t.id
+      LEFT JOIN saas_plans p ON p.id=coalesce(s.plan,'comercial') WHERE t.id=?`).get(req.params.id);
+    if(!b||b.slug==="studio-bela-vista")return "Estabelecimento indisponível.";
+    if(db.prepare("SELECT 1 FROM saas_subscription_payments WHERE tenant_id=? AND period=?").get(b.id,period))return "Mensalidade desta competência já registrada.";
+    if(b.dueDate&&nextDueDate<b.dueDate)return "O próximo vencimento não pode retroceder.";
+    const paymentId=createId();
+    db.prepare(`INSERT INTO saas_subscription_payments(id,tenant_id,period,amount_cents,paid_on,method,plan_name,previous_due_date,next_due_date,notes,actor_name)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(paymentId,b.id,period,amountCents,paidOn,method,b.planName||"Comercial",b.dueDate??null,nextDueDate,notes,req.saasActor);
+    db.prepare("INSERT INTO tenant_subscriptions(tenant_id,plan,due_date) VALUES(?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET due_date=excluded.due_date").run(b.id,b.plan||"comercial",nextDueDate);
+    saasAudit(req,"mensalidade_registrada",b.id,{paymentId,period,amountCents,paidOn,nextDueDate});return {id:paymentId};
+  })();
+  if(typeof result==="string")return fail(res,409,result);res.status(201).json(result);
+});
+app.get("/api/saas/audit",requireSaasAdmin,(_req,res)=>res.json({events:db.prepare("SELECT id,actor_name AS actorName,action,target_id AS targetId,details_json AS detailsJson,created_at AS createdAt FROM saas_audit ORDER BY created_at DESC LIMIT 300").all()}));
 
 
 
@@ -841,6 +971,7 @@ app.post("/api/team-members", requireAuth, allowRoles("dono"), async (req, res) 
   let loginCode = null;
   try {
     const create = db.transaction(() => {
+      if(role==="profissional"&&professionalLimitReached(tenant(req)))return false;
       staffCode = role === "profissional" ? allocateStaffCode(tenant(req)) : null;
       loginCode = role === "profissional" ? allocateLoginCode() : null;
       db.prepare(`
@@ -862,8 +993,9 @@ app.post("/api/team-members", requireAuth, allowRoles("dono"), async (req, res) 
           SELECT tenant_id, ?, weekday, opens_at, closes_at FROM business_hours WHERE tenant_id = ?
         `).run(id, tenant(req));
       }
+      return true;
     });
-    create();
+    if(!create())return fail(res,409,"Limite de profissionais ativos do plano atingido.");
   } catch (error) {
     if (error.code === "SQLITE_CONSTRAINT_UNIQUE") return fail(res, 409, "Já existe uma conta com este e-mail.");
     throw error;
@@ -896,9 +1028,10 @@ app.patch("/api/team-members/:id", requireAuth, allowRoles("dono"), (req, res) =
     return res.json({ ok: true });
   }
   const member = db.prepare(`
-    SELECT id, role FROM users WHERE id = ? AND tenant_id = ? AND role IN ('profissional', 'recepcao')
+    SELECT id, role,active FROM users WHERE id = ? AND tenant_id = ? AND role IN ('profissional', 'recepcao')
   `).get(req.params.id, tenant(req));
   if (!member) return fail(res, 404, "Pessoa da equipe não encontrada.");
+  if(member.role==="profissional"&&!member.active&&req.body?.active!==false&&professionalLimitReached(tenant(req)))return fail(res,409,"Limite de profissionais ativos do plano atingido.");
   const commission = member.role === "profissional" ? Number(req.body?.commissionPercent ?? 0) : 0;
   if (!Number.isFinite(commission) || commission < 0 || commission > 100) return fail(res, 400, "Comissão inválida.");
   db.prepare(`
@@ -949,9 +1082,10 @@ app.post("/api/professionals", requireAuth, allowRoles("dono"), async (req, res)
 
 app.patch("/api/professionals/:id", requireAuth, allowRoles("dono"), (req, res) => {
   const professional = db.prepare(`
-    SELECT id FROM users WHERE id = ? AND tenant_id = ? AND role = 'profissional'
+    SELECT id,active FROM users WHERE id = ? AND tenant_id = ? AND role = 'profissional'
   `).get(req.params.id, tenant(req));
   if (!professional) return fail(res, 404, "Profissional não encontrado.");
+  if(!professional.active&&req.body?.active!==false&&professionalLimitReached(tenant(req)))return fail(res,409,"Limite de profissionais ativos do plano atingido.");
   const commission = Number(req.body?.commissionPercent ?? 0);
   if (!Number.isFinite(commission) || commission < 0 || commission > 100) return fail(res, 400, "Comissão inválida.");
   db.prepare("UPDATE users SET phone = ?, commission_percent = ?, active = ? WHERE id = ? AND tenant_id = ?")
@@ -1859,6 +1993,7 @@ app.get("/api/packages",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
   res.setHeader("Cache-Control","no-store");res.json({packages,purchases,redemptions,loyalty,clients,rewards,today:cashDay(id)});
 });
 app.get("/api/packages/eligible",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  if(!getPlanAccess(tenant(req)).features.packages)return res.json({purchases:[],loyalty:null});
   const id=tenant(req),clientId=String(req.query.clientId??""),serviceId=String(req.query.serviceId??"");
   const client=db.prepare("SELECT id FROM clients WHERE id=? AND tenant_id=? AND notes!='__internal_anonymous__'").get(clientId,id);
   if(!client)return res.json({purchases:[],loyalty:null});
@@ -2743,10 +2878,13 @@ function refreshWhatsAppQueue(id){
 }
 app.get("/api/whatsapp/preferences",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
   const slug=db.prepare("SELECT slug FROM tenants WHERE id=?").get(tenant(req))?.slug;
-  res.json({...whatsappPreferences(tenant(req)),automaticConfigured:Boolean(whatsAppCloudConfig(slug))});
+  const preferences=whatsappPreferences(tenant(req));
+  if(!getPlanAccess(tenant(req)).features.automaticWhatsapp)preferences.mode="manual";
+  res.json({...preferences,automaticConfigured:Boolean(whatsAppCloudConfig(slug))});
 });
 app.put("/api/whatsapp/preferences",requireAuth,allowRoles("dono"),(req,res)=>{
   const {mode,rules,reminderHours,expiryDays}=req.body||{};
+  if(mode==="automatic"&&!getPlanAccess(tenant(req)).features.automaticWhatsapp)return fail(res,403,"WhatsApp automático não incluído no plano contratado.");
   if(!["manual","automatic"].includes(mode)||!rules||!Array.isArray(reminderHours)||reminderHours.length>2||new Set(reminderHours).size!==reminderHours.length||reminderHours.some(h=>!Number.isSafeInteger(h)||h<1||h>168)||!Number.isSafeInteger(expiryDays)||expiryDays<1||expiryDays>60)
     return fail(res,400,"Confira as preferências de WhatsApp.");
   const sanitized={};
@@ -2803,6 +2941,7 @@ async function notifyStatusWhatsApp(tenantId,appointmentId,targetStatus) {
   if(!row.whatsappOptIn)return "no-consent";
   if(!prefs.rules[targetStatus]?.enabled)return "disabled";
   if(!config)return "not-configured";
+  if(!getPlanAccess(tenantId).features.automaticWhatsapp)return "manual";
   if(prefs.mode!=="automatic")return "manual";
   const raw=row.phone.replace(/\D/g,"");
   const number=raw.startsWith("55")?raw:"55"+raw;
