@@ -426,6 +426,7 @@ const navItems = [
   { to: "/clientes", label: "Clientes", icon: Users },
   { to: "/servicos", label: "Serviços", icon: Scissors },
   { to: "/estoque", label: "Estoque e produtos", icon: Package },
+  { to: "/pacotes", label: "Pacotes e fidelização", icon: Sparkles },
   { to: "/equipe", label: "Equipe e acessos", icon: Users },
   { to: "/meus-atendimentos", label: "Meus atendimentos", icon: ClipboardCheck },
   { to: "/meus-ganhos", label: "Meus ganhos", icon: Wallet },
@@ -467,7 +468,7 @@ function Shell({ user, onLogout, children }) {
     if (user.role === "profissional") return ["/", "/agenda", "/clientes", "/meus-atendimentos", "/meus-ganhos", "/minha-conta"].includes(item.to)
       && !(isDemo && item.to === "/minha-conta");
     if (user.role === "recepcao") return !["/financeiro", "/configuracoes", "/equipe", "/meus-atendimentos", "/meus-ganhos"].includes(item.to);
-    if (isDemo && ["/estoque", "/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
+    if (isDemo && ["/pacotes", "/estoque", "/recebimentos", "/configuracoes", "/minha-conta", "/equipe", "/meus-atendimentos", "/comissoes", "/meus-ganhos", "/regras-comissao", "/fechamentos"].includes(item.to)) return false;
     return !["/meus-atendimentos", "/meus-ganhos"].includes(item.to);
   });
   useEffect(() => {
@@ -899,6 +900,7 @@ function AppointmentForm({ onClose, onSaved, initialDate = localDate(), initialH
         <option value="">Em aberto — receber depois</option>
         {Object.entries(paymentNames).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
       </SelectField>}
+      {direct && !isProfessional && <p className="panel-subtitle">Para utilizar pacote ou pontos de fidelidade, registre o serviço em aberto e faça a baixa em Pagamentos pendentes.</p>}
       {direct && isProfessional && <p className="panel-subtitle">Pagamento será registrado pela recepção ou administrador.</p>}
       <Field label="Observações" placeholder="Algum detalhe importante?" value={values.notes}
         onChange={event => setValues(v => ({ ...v, notes: event.target.value }))}/>
@@ -1016,7 +1018,8 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
       <ErrorMessage>{error}</ErrorMessage>
       <Button disabled={saving} onClick={completeOwn}><CheckCheck size={16}/> {saving ? "Concluindo..." : "Concluir serviço realizado"}</Button>
     </div>}
-    {!readOnly && <div className="form-stack mt-5">
+    {appointment.paymentMethod==="pacote"&&<p className="booking-share-notice">Sessão de pacote utilizada · {money(appointment.priceCents)} de valor proporcional. Não há novo recebimento.</p>}
+    {!readOnly && appointment.paymentMethod!=="pacote" && <div className="form-stack mt-5">
       {canChangeClient && <SelectField label="Cliente do atendimento" value={clientId} onChange={(event) => setClientId(event.target.value)}>
         <option value={appointment.clientId}>{appointment.clientName}</option>
         {clients.filter((client) => client.id !== appointment.clientId).map((client) => <option key={client.id} value={client.id}>{client.name}{client.phone ? ` · ${client.phone}` : ""}</option>)}
@@ -1033,6 +1036,7 @@ function AppointmentDetails({ appointment, onClose, onUpdated, readOnly = false,
         <option value="">Em aberto — pagar depois</option>{Object.entries(paymentNames).map(([key, name]) => <option key={key} value={key}>{name}</option>)}
       </SelectField>
       {status === "concluido" && !method && <p className="panel-subtitle">O serviço será concluído e permanecerá em Pagamentos pendentes até o recebimento.</p>}
+      {!appointment.paymentMethod&&["agendado","confirmado","concluido"].includes(appointment.status)&&clientId===appointment.clientId&&<BenefitActions appointment={appointment} onSaved={onUpdated}/>}
       <ErrorMessage>{error}</ErrorMessage>
       <div className="modal-actions modal-actions-split">
         {whatsApp && <a href={whatsApp} target="_blank" rel="noreferrer" className="button button-whatsapp"><Phone size={16} /> WhatsApp</a>}
@@ -1247,7 +1251,7 @@ function ClientsPage({ user }) {
   }, [search, user.role]);
   useEffect(() => { refresh(); }, [refresh]);
   const showHistory = async (client) => {
-    try { const result = await api(`/clients/${client.id}/history`); setHistory({ client, appointments: result.history }); }
+    try { const result = await api(`/clients/${client.id}/history`); setHistory({ client, appointments: result.history, benefits:result.benefits,totalPaidCents:result.totalPaidCents }); }
     catch (reason) { setError(reason.message); }
   };
   const isProfessional=user.role==="profissional";
@@ -1286,6 +1290,7 @@ function ClientsPage({ user }) {
       <div className="crm-profile-header"><span className="table-avatar">{history.client.name.slice(0,1).toUpperCase()}</span><div><b>{history.client.name}</b><small>{history.client.phone||"Sem telefone"} · {history.client.email||"Sem e-mail"}</small></div></div>
       <div className="crm-profile-summary"><div><small>Atendimentos concluídos</small><b>{historyCompleted.length}</b></div><div><small>Valor dos serviços realizados</small><b>{money(historyCompleted.reduce((sum,item)=>sum+item.priceCents,0))}</b></div><div><small>Última visita</small><b>{history.client.lastVisit?dateLabel(history.client.lastVisit.slice(0,10)):"Nenhuma"}</b></div></div>
       <div className="crm-profile-notes"><b>Observações</b><p>{history.client.notes || "Sem observações sobre este cliente."}</p></div>
+      {history.benefits&&<><div className="crm-profile-summary"><div><small>Pago em serviços e pacotes</small><b>{money(history.totalPaidCents)}</b></div><div><small>Pontos disponíveis</small><b>{history.benefits.loyalty.balance}</b></div><div><small>Pacotes ativos</small><b>{history.benefits.purchases.filter(p=>p.expiresOn>=localDate()&&p.items.some(i=>i.used<i.sessions)).length}</b></div></div><h3 className="crm-history-title">Pacotes adquiridos</h3>{history.benefits.purchases.map(p=><div className="expense-row" key={p.id}><div className="expense-row-details"><b>{p.packageName}</b><small>Válido até {dateLabel(p.expiresOn)} · {p.items.map(i=>i.serviceName+": "+(i.sessions-i.used)+"/"+i.sessions).join(" · ")}</small></div><strong>{money(p.priceCents)}</strong></div>)}</>}
       <h3 className="crm-history-title">Histórico de atendimentos</h3>
       {history.appointments.length ? <div className="appointments-list crm-history-list">{history.appointments.map((item) => <div className="history-item" key={item.id}><span>{item.status === "concluido" && item.completedOn ? <>
         {item.bookingSource==="direct"?"Registro direto":`Agendado: ${dateTimeLabel(item.startsAt)}`}<br />Realizado em {dateLabel(item.completedOn)}
@@ -2035,8 +2040,8 @@ function DailyCashClosing({ revision, user, children, onClosed }) {
           {summary.receipts.map(item => <article className="service-row cash-payment-row" key={item.id}>
             <span className="service-row-icon"><Check size={18}/></span>
             <div className="cash-payment-info"><b>{item.clientName} · {item.serviceName}</b>
-              <small>{item.bookingSource==="product_sale"?"Vendedor":"Profissional"}: {item.professionalName}</small>
-              <small>{item.bookingSource==="product_sale"?"Venda de produtos":item.bookingSource === "direct" ? "Registro direto" : `Agendado: ${dateTimeLabel(item.startsAt)}`}{item.completedOn ? ` · Realizado: ${dateLabel(item.completedOn)}` : ""}{item.paidAt ? ` · Recebido: ${cashTimestamp(item.paidAt, summary.timezone)}` : item.paidOn ? ` · Recebido: ${dateLabel(item.paidOn)}` : ""}</small></div>
+              <small>{["product_sale","package_sale"].includes(item.bookingSource)?"Vendedor":"Profissional"}: {item.professionalName}</small>
+              <small>{item.bookingSource==="package_sale"?"Venda antecipada de pacote":item.bookingSource==="product_sale"?"Venda de produtos":item.bookingSource === "direct" ? "Registro direto" : `Agendado: ${dateTimeLabel(item.startsAt)}`}{item.completedOn ? ` · Realizado: ${dateLabel(item.completedOn)}` : ""}{item.paidAt ? ` · Recebido: ${cashTimestamp(item.paidAt, summary.timezone)}` : item.paidOn ? ` · Recebido: ${dateLabel(item.paidOn)}` : ""}</small></div>
             <span className="cash-method-chip">{paymentNames[item.paymentMethod] || item.paymentMethod}</span>
             <strong>{money(item.priceCents)}</strong>
           </article>)}
@@ -2148,6 +2153,64 @@ function FinancialHubPage({ user }) {
   </div>;
 }
 
+function BenefitActions({appointment,onSaved}){
+  const [data,setData]=useState(null),[purchase,setPurchase]=useState(""),[method,setMethod]=useState(""),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  useEffect(()=>{let alive=true;setData(null);if(appointment.clientId&&appointment.serviceId)api("/packages/eligible?clientId="+encodeURIComponent(appointment.clientId)+"&serviceId="+encodeURIComponent(appointment.serviceId)).then(d=>{if(alive)setData(d);}).catch(e=>{if(alive)setError(e.message);});return()=>{alive=false;};},[appointment.clientId,appointment.serviceId]);
+  const eligible=data?.loyalty?.enabled&&data.loyalty.balance>=data.loyalty.threshold&&appointment.status==="concluido"&&data.loyalty.discountCents<appointment.priceCents;
+  const redeem=async(kind)=>{
+    if(busy)return;
+    const message=kind==="package"?"Confirma que o serviço foi realizado? Uma sessão será utilizada sem novo recebimento.": "Confirmar recebimento de "+money(appointment.priceCents-data.loyalty.discountCents)+" com desconto de fidelidade?";
+    if(!await confirmAction(message))return;
+    setBusy(true);setError("");
+    try{await api(kind==="package"?"/packages/redeem/appointment/"+appointment.id:"/loyalty/redeem/"+appointment.id,{method:"POST",body:kind==="package"?{purchaseId:purchase}:{paymentMethod:method}});await onSaved();}
+    catch(e){setError(e.message);}finally{setBusy(false);}
+  };
+  if(!data?.purchases?.length&&!eligible&&!error)return null;
+  return <div className="booking-share-notice benefit-actions"><b>Benefícios do cliente</b>
+    {!!data?.purchases?.length&&<><SelectField label="Utilizar pacote" value={purchase} onChange={e=>setPurchase(e.target.value)}><option value="">Selecione um pacote</option>{data.purchases.map(p=><option value={p.id} key={p.id}>{p.packageName} · {p.items.find(i=>i.serviceId===appointment.serviceId).sessions-p.items.find(i=>i.serviceId===appointment.serviceId).used} restante(s)</option>)}</SelectField><Button type="button" disabled={!purchase||busy} onClick={()=>redeem("package")}>Concluir com pacote</Button></>}
+    {eligible&&<><small>Fidelidade: {data.loyalty.balance} pontos · desconto de {money(data.loyalty.discountCents)} · receber {money(appointment.priceCents-data.loyalty.discountCents)}</small><SelectField label="Pagamento com desconto" value={method} onChange={e=>setMethod(e.target.value)}><option value="">Selecione</option>{Object.entries(paymentNames).map(([k,v])=><option key={k} value={k}>{v}</option>)}</SelectField><Button type="button" disabled={!method||busy} onClick={()=>redeem("loyalty")}>Resgatar e receber</Button></>}
+    <ErrorMessage>{error}</ErrorMessage></div>;
+}
+function PackagesPage({user}){
+  const owner=user.role==="dono";
+  const [data,setData]=useState(null),[services,setServices]=useState([]),[error,setError]=useState(""),[revision,setRevision]=useState(0),[tab,setTab]=useState("catalogo"),[modal,setModal]=useState(null),[search,setSearch]=useState("");
+  const refresh=()=>setRevision(n=>n+1);
+  useEffect(()=>{let alive=true;setData(null);setError("");Promise.all([api("/packages"),api("/services")]).then(([d,s])=>{if(alive){setData(d);setServices(s.services);}}).catch(e=>{if(alive)setError(e.message);});return()=>{alive=false;};},[revision]);
+  const toggle=async p=>{try{await api("/packages/"+p.id+"/status",{method:"POST",body:{active:!p.active}});refresh();}catch(e){setError(e.message);}};
+  const active=data?.purchases.filter(p=>p.expiresOn>=data.today&&p.items.some(i=>i.used<i.sessions))||[];
+  const match=name=>String(name).toLowerCase().includes(search.toLowerCase());
+  return <div className="expenses-page">
+    <PageTitle eyebrow="RELACIONAMENTO E RECORRÊNCIA" title="Pacotes e fidelização" description="Venda sessões antecipadas, acompanhe utilizações e recompense clientes." actions={<>{owner&&<Button onClick={()=>setModal({mode:"edit"})}><Plus size={16}/> Criar pacote</Button>}<Button variant="secondary" onClick={refresh}>Atualizar</Button></>}/>
+    <ErrorMessage>{error}</ErrorMessage>
+    {!data?!error&&<Loading label="Carregando pacotes..."/>:<>
+    <section className="stats-grid finance-stats"><StatCard title="Pacotes disponíveis" value={data.packages.filter(p=>p.active).length} icon={Package}/><StatCard title="Pacotes de clientes ativos" value={active.length} icon={Users} tone="green"/><StatCard title="Sessões utilizadas" value={data.redemptions.length} icon={CheckCheck}/><StatCard title="Clientes com recompensa" value={data.loyalty.enabled?data.clients.filter(c=>c.balance>=data.loyalty.threshold).length:0} icon={Sparkles} tone="purple"/></section>
+    <div className="settings-tab-bar" role="tablist" aria-label="Pacotes e fidelização">{[["catalogo","Catálogo"],["compras","Pacotes adquiridos"],["historico","Utilizações"],["fidelidade","Fidelidade"]].map(([k,v])=><button key={k} role="tab" type="button" aria-selected={tab===k} className={tab===k?"active":""} onClick={()=>{setTab(k);setSearch("");}}>{v}</button>)}</div>
+    <section className="panel expense-list">
+      {tab==="catalogo"&&<><div className="panel-heading"><div><h2>Catálogo de pacotes</h2><p className="panel-subtitle">Edições afetam somente vendas futuras.</p></div></div>{data.packages.map(p=><div className="expense-row" key={p.id}><div className="expense-row-details"><b>{p.name}</b><small>{p.items.map(i=>i.sessions+" × "+i.serviceName).join(" · ")}</small><small>{p.validityDays} dias · Valor avulso: {money(p.items.reduce((s,i)=>s+i.referenceCents*i.sessions,0))}</small></div><div className="expense-row-money"><strong>{money(p.priceCents)}</strong><span className={"expense-status "+(p.active?"pago":"cancelado")}>{p.active?"Ativo":"Inativo"}</span></div><div className="expense-row-actions">{p.active&&<Button onClick={()=>setModal({mode:"sale",item:p})}>Vender pacote</Button>}{owner&&<><Button variant="secondary" onClick={()=>setModal({mode:"edit",item:p})}>Editar</Button><Button variant="secondary" onClick={()=>toggle(p)}>{p.active?"Desativar":"Ativar"}</Button></>}</div></div>)}{!data.packages.length&&<EmptyState icon={Package} title="Nenhum pacote cadastrado" description="Crie um pacote para oferecer serviços antecipados."/>}</>}
+      {tab==="compras"&&<><h2>Pacotes adquiridos por clientes</h2><Field label="Buscar cliente ou pacote" value={search} onChange={e=>setSearch(e.target.value)}/>{data.purchases.filter(p=>match(p.clientName+" "+p.packageName)).map(p=><div className="expense-row" key={p.id}><div className="expense-row-details"><b>{p.clientName} · {p.packageName}</b><small>Compra: {dateLabel(p.paidOn)} · Validade: {dateLabel(p.expiresOn)}</small>{p.items.map(i=><small key={i.serviceId}>{i.serviceName}: {i.sessions-i.used} sessão(ões) disponível(is) / {i.sessions}</small>)}</div><div className="expense-row-money"><strong>{money(p.priceCents)}</strong><span className={"expense-status "+(p.expiresOn<data.today?"vencido":"pago")}>{p.expiresOn<data.today?"Vencido":p.items.every(i=>i.used===i.sessions)?"Utilizado":"Ativo"}</span></div></div>)}{!data.purchases.length&&<EmptyState icon={Users} title="Nenhuma compra" description="As vendas de pacotes aparecerão aqui."/>}</>}
+      {tab==="historico"&&<><h2>Histórico de sessões utilizadas</h2>{data.redemptions.map(r=><div className="expense-row" key={r.appointmentId}><div className="expense-row-details"><b>{r.clientName} · {r.serviceName}</b><small>{r.packageName} · {r.professionalName} · {dateLabel(r.redeemedOn)}</small></div><strong>{money(r.amountCents)}</strong></div>)}{!data.redemptions.length&&<EmptyState icon={CheckCheck} title="Nenhuma sessão utilizada" description="Utilize os pacotes pela agenda ou pagamentos pendentes."/>}</>}
+      {tab==="fidelidade"&&<><div className="panel-heading"><div><h2>Programa de fidelidade</h2><p className="panel-subtitle">Um ponto por atendimento concluído e recebido (incluindo sessões de pacotes). O saldo considera o histórico de atendimentos pagos.</p><p className="panel-subtitle">{data.loyalty.enabled?"Ativo":"Desativado"} · {data.loyalty.threshold} pontos = {money(data.loyalty.discountCents)} de desconto</p></div>{owner&&<Button variant="secondary" onClick={()=>setModal({mode:"loyalty",item:data.loyalty})}>Configurar</Button>}</div><Field label="Buscar cliente" value={search} onChange={e=>setSearch(e.target.value)}/>{[...data.clients].sort((a,b)=>b.balance-a.balance).filter(c=>match(c.name)).map(c=><div className="expense-row" key={c.id}><div className="expense-row-details"><b>{c.name}</b><small>{c.earned} acumulados · {c.spent} resgatados</small></div><strong>{c.balance} pontos</strong></div>)}<h3>Histórico de recompensas</h3>{data.rewards.map(r=><div className="expense-row" key={r.appointmentId}><div className="expense-row-details"><b>{r.clientName}</b><small>{dateLabel(r.redeemedOn)} · {r.points} pontos</small></div><strong>{money(r.discountCents)} desconto</strong></div>)}</>}
+    </section></>}
+    {modal&&data&&<PackageForm {...modal} services={services} clients={data.clients} onClose={()=>setModal(null)} onSaved={()=>{setModal(null);refresh();}}/>}
+  </div>;
+}
+function PackageForm({mode,item,services,clients,onClose,onSaved}){
+  const [form,setForm]=useState({name:item?.name||"",price:(item?.priceCents||0)/100,validityDays:item?.validityDays||30,serviceId:"",sessions:1,clientId:"",paymentMethod:"",enabled:!!item?.enabled,threshold:item?.threshold||10,discount:(item?.discountCents||1000)/100});
+  const [items,setItems]=useState(item?.items||[]),[busy,setBusy]=useState(false),[error,setError]=useState("");
+  const [requestId]=useState(()=>globalThis.crypto?.randomUUID?.()||Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,"0")).join(""));
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const add=()=>{const s=services.find(s=>s.id===form.serviceId),n=Number(form.sessions);if(!s||!Number.isSafeInteger(n)||n<1||n>100){setError("Selecione um serviço e de 1 a 100 sessões.");return;}setItems(prev=>[...prev.filter(i=>i.serviceId!==s.id),{serviceId:s.id,serviceName:s.name,sessions:n,referenceCents:s.priceCents}]);setError("");};
+  const submit=async e=>{e.preventDefault();if(busy)return;setBusy(true);setError("");try{
+    if(mode==="sale")await api("/packages/"+item.id+"/sell",{method:"POST",body:{requestId,clientId:form.clientId,paymentMethod:form.paymentMethod,priceCents:item.priceCents}});
+    else if(mode==="loyalty")await api("/loyalty/settings",{method:"PUT",body:{enabled:form.enabled,threshold:Number(form.threshold),discountCents:Math.round(Number(form.discount)*100)}});
+    else await api("/packages"+(item?"/"+item.id:""),{method:item?"PATCH":"POST",body:{name:form.name,priceCents:Math.round(Number(form.price)*100),validityDays:Number(form.validityDays),items,active:item?!!item.active:true}});
+    onSaved();
+  }catch(e){setError(e.message);}finally{setBusy(false);}};
+  return <Modal title={mode==="sale"?"Vender pacote":mode==="loyalty"?"Configurar fidelidade":item?"Editar pacote":"Criar pacote"} onClose={()=>{if(!busy)onClose();}}><form className="expense-form" onSubmit={submit}>
+    {mode==="sale"?<><p className="booking-share-notice">{item.name} · {money(item.priceCents)} · {item.validityDays} dias</p><SelectField label="Cliente" required value={form.clientId} onChange={e=>set("clientId",e.target.value)}><option value="">Selecione</option>{clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</SelectField><SelectField label="Forma de pagamento" required value={form.paymentMethod} onChange={e=>set("paymentMethod",e.target.value)}><option value="">Selecione</option>{Object.entries(paymentNames).map(([k,v])=><option key={k} value={k}>{v}</option>)}</SelectField><p className="panel-subtitle">Registre somente após receber o valor integral. As sessões serão baixadas na agenda ou no caixa sem cobrar novamente.</p></>:mode==="loyalty"?<><label className="field"><span><input type="checkbox" checked={form.enabled} onChange={e=>set("enabled",e.target.checked)}/> Habilitar resgate de recompensas</span></label><Field label="Pontos necessários" type="number" required min="1" max="1000" step="1" value={form.threshold} onChange={e=>set("threshold",e.target.value)}/><Field label="Desconto (R$)" type="number" required min=".01" step=".01" value={form.discount} onChange={e=>set("discount",e.target.value)}/><p className="panel-subtitle">O desconto deve ser menor que o valor do atendimento. A comissão considera o valor efetivamente recebido.</p></>:<>
+      <Field label="Nome do pacote" required maxLength={120} value={form.name} onChange={e=>set("name",e.target.value)}/><div className="expense-form-grid"><Field label="Preço do pacote (R$)" type="number" min=".01" step=".01" required value={form.price} onChange={e=>set("price",e.target.value)}/><Field label="Validade (dias)" type="number" min="1" max="3650" step="1" required value={form.validityDays} onChange={e=>set("validityDays",e.target.value)}/></div><SelectField label="Serviço incluído" value={form.serviceId} onChange={e=>set("serviceId",e.target.value)}><option value="">Selecione</option>{services.filter(s=>s.active).map(s=><option key={s.id} value={s.id}>{s.name} · {money(s.priceCents)}</option>)}</SelectField><div className="expense-form-grid"><Field label="Sessões" type="number" min="1" max="100" step="1" value={form.sessions} onChange={e=>set("sessions",e.target.value)}/><Button type="button" variant="secondary" onClick={add}>Adicionar serviço</Button></div>{items.map(i=><div className="expense-row" key={i.serviceId}><b>{i.sessions} × {i.serviceName}</b><Button type="button" variant="secondary" onClick={()=>setItems(prev=>prev.filter(p=>p.serviceId!==i.serviceId))}>Remover</Button></div>)}<small>Valor avulso: {money(items.reduce((s,i)=>s+i.sessions*i.referenceCents,0))}. A edição não altera pacotes já vendidos.</small>
+    </>}<ErrorMessage>{error}</ErrorMessage><div className="modal-actions"><Button type="button" variant="secondary" disabled={busy} onClick={onClose}>Cancelar</Button><Button disabled={busy||mode==="edit"&&!items.length}>{busy?"Salvando...":mode==="sale"?"Confirmar venda":"Salvar"}</Button></div></form></Modal>;
+}
 const inventoryPurposes={venda:"Venda",consumo:"Uso interno",ambos:"Venda e uso interno"};
 const inventoryTypes={entrada:"Entrada",saida:"Saída",ajuste:"Ajuste de saldo",consumo:"Consumo interno",venda:"Venda"};
 function InventoryPage({user}){
@@ -2371,6 +2434,7 @@ function PendingPaymentsList({ user, pending, loaded, loadError, refresh }) {
             </select></label>
           <Button variant={methods[item.id] ? "primary" : "secondary"} disabled={Boolean(busy) || user.tenantId === "tenant-salao-demo"}
             onClick={() => receive(item)}>{busy === item.id ? "Registrando..." : methods[item.id] ? "Receber" : "Manter em aberto"}</Button>
+          {user.tenantId!=="tenant-salao-demo"&&<BenefitActions appointment={{...item,status:"concluido"}} onSaved={refresh}/>}
         </article>)}</div> :
         loaded && <p className="report-empty">Nenhum pagamento pendente.</p>}
   </>;
@@ -2486,6 +2550,7 @@ function FinancePage() {
       <StatCard title="Clientes para reativar" value={report?.inactiveClients?.length ?? "—"} note="Sem voltar há 30 dias ou mais" icon={Users} tone="orange" />
     </section>
     <CashFlowSummary flow={report.cashFlow}/>
+    <section className="panel expense-flow"><div className="panel-heading"><div><h2>Pacotes vendidos no mês</h2><p className="panel-subtitle">Recebimento antecipado; sessões utilizadas não são cobradas novamente.</p></div><strong>{money(report.packageRevenueCents)}</strong></div></section>
     {report.productSales&&<section className="panel expense-flow"><div className="panel-heading"><div><h2>Venda de produtos</h2><p className="panel-subtitle">Margem bruta estimada: vendas menos custo registrado no momento da venda, sem despesas ou impostos.</p></div></div><div className="expense-flow-grid"><div><small>Receita de produtos</small><strong>{money(report.productSales.revenueCents)}</strong></div><div><small>Custo dos produtos vendidos</small><strong>{money(report.productSales.costCents)}</strong></div><div><small>Margem bruta estimada</small><strong>{money(report.productSales.marginCents)}</strong></div><div><small>Vendas registradas</small><strong>{report.productSales.count}</strong></div></div></section>}
     <ReportDailyChart key={month} daily={report.daily||[]}/>
     <div className="reports-grid">
@@ -3375,6 +3440,7 @@ export default function App() {
       <Route path="/clientes" element={<ClientsPage user={user} />} />
       <Route path="/servicos" element={user.role !== "profissional" ? <ServicesPage user={user} section="services" /> : <AccessDenied />} />
       <Route path="/estoque" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<InventoryPage user={user}/>:<AccessDenied/>}/>
+      <Route path="/pacotes" element={user.role!=="profissional"&&user.tenantId!=="tenant-salao-demo"?<PackagesPage user={user}/>:<AccessDenied/>}/>
       <Route path="/equipe" element={user.role === "dono" && user.tenantId !== "tenant-salao-demo" ? <ServicesPage user={user} section="team" /> : <AccessDenied />} />
       <Route path="/meus-atendimentos" element={user.role === "profissional" ? <ProfessionalWorkPage user={user} /> : <AccessDenied />} />
       <Route path="/meus-ganhos" element={user.role === "profissional" ? <ProfessionalEarningsPage/> : <AccessDenied/>}/>

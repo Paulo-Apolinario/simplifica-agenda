@@ -1,0 +1,76 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {randomBytes} from "node:crypto";
+import {execFileSync} from "node:child_process";
+
+test("pacotes preservam compra, baixam sessões e não duplicam caixa; fidelidade liquida diferença",async()=>{
+  const temp=fs.mkdtempSync(path.join(os.tmpdir(),"agenda-packages-"));
+  process.env.DATABASE_PATH=path.join(temp,"app.sqlite");process.env.INSTALL_TOKEN=randomBytes(32).toString("hex");
+  process.env.NODE_ENV="test";process.env.DEMO_MODE="false";
+  const {default:app}=await import("../src/app.js"),{db}=await import("../src/database.js");
+  const server=app.listen(0,"127.0.0.1");await new Promise(r=>server.once("listening",r));
+  let cookie="";
+  const call=async(route,method="GET",body)=>{
+    const response=await fetch("http://127.0.0.1:"+server.address().port+"/api"+route,{method,headers:{...(body?{"Content-Type":"application/json"}:{}),...(cookie?{Cookie:cookie}:{})},body:body?JSON.stringify(body):undefined});
+    const next=response.headers.get("set-cookie");if(next)cookie=next.split(";")[0];return {status:response.status,body:await response.json()};
+  };
+  try{
+    assert.equal((await call("/installation/setup","POST",{businessName:"Salão",slug:"packages-test",ownerName:"Dono",ownerEmail:"owner@package.local",password:"Senha-Forte-Pacote-123",installToken:process.env.INSTALL_TOKEN})).status,201);
+    const login=await call("/auth/login","POST",{email:"owner@package.local",password:"Senha-Forte-Pacote-123"});assert.equal(login.status,200);
+    const tenant=login.body.user.tenantId,today=(await call("/cash/daily")).body.today,month=today.slice(0,7);
+    db.prepare("INSERT INTO users(id,tenant_id,name,email,password_hash,role,commission_percent) VALUES(?,?,?,?,?,'profissional',50)").run("p",tenant,"Profissional","pro@package.local","hash");
+    for(const [id,name,price] of [["s","Corte",5000],["h","Hidratação",10000]])db.prepare("INSERT INTO services(id,tenant_id,name,duration_minutes,price_cents) VALUES(?,?,?,?,?)").run(id,tenant,name,30,price);
+    for(const [id,name] of [["c","Cliente"],["other","Outro"]])db.prepare("INSERT INTO clients(id,tenant_id,name) VALUES(?,?,?)").run(id,tenant,name);
+    const fields={name:"Pacote misto",priceCents:16000,validityDays:30,items:[{serviceId:"s",sessions:2},{serviceId:"h",sessions:1}]};
+    const pack=await call("/packages","POST",fields);assert.equal(pack.status,201);const route="/packages/"+pack.body.id;
+    const sale={clientId:"c",priceCents:16000,paymentMethod:"pix",requestId:"package-test-00001"};
+    assert.equal((await call(route+"/sell","POST",sale)).status,409);
+    assert.equal((await call("/cash/openings","POST",{date:today,openingCashCents:0})).status,201);
+    const sold=await call(route+"/sell","POST",sale);assert.equal(sold.status,201);const purchaseId=sold.body.id;
+    assert.equal((await call(route+"/sell","POST",sale)).body.id,purchaseId);
+    assert.equal((await call(route,"PATCH",{...fields,name:"Novo",priceCents:12000,validityDays:1,items:[{serviceId:"h",sessions:1}]})).status,200);
+    assert.equal((await call(route+"/status","POST",{active:false})).status,200);
+    const original=(await call("/packages")).body.purchases[0];assert.equal(original.packageName,"Pacote misto");assert.equal(original.priceCents,16000);assert.equal(original.items.length,2);
+    const make=async(clientId="c",serviceId="s")=>{
+      const a=await call("/direct-services","POST",{clientId,serviceId,professionalId:"p"});assert.equal(a.status,201);return a.body.id;
+    };
+    const redeem=appointment=>call("/packages/redeem/appointment/"+appointment,"POST",{purchaseId});
+    const wrong=await make("other");assert.equal((await redeem(wrong)).status,409);
+    const a=await make();
+    db.prepare("UPDATE package_purchases SET expires_on='2000-01-01' WHERE id=?").run(purchaseId);
+    assert.equal((await redeem(a)).status,409);
+    db.prepare("UPDATE package_purchases SET expires_on=? WHERE id=?").run(original.expiresOn,purchaseId);
+    assert.equal((await redeem(a)).body.amountCents,4000);
+    assert.equal((await redeem(a)).status,409);
+    assert.equal((await call("/cash/reconcile/"+a,"POST",{date:today})).status,409);
+    execFileSync(process.execPath,["--input-type=module","-e","await import('./src/database.js')"],{cwd:path.resolve(import.meta.dirname,"..")});
+    assert.equal(db.prepare("SELECT paid_on FROM appointments WHERE id=?").get(a).paid_on,null);
+    assert.equal((await call("/cash/unreconciled")).body.receipts.some(r=>r.id===a),false);
+    assert.equal((await call("/receivables/pending")).body.receivables.some(r=>r.id===a),false);
+    assert.equal((await call("/appointments/"+a,"PATCH",{priceCents:1})).status,409);
+    const b=await make();assert.equal((await redeem(b)).body.amountCents,4000);
+    const extra=await make();assert.equal((await redeem(extra)).status,409);
+    const h=await make("c","h");assert.equal((await redeem(h)).body.amountCents,8000);
+    assert.equal((await call("/cash/daily")).body.expectedTotalCents,16000);
+    assert.equal((await call("/reports?month="+month)).body.packageRevenueCents,16000);
+    assert.equal((await call("/reports?month="+month)).body.revenueCents,16000);
+    assert.equal((await call("/commissions?month="+month)).body.commissions.find(c=>c.id===a).earnedCents,2000);
+    assert.equal((await call("/loyalty/settings","PUT",{enabled:true,threshold:3,discountCents:1000})).status,200);
+    const discount=await call("/loyalty/redeem/"+extra,"POST",{paymentMethod:"pix"});assert.equal(discount.status,200);
+    assert.equal((await call("/loyalty/redeem/"+extra,"POST",{paymentMethod:"pix"})).status,409);
+    const crm=(await call("/clients/c/history")).body;assert.equal(crm.totalPaidCents,20000);assert.equal(crm.benefits.loyalty.balance,1);
+    const day=(await call("/cash/daily")).body;assert.equal(day.expectedTotalCents,20000);assert.equal(day.receipts.length,2);
+    const report=(await call("/reports?month="+month)).body;assert.equal(report.cashFlow.receivedCents,20000);assert.equal(report.daily.find(d=>d.date===today).receivedCents,20000);
+    assert.equal((await call("/overview")).body.monthRevenueCents,20000);
+    assert.equal((await call("/cash/closings","POST",{date:today,countedCashCents:0})).status,201);
+    assert.equal(db.prepare("SELECT sum(amount_cents) AS n FROM package_redemptions").get().n,16000);
+    const ownerHash=db.prepare("SELECT password_hash FROM users WHERE tenant_id=? AND role='dono'").get(tenant).password_hash;
+    db.prepare("INSERT INTO users(id,tenant_id,name,email,password_hash,role) VALUES(?,?,?,?,?,'recepcao')").run("pkg-reception",tenant,"Recepção","reception@package.local",ownerHash);
+    assert.equal((await call("/auth/login","POST",{email:"reception@package.local",password:"Senha-Forte-Pacote-123"})).status,200);
+    assert.equal((await call("/packages","POST",fields)).status,403);
+    assert.equal((await call("/loyalty/settings","PUT",{enabled:false,threshold:3,discountCents:1000})).status,403);
+  }finally{await new Promise(r=>server.close(r));db.close();fs.rmSync(temp,{recursive:true,force:true});}
+});

@@ -568,7 +568,7 @@ app.get("/api/overview", requireAuth, (req, res) => {
     earningsDueCents: earnings?.dueCents ?? null,
     todayCount: summary.today_count,
     activeClients: summary.active_clients,
-    monthRevenueCents: req.user.role === "dono" ? summary.month_revenue + productSalesSummary(tenant(req),month).revenueCents : null,
+    monthRevenueCents: req.user.role === "dono" ? summary.month_revenue + productSalesSummary(tenant(req),month).revenueCents + packageRevenue(tenant(req),month) : null,
     monthCount: summary.month_count,
     upcoming,
   });
@@ -662,7 +662,9 @@ app.get("/api/clients/:id/history", requireAuth, (req, res) => {
   const history = appointmentRows(tenant(req),
     `AND a.client_id = ? ${req.user.role === "profissional" ? "AND a.professional_id = ?" : ""}`,
     req.user.role === "profissional" ? [req.params.id, req.user.id] : [req.params.id]).reverse();
-  res.json({ history });
+  const benefits=req.user.role==="profissional"?null:{purchases:purchaseRows(tenant(req),client.id),loyalty:loyaltyPoints(tenant(req),client.id)};
+  const totalPaidCents=benefits?history.filter(a=>a.paidOn&&a.paymentMethod!=="pacote").reduce((s,a)=>s+a.priceCents,0)+benefits.purchases.reduce((s,p)=>s+p.priceCents,0):null;
+  res.json({ history,benefits,totalPaidCents });
 });
 
 app.get("/api/services", requireAuth, (_req, res) => {
@@ -1411,6 +1413,8 @@ app.patch("/api/appointments/:id", requireAuth, allowRoles("dono", "profissional
   if (req.user.role === "profissional") {
     return fail(res, 403, "Para registrar um serviço, utilize a opção Concluir atendimento em Meus atendimentos.");
   }
+  if (appointment.paymentMethod === "pacote" || db.prepare("SELECT 1 FROM loyalty_redemptions WHERE appointment_id=? AND tenant_id=?").get(appointment.id,tenant(req)))
+    return fail(res,409,"Atendimento com benefício já utilizado. Não é possível alterar diretamente.");
   if (db.prepare("SELECT 1 FROM commission_payments WHERE appointment_id = ? AND tenant_id = ?").get(appointment.id, tenant(req))) {
     return fail(res, 409, "Comissão já paga. Não é permitido alterar este serviço sem estorno auditado.");
   }
@@ -1713,6 +1717,9 @@ function cashDaySummary(tenantId, date) {
     s.paid_on AS paidOn,s.paid_at AS startsAt,'product_sale' AS bookingSource,s.client_name AS clientName,
     'Venda de produtos: ' || (SELECT group_concat(i.quantity || ' × ' || i.product_name, ', ') FROM product_sale_items i WHERE i.sale_id=s.id) AS serviceName,
     s.seller_name AS professionalName FROM product_sales s WHERE s.tenant_id=? AND s.paid_on=?`).all(tenantId,date));
+  rows.push(...db.prepare(`SELECT id,price_cents AS priceCents,payment_method AS paymentMethod,paid_at AS paidAt,
+    paid_on AS paidOn,paid_at AS startsAt,'package_sale' AS bookingSource,client_name AS clientName,
+    'Pacote: '||package_name AS serviceName,seller_name AS professionalName FROM package_purchases WHERE tenant_id=? AND paid_on=?`).all(tenantId,date));
   rows.sort((a,b)=>String(b.paidAt||"").localeCompare(String(a.paidAt||""))||a.id.localeCompare(b.id));
   for (const row of rows) methods[row.paymentMethod] = (methods[row.paymentMethod] || 0) + row.priceCents;
   return { date, receiptCount: rows.length, methods, expectedCashCents: methods.dinheiro,
@@ -1721,7 +1728,7 @@ function cashDaySummary(tenantId, date) {
 const expenseCategories = ["aluguel","energia","agua","internet","materiais","fornecedores","manutencao","marketing","impostos","outros"];
 const expenseMethods = ["cash_drawer", ...paymentMethods, "boleto"];
 function expenseCashFlow(tenantId, month) {
-  const receivedCents = db.prepare("SELECT coalesce(sum(price_cents),0) AS total FROM appointments WHERE tenant_id=? AND status='concluido' AND payment_method!='' AND substr(paid_on,1,7)=?").get(tenantId,month).total + productSalesSummary(tenantId,month).revenueCents;
+  const receivedCents = db.prepare("SELECT coalesce(sum(price_cents),0) AS total FROM appointments WHERE tenant_id=? AND status='concluido' AND payment_method!='' AND substr(paid_on,1,7)=?").get(tenantId,month).total + productSalesSummary(tenantId,month).revenueCents + packageRevenue(tenantId,month);
   const expensesCents = db.prepare("SELECT coalesce(sum(amount_cents),0) AS total FROM operating_expenses WHERE tenant_id=? AND status='pago' AND substr(paid_on,1,7)=?").get(tenantId,month).total;
   const timezone = db.prepare("SELECT timezone FROM business_settings WHERE tenant_id=?").get(tenantId)?.timezone || "America/Sao_Paulo";
   const payoutsCents = db.prepare(`SELECT cp.amount_cents AS amount, cp.paid_at AS paidAt, b.receipt_snapshot_json AS snapshot
@@ -1810,6 +1817,149 @@ function productSalesSummary(id,month) {
   const row=db.prepare("SELECT coalesce(sum(total_cents),0) AS revenueCents,coalesce(sum(cost_cents),0) AS costCents,count(*) AS count FROM product_sales WHERE tenant_id=? AND substr(paid_on,1,7)=?").get(id,month);
   return {...row,marginCents:row.revenueCents-row.costCents};
 }
+function packageRevenue(id,month){
+  return db.prepare("SELECT coalesce(sum(price_cents),0) AS total FROM package_purchases WHERE tenant_id=? AND substr(paid_on,1,7)=?").get(id,month).total;
+}
+function packageItems(id){
+  return db.prepare(`SELECT i.service_id AS serviceId,s.name AS serviceName,i.sessions,s.price_cents AS referenceCents,s.active AS serviceActive
+    FROM service_package_items i JOIN services s ON s.id=i.service_id WHERE i.package_id=? ORDER BY i.service_id`).all(id);
+}
+function purchasedItems(id){
+  return db.prepare(`SELECT i.service_id AS serviceId,i.service_name AS serviceName,i.sessions,i.allocation_cents AS allocationCents,
+    (SELECT count(*) FROM package_redemptions r WHERE r.purchase_id=i.purchase_id AND r.service_id=i.service_id) AS used
+    FROM package_purchase_items i WHERE i.purchase_id=? ORDER BY i.service_id`).all(id);
+}
+function purchaseRows(id,clientId=null){
+  return db.prepare(`SELECT id,package_id AS packageId,package_name AS packageName,client_id AS clientId,client_name AS clientName,price_cents AS priceCents,
+    expires_on AS expiresOn,paid_on AS paidOn,payment_method AS paymentMethod FROM package_purchases
+    WHERE tenant_id=? AND (? IS NULL OR client_id=?) ORDER BY paid_on DESC,id`).all(id,clientId,clientId).map(p=>({...p,items:purchasedItems(p.id)}));
+}
+function loyaltySettings(id){
+  return db.prepare("SELECT enabled,threshold,discount_cents AS discountCents FROM loyalty_settings WHERE tenant_id=?").get(id)||{enabled:0,threshold:10,discountCents:1000};
+}
+function loyaltyPoints(id,clientId){
+  const earned=db.prepare(`SELECT count(*) AS n FROM appointments WHERE tenant_id=? AND client_id=? AND status='concluido'
+    AND (payment_method='pacote' OR (payment_method!='' AND paid_on IS NOT NULL))`).get(id,clientId).n;
+  const spent=db.prepare("SELECT coalesce(sum(points),0) AS n FROM loyalty_redemptions WHERE tenant_id=? AND client_id=?").get(id,clientId).n;
+  return {earned,spent,balance:Math.max(0,earned-spent)};
+}
+app.get("/api/packages",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const id=tenant(req);
+  const packages=db.prepare("SELECT id,name,price_cents AS priceCents,validity_days AS validityDays,active FROM service_packages WHERE tenant_id=? ORDER BY name").all(id).map(p=>({...p,items:packageItems(p.id)}));
+  const purchases=purchaseRows(id), loyalty=loyaltySettings(id);
+  const redemptions=db.prepare(`SELECT r.appointment_id AS appointmentId,r.redeemed_on AS redeemedOn,r.amount_cents AS amountCents,p.package_name AS packageName,p.client_name AS clientName,
+    s.name AS serviceName,u.name AS professionalName FROM package_redemptions r JOIN package_purchases p ON p.id=r.purchase_id
+    JOIN appointments a ON a.id=r.appointment_id JOIN services s ON s.id=a.service_id JOIN users u ON u.id=a.professional_id WHERE r.tenant_id=? ORDER BY r.redeemed_on DESC`).all(id);
+  const clients=db.prepare("SELECT id,name FROM clients WHERE tenant_id=? AND notes!='__internal_anonymous__' ORDER BY name").all(id).map(c=>({...c,...loyaltyPoints(id,c.id)}));
+  const rewards=db.prepare(`SELECT l.appointment_id AS appointmentId,l.points,l.discount_cents AS discountCents,l.redeemed_on AS redeemedOn,c.name AS clientName
+    FROM loyalty_redemptions l JOIN clients c ON c.id=l.client_id WHERE l.tenant_id=? ORDER BY l.redeemed_on DESC`).all(id);
+  res.setHeader("Cache-Control","no-store");res.json({packages,purchases,redemptions,loyalty,clients,rewards,today:cashDay(id)});
+});
+app.get("/api/packages/eligible",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const id=tenant(req),clientId=String(req.query.clientId??""),serviceId=String(req.query.serviceId??"");
+  const client=db.prepare("SELECT id FROM clients WHERE id=? AND tenant_id=? AND notes!='__internal_anonymous__'").get(clientId,id);
+  if(!client)return res.json({purchases:[],loyalty:null});
+  const purchases=purchaseRows(id,clientId).filter(p=>p.expiresOn>=cashDay(id)&&p.items.some(i=>i.serviceId===serviceId&&i.used<i.sessions));
+  res.json({purchases,loyalty:{...loyaltySettings(id),...loyaltyPoints(id,clientId)}});
+});
+function savePackage(req,res){
+  const id=tenant(req),name=String(req.body?.name??"").trim(),{priceCents,validityDays,items}=req.body||{},active=req.body?.active===false?0:1;
+  if(!name||name.length>120||!Number.isSafeInteger(priceCents)||priceCents<=0||priceCents>100000000||!Number.isSafeInteger(validityDays)||validityDays<1||validityDays>3650||
+    !Array.isArray(items)||!items.length||items.length>30||items.some(i=>!i||typeof i.serviceId!=="string"||!Number.isSafeInteger(i.sessions)||i.sessions<1||i.sessions>100)||new Set(items.map(i=>i.serviceId)).size!==items.length)
+    return fail(res,400,"Confira nome, valor, validade e sessões.");
+  if(items.some(i=>!db.prepare("SELECT 1 FROM services WHERE id=? AND tenant_id=? AND active=1").get(i.serviceId,id)))return fail(res,400,"Selecione serviços ativos do estabelecimento.");
+  const packageId=req.params.id||createId();
+  if(req.params.id&&!db.prepare("SELECT 1 FROM service_packages WHERE id=? AND tenant_id=?").get(packageId,id))return fail(res,404,"Pacote não encontrado.");
+  db.transaction(()=>{
+    db.prepare(`INSERT INTO service_packages(id,tenant_id,name,price_cents,validity_days,active) VALUES(?,?,?,?,?,?)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name,price_cents=excluded.price_cents,validity_days=excluded.validity_days,active=excluded.active`).run(packageId,id,name,priceCents,validityDays,active);
+    db.prepare("DELETE FROM service_package_items WHERE package_id=?").run(packageId);
+    const add=db.prepare("INSERT INTO service_package_items(package_id,service_id,sessions) VALUES(?,?,?)");
+    for(const i of items)add.run(packageId,i.serviceId,i.sessions);
+  })();
+  res.status(req.params.id?200:201).json({id:packageId});
+}
+app.post("/api/packages",requireAuth,allowRoles("dono"),savePackage);
+app.patch("/api/packages/:id",requireAuth,allowRoles("dono"),savePackage);
+app.post("/api/packages/:id/status",requireAuth,allowRoles("dono"),(req,res)=>{
+  if(typeof req.body?.active!=="boolean")return fail(res,400,"Status inválido.");
+  if(!db.prepare("UPDATE service_packages SET active=? WHERE id=? AND tenant_id=?").run(req.body.active?1:0,req.params.id,tenant(req)).changes)return fail(res,404,"Pacote não encontrado.");
+  res.json({ok:true});
+});
+app.post("/api/packages/:id/sell",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const id=tenant(req),requestId=String(req.body?.requestId??""),clientId=String(req.body?.clientId??""),method=String(req.body?.paymentMethod??""),expectedPrice=req.body?.priceCents;
+  if(!/^[a-zA-Z0-9_-]{16,80}$/.test(requestId)||!paymentMethods.includes(method)||!Number.isSafeInteger(expectedPrice))return fail(res,400,"Confira o cliente, preço e pagamento.");
+  const outcome=db.transaction(()=>{
+    const prior=db.prepare("SELECT id,package_id AS packageId,client_id AS clientId,payment_method AS method,price_cents AS price FROM package_purchases WHERE tenant_id=? AND request_id=?").get(id,requestId);
+    if(prior)return prior.packageId===req.params.id&&prior.clientId===clientId&&prior.method===method&&prior.price===expectedPrice?{id:prior.id,replayed:true}:"Identificador de venda já utilizado.";
+    const today=cashDay(id);
+    if(!cashOpening(id,today)||cashClosing(id,today))return "Abra o caixa de hoje antes de vender o pacote.";
+    const p=db.prepare("SELECT * FROM service_packages WHERE id=? AND tenant_id=? AND active=1").get(req.params.id,id);
+    const c=db.prepare("SELECT id,name FROM clients WHERE id=? AND tenant_id=? AND notes!='__internal_anonymous__'").get(clientId,id);
+    if(!p||!c||p.price_cents!==expectedPrice)return "Pacote ou cliente indisponível, ou preço alterado. Atualize a lista.";
+    const items=packageItems(p.id);
+    if(!items.length||items.some(i=>!i.serviceActive))return "O pacote contém serviços inativos.";
+    const expiry=new Date(today+"T12:00:00Z");expiry.setUTCDate(expiry.getUTCDate()+p.validity_days-1);
+    const purchaseId=createId();
+    db.prepare(`INSERT INTO package_purchases(id,tenant_id,package_id,client_id,package_name,client_name,price_cents,expires_on,paid_on,payment_method,seller_name,created_by,request_id)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(purchaseId,id,p.id,c.id,p.name,c.name,p.price_cents,expiry.toISOString().slice(0,10),today,method,req.user.name||"Usuário",req.user.id,requestId);
+    const weight=items.reduce((sum,i)=>sum+i.referenceCents*i.sessions,0);
+    const sessions=items.reduce((sum,i)=>sum+i.sessions,0);
+    let cumulative=0,allocated=0;
+    const insert=db.prepare("INSERT INTO package_purchase_items(purchase_id,service_id,service_name,sessions,allocation_cents) VALUES(?,?,?,?,?)");
+    for(const i of items){
+      cumulative+=weight?i.referenceCents*i.sessions:i.sessions;
+      const target=Math.round(p.price_cents*(cumulative/(weight||sessions)));
+      insert.run(purchaseId,i.serviceId,i.serviceName,i.sessions,target-allocated);allocated=target;
+    }
+    return {id:purchaseId};
+  })();
+  if(typeof outcome==="string")return fail(res,409,outcome);
+  res.status(outcome.replayed?200:201).json(outcome);
+});
+app.post("/api/packages/redeem/appointment/:id",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const id=tenant(req),purchaseId=String(req.body?.purchaseId??"");
+  const result=db.transaction(()=>{
+    const today=cashDay(id);
+    if(!cashOpening(id,today)||cashClosing(id,today))return "Abra o caixa de hoje antes de concluir a sessão.";
+    const a=db.prepare("SELECT * FROM appointments WHERE id=? AND tenant_id=?").get(req.params.id,id);
+    if(!a||!["agendado","confirmado","concluido"].includes(a.status)||a.payment_method)return "Atendimento indisponível ou já recebido.";
+    if(db.prepare("SELECT 1 FROM commission_payments WHERE appointment_id=? AND tenant_id=?").get(a.id,id))return "Comissão já repassada; não é possível alterar este serviço.";
+    const p=db.prepare("SELECT id FROM package_purchases WHERE id=? AND tenant_id=? AND client_id=? AND expires_on>=?").get(purchaseId,id,a.client_id,today);
+    const item=p&&purchasedItems(p.id).find(i=>i.serviceId===a.service_id&&i.used<i.sessions);
+    if(!item)return "Pacote vencido, sem saldo ou incompatível com o cliente e serviço.";
+    const amount=Math.round(item.allocationCents*(item.used+1)/item.sessions)-Math.round(item.allocationCents*item.used/item.sessions);
+    const before=auditSnapshot(id,a.id);
+    db.prepare("UPDATE appointments SET status='concluido',completed_on=coalesce(completed_on,?),price_cents=?,payment_method='pacote',paid_on=NULL,paid_at=NULL WHERE id=? AND tenant_id=?").run(today,amount,a.id,id);
+    db.prepare("INSERT INTO package_redemptions(appointment_id,tenant_id,purchase_id,service_id,amount_cents,redeemed_on,created_by) VALUES(?,?,?,?,?,?,?)").run(a.id,id,p.id,a.service_id,amount,today,req.user.id);
+    recordAppointmentAudit(id,a.id,"pagamento",req.user,before);
+    return {ok:true,amountCents:amount};
+  })();
+  if(typeof result==="string")return fail(res,409,result);res.json(result);
+});
+app.put("/api/loyalty/settings",requireAuth,allowRoles("dono"),(req,res)=>{
+  const {enabled,threshold,discountCents}=req.body||{};
+  if(typeof enabled!=="boolean"||!Number.isSafeInteger(threshold)||threshold<1||threshold>1000||!Number.isSafeInteger(discountCents)||discountCents<1||discountCents>100000000)return fail(res,400,"Confira a configuração de fidelidade.");
+  db.prepare(`INSERT INTO loyalty_settings(tenant_id,enabled,threshold,discount_cents) VALUES(?,?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET enabled=excluded.enabled,threshold=excluded.threshold,discount_cents=excluded.discount_cents`).run(tenant(req),enabled?1:0,threshold,discountCents);
+  res.json({ok:true});
+});
+app.post("/api/loyalty/redeem/:id",requireAuth,allowRoles("dono","recepcao"),(req,res)=>{
+  const id=tenant(req),method=String(req.body?.paymentMethod??"");
+  if(!paymentMethods.includes(method))return fail(res,400,"Informe a forma de pagamento da diferença.");
+  const result=db.transaction(()=>{
+    const today=cashDay(id),settings=loyaltySettings(id);
+    if(!cashOpening(id,today)||cashClosing(id,today))return "Abra o caixa de hoje antes de registrar o pagamento.";
+    const a=db.prepare("SELECT * FROM appointments WHERE id=? AND tenant_id=? AND status='concluido' AND payment_method=''").get(req.params.id,id);
+    if(!a||!settings.enabled||!db.prepare("SELECT 1 FROM clients WHERE id=? AND tenant_id=? AND notes!='__internal_anonymous__'").get(a.client_id,id)||loyaltyPoints(id,a.client_id).balance<settings.threshold)return "Atendimento ou recompensa indisponível.";
+    if(db.prepare("SELECT 1 FROM commission_payments WHERE appointment_id=? AND tenant_id=?").get(a.id,id))return "Comissão já repassada.";
+    if(settings.discountCents>=a.price_cents)return "O desconto precisa ser menor que o valor do serviço.";
+    const before=auditSnapshot(id,a.id);
+    db.prepare("UPDATE appointments SET price_cents=price_cents-?,payment_method=?,paid_on=?,paid_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND tenant_id=?").run(settings.discountCents,method,today,a.id,id);
+    db.prepare("INSERT INTO loyalty_redemptions(appointment_id,tenant_id,client_id,points,discount_cents,redeemed_on,created_by) VALUES(?,?,?,?,?,?,?)").run(a.id,id,a.client_id,settings.threshold,settings.discountCents,today,req.user.id);
+    recordAppointmentAudit(id,a.id,"pagamento",req.user,before);return {ok:true};
+  })();
+  if(typeof result==="string")return fail(res,409,result);res.json(result);
+});
 const inventoryProductsSql="SELECT id,name,category,vendor,purpose,unit,cost_cents AS costCents,price_cents AS priceCents,quantity,minimum FROM inventory_products";
 function productFields(body) {
   const name=String(body?.name??"").trim(),category=String(body?.category??"").trim(),vendor=String(body?.vendor??"").trim(),purpose=String(body?.purpose??""),unit=String(body?.unit??"un");
@@ -1905,7 +2055,7 @@ app.get("/api/receivables/pending", requireAuth, allowRoles("dono", "recepcao"),
   const rows = appointmentRows(tenant(req), "AND a.status = 'concluido' AND a.payment_method = ''");
   res.setHeader("Cache-Control", "no-store");
   res.json({ receivables: rows.map(row => ({
-    id: row.id, clientName: row.clientName, serviceName: row.serviceName,
+    id: row.id, clientId:row.clientId, serviceId:row.serviceId, clientName: row.clientName, serviceName: row.serviceName,
     professionalName: row.professionalName, startsAt: row.startsAt,
     completedOn: row.completedOn, priceCents: row.priceCents, bookingSource: row.bookingSource,
   })) });
@@ -1957,7 +2107,7 @@ app.get("/api/cash/unreconciled", requireAuth, allowRoles("dono", "recepcao"), (
     FROM appointments a
     JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
     JOIN users u ON u.id = a.professional_id AND u.tenant_id = a.tenant_id
-    WHERE a.tenant_id = ? AND a.status = 'concluido' AND a.payment_method != '' AND a.paid_on IS NULL
+    WHERE a.tenant_id = ? AND a.status = 'concluido' AND a.payment_method NOT IN ('','pacote') AND a.paid_on IS NULL
     ORDER BY a.starts_at DESC LIMIT 300`).all(tenant(req));
   res.setHeader("Cache-Control", "no-store");
   res.json({ receipts: rows });
@@ -1971,7 +2121,7 @@ app.post("/api/cash/reconcile/:id", requireAuth, allowRoles("dono"), (req, res) 
     if (cashClosing(tenant(req), date)) return "closed";
     const result = db.prepare(`UPDATE appointments SET paid_on = ?, payment_reconciled_by = ?
       WHERE id = ? AND tenant_id = ? AND status = 'concluido'
-        AND payment_method != '' AND paid_on IS NULL`).run(date, req.user.id, req.params.id, tenant(req));
+        AND payment_method NOT IN ('','pacote') AND paid_on IS NULL`).run(date, req.user.id, req.params.id, tenant(req));
     if (!result.changes) return "missing";
     recordAppointmentAudit(tenant(req), req.params.id, "conciliacao", req.user, before);
     return "ok";
@@ -2198,6 +2348,7 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
     AND ${appointmentCompletionMonth}=? GROUP BY date`).all(tenant(req),month);
   const receivedMap=new Map(receivedDays.map(row=>[row.date,row.cents]));
   for(const row of db.prepare("SELECT paid_on AS date,sum(total_cents) AS cents FROM product_sales WHERE tenant_id=? AND substr(paid_on,1,7)=? GROUP BY paid_on").all(tenant(req),month))receivedMap.set(row.date,(receivedMap.get(row.date)||0)+row.cents);
+  for(const row of db.prepare("SELECT paid_on AS date,sum(price_cents) AS cents FROM package_purchases WHERE tenant_id=? AND substr(paid_on,1,7)=? GROUP BY paid_on").all(tenant(req),month))receivedMap.set(row.date,(receivedMap.get(row.date)||0)+row.cents);
   const productionMap=new Map(productionDays.map(row=>[row.date,row]));
   const [year,monthNumber]=month.split("-").map(Number);
   const daily=Array.from({length:new Date(Date.UTC(year,monthNumber,0)).getUTCDate()},(_,i)=>{
@@ -2212,8 +2363,14 @@ app.get("/api/reports", requireAuth, allowRoles("dono"), (req, res) => {
     if(existing){existing.cents+=row.cents;existing.count+=row.count;}else paymentBreakdown.push(row);
   }
   paymentBreakdown.sort((a,b)=>b.cents-a.cents);
+  for(const row of db.prepare("SELECT payment_method AS method,sum(price_cents) AS cents,count(*) AS count FROM package_purchases WHERE tenant_id=? AND substr(paid_on,1,7)=? GROUP BY payment_method").all(tenant(req),month)){
+    const existing=paymentBreakdown.find(p=>p.method===row.method);
+    if(existing){existing.cents+=row.cents;existing.count+=row.count;}else paymentBreakdown.push(row);
+  }
+  paymentBreakdown.sort((a,b)=>b.cents-a.cents);
   const productSales=productSalesSummary(tenant(req),month);
-  res.json({ month, revenueCents: revenue.revenue_cents+productSales.revenueCents, productSales, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,
+  const packageRevenueCents=packageRevenue(tenant(req),month);
+  res.json({ month, revenueCents: revenue.revenue_cents+productSales.revenueCents+packageRevenueCents, packageRevenueCents, productSales, pendingCents: revenue.pending_cents, pendingCount: revenue.pending_count, completedCount: revenue.completed_count,
     productionCents, commissionTotalCents, establishmentShareCents: productionCents - commissionTotalCents,
     byService, byProfessional, inactiveClients, daily, paymentBreakdown, cashFlow:expenseCashFlow(tenant(req),month) });
 });

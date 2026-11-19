@@ -400,6 +400,9 @@
 .expense-flow-grid .expense-balance strong {color:#07966a;}
 .expense-flow-grid .expense-negative strong {color:#c24139;}
 .expense-form-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;}
+.benefit-actions {display:grid;gap:9px;min-width:0;width:100%;text-align:left;}
+.benefit-actions .field {min-width:0;width:100%;}
+.cash-payment-row .benefit-actions {flex-basis:100%;}
 @media(max-width:600px){.expense-row-actions{width:100%;}.expense-row-actions .button{flex:1;}.expense-row-money{justify-items:start;}.expense-filters .field{min-width:100%;}}
 .premium-finance-tabs [role="tab"] {min-height:78px;display:flex;align-items:center;text-align:left;gap:10px;white-space:normal;min-width:0;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--surface);color:var(--muted);box-shadow:var(--premium-shadow);font-size:12px;font-weight:600;}
 .premium-finance-tabs [role="tab"].active {background:#2256cc;color:#fff;border-color:#2256cc;box-shadow:0 6px 18px #2256cc30;}

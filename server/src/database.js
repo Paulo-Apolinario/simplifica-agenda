@@ -349,6 +349,51 @@ db.exec(`
     moved_on TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   );
   CREATE INDEX IF NOT EXISTS inventory_movements_date ON inventory_movements(tenant_id,moved_on,created_at);
+  CREATE TABLE IF NOT EXISTS service_packages (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name TEXT NOT NULL, price_cents INTEGER NOT NULL CHECK(price_cents>0),
+    validity_days INTEGER NOT NULL CHECK(validity_days>0), active INTEGER NOT NULL DEFAULT 1
+  );
+  CREATE TABLE IF NOT EXISTS service_package_items (
+    package_id TEXT NOT NULL REFERENCES service_packages(id) ON DELETE CASCADE,
+    service_id TEXT NOT NULL REFERENCES services(id), sessions INTEGER NOT NULL CHECK(sessions>0),
+    PRIMARY KEY(package_id,service_id)
+  );
+  CREATE TABLE IF NOT EXISTS package_purchases (
+    id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    package_id TEXT NOT NULL REFERENCES service_packages(id), client_id TEXT NOT NULL REFERENCES clients(id),
+    package_name TEXT NOT NULL, client_name TEXT NOT NULL, price_cents INTEGER NOT NULL,
+    expires_on TEXT NOT NULL, paid_on TEXT NOT NULL, payment_method TEXT NOT NULL,
+    paid_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    seller_name TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id),
+    request_id TEXT NOT NULL, UNIQUE(tenant_id,request_id)
+  );
+  CREATE INDEX IF NOT EXISTS package_purchases_tenant ON package_purchases(tenant_id,client_id,paid_on);
+  CREATE TABLE IF NOT EXISTS package_purchase_items (
+    purchase_id TEXT NOT NULL REFERENCES package_purchases(id) ON DELETE CASCADE,
+    service_id TEXT NOT NULL REFERENCES services(id), service_name TEXT NOT NULL,
+    sessions INTEGER NOT NULL, allocation_cents INTEGER NOT NULL,
+    PRIMARY KEY(purchase_id,service_id)
+  );
+  CREATE TABLE IF NOT EXISTS package_redemptions (
+    appointment_id TEXT PRIMARY KEY REFERENCES appointments(id),
+    tenant_id TEXT NOT NULL REFERENCES tenants(id), purchase_id TEXT NOT NULL REFERENCES package_purchases(id),
+    service_id TEXT NOT NULL REFERENCES services(id), amount_cents INTEGER NOT NULL,
+    redeemed_on TEXT NOT NULL, created_by TEXT NOT NULL REFERENCES users(id)
+  );
+  CREATE INDEX IF NOT EXISTS package_redemptions_purchase ON package_redemptions(purchase_id,service_id);
+  CREATE TABLE IF NOT EXISTS loyalty_settings (
+    tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    enabled INTEGER NOT NULL DEFAULT 0, threshold INTEGER NOT NULL DEFAULT 10,
+    discount_cents INTEGER NOT NULL DEFAULT 1000
+  );
+  CREATE TABLE IF NOT EXISTS loyalty_redemptions (
+    appointment_id TEXT PRIMARY KEY REFERENCES appointments(id), tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    client_id TEXT NOT NULL REFERENCES clients(id), points INTEGER NOT NULL,
+    discount_cents INTEGER NOT NULL, redeemed_on TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES users(id)
+  );
+  CREATE INDEX IF NOT EXISTS loyalty_redemptions_client ON loyalty_redemptions(tenant_id,client_id);
 `);
 ensureColumn("daily_cash_closings", "supply_cents", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("daily_cash_closings", "withdrawal_cents", "INTEGER NOT NULL DEFAULT 0");
@@ -381,7 +426,7 @@ db.transaction(() => {
       a.paid_on AS paidOn, a.completed_on AS completedOn, a.status,
       b.timezone
     FROM appointments a JOIN business_settings b ON b.tenant_id = a.tenant_id
-    WHERE (a.payment_method != '' AND a.paid_on IS NULL)
+    WHERE (a.payment_method NOT IN ('','pacote') AND a.paid_on IS NULL)
        OR (a.status = 'concluido' AND a.completed_on IS NULL)`).all();
   const events = db.prepare(`SELECT action, created_at AS createdAt, after_json AS afterJson
     FROM appointment_audit WHERE tenant_id = ? AND appointment_id = ?
@@ -390,7 +435,7 @@ db.transaction(() => {
   const complete = db.prepare("UPDATE appointments SET completed_on = ? WHERE id = ? AND tenant_id = ?");
   for (const row of rows) {
     const history = events.all(row.tenantId, row.id);
-    if (row.method && !row.paidOn) {
+    if (row.method && row.method !== "pacote" && !row.paidOn) {
       const event = history.find(event => event.action === "pagamento" && (() => {
         try { return Boolean(JSON.parse(event.afterJson || "{}").paymentMethod); } catch { return false; }
       })());
