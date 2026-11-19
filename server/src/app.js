@@ -958,13 +958,22 @@ app.get("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
     JOIN users u ON u.id=psc.professional_id AND u.tenant_id=psc.tenant_id
     JOIN services s ON s.id=psc.service_id AND s.tenant_id=psc.tenant_id
     WHERE psc.tenant_id=? ORDER BY u.name,s.name`).all(tenant(req));
-  res.json({rules});
+  const serviceRules=db.prepare(`SELECT id AS serviceId,name AS serviceName,price_cents AS priceCents,
+    service_commission_percent AS commissionPercent,house_share_percent AS houseSharePercent
+    FROM services WHERE tenant_id=? AND commission_mode='custom' ORDER BY name`).all(tenant(req));
+  res.json({rules,serviceRules});
 });
 app.put("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
   const pro=String(req.body?.professionalId||""), svc=String(req.body?.serviceId||"");
   const percent=Number(req.body?.commissionPercent),house=Number(req.body?.houseSharePercent??0);
   if(![percent,house].every(v=>Number.isFinite(v)&&v>=0&&v<=100)||house>percent)
     return fail(res,400,"Repasse e retenção inválidos.");
+  if(!pro){
+    const changed=db.prepare(`UPDATE services SET commission_mode='custom',service_commission_percent=?,house_share_percent=?
+      WHERE tenant_id=? AND id=?`).run(percent,house,tenant(req),svc);
+    if(!changed.changes)return fail(res,404,"Serviço não encontrado neste estabelecimento.");
+    return res.json({ok:true});
+  }
   if(!db.prepare("SELECT 1 FROM users WHERE id=? AND tenant_id=? AND role='profissional'").get(pro,tenant(req)) ||
      !db.prepare("SELECT 1 FROM services WHERE id=? AND tenant_id=?").get(svc,tenant(req)))
     return fail(res,404,"Serviço ou profissional não encontrado neste estabelecimento.");
@@ -976,6 +985,12 @@ app.put("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
   res.json({ok:true});
 });
 app.delete("/api/commission-rules", requireAuth, allowRoles("dono"), (req,res) => {
+  if(!req.body?.professionalId){
+    const changed=db.prepare(`UPDATE services SET commission_mode='professional',service_commission_percent=0,house_share_percent=0
+      WHERE tenant_id=? AND id=? AND commission_mode='custom'`).run(tenant(req),String(req.body?.serviceId||""));
+    if(!changed.changes)return fail(res,404,"Regra não encontrada.");
+    return res.json({ok:true});
+  }
   const changed=db.prepare(`DELETE FROM professional_service_commissions
     WHERE tenant_id=? AND professional_id=? AND service_id=?`)
     .run(tenant(req),req.body?.professionalId,req.body?.serviceId);
@@ -1291,9 +1306,9 @@ app.post("/api/professional/my-services/:id/complete", requireAuth, allowRoles("
 function serviceTerms(tenantId, serviceId, professionalId) {
   return db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      CASE WHEN psc.professional_id IS NOT NULL THEN 'personalizada' WHEN s.commission_mode = 'custom' THEN 'servico' ELSE 'profissional' END AS ruleSource,
-      COALESCE(psc.commission_percent, CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END) AS commission,
-      COALESCE(psc.house_share_percent,s.house_share_percent) AS houseShare
+      CASE WHEN s.commission_mode = 'custom' THEN 'servico' WHEN psc.professional_id IS NOT NULL THEN 'personalizada' ELSE 'profissional' END AS ruleSource,
+      CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE COALESCE(psc.commission_percent,u.commission_percent) END AS commission,
+      CASE WHEN s.commission_mode = 'custom' THEN s.house_share_percent ELSE COALESCE(psc.house_share_percent,s.house_share_percent) END AS houseShare
     FROM services s
     JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
     LEFT JOIN professional_service_commissions psc ON psc.tenant_id=s.tenant_id AND psc.service_id=s.id AND psc.professional_id=u.id
@@ -2179,8 +2194,8 @@ app.post("/api/public/:slug/appointments", limitAttempts("public-appointment", 1
   if (!validDateTime(startsAt) || !serviceId || !professionalId) return fail(res, 400, "Escolha serviço, profissional e horário.");
   const selected = db.prepare(`
     SELECT s.duration_minutes AS duration, s.price_cents AS price,
-      COALESCE(psc.commission_percent, CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE u.commission_percent END) AS commission,
-      COALESCE(psc.house_share_percent,s.house_share_percent) AS houseShare
+      CASE WHEN s.commission_mode = 'custom' THEN s.service_commission_percent ELSE COALESCE(psc.commission_percent,u.commission_percent) END AS commission,
+      CASE WHEN s.commission_mode = 'custom' THEN s.house_share_percent ELSE COALESCE(psc.house_share_percent,s.house_share_percent) END AS houseShare
     FROM services s JOIN users u ON u.tenant_id = s.tenant_id AND u.role = 'profissional'
     LEFT JOIN professional_service_commissions psc ON psc.tenant_id=s.tenant_id AND psc.service_id=s.id AND psc.professional_id=u.id
     WHERE s.tenant_id = ? AND s.id = ? AND u.id = ? AND s.active = 1 AND s.public_enabled = 1 AND u.active = 1

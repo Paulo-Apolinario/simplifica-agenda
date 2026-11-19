@@ -1725,7 +1725,7 @@ function ServicesPage({ user, section = "services" }) {
         <Field label="Telefone" value={editPerson.phone || ""} onChange={e=>setEditPerson(v=>({...v,phone:e.target.value}))}/>
         {editPerson.role === "profissional" && <Field label="Comissão padrão (%)" type="number" min="0" max="100" step="0.5"
           value={editPerson.commissionPercent} onChange={e=>setEditPerson(v=>({...v,commissionPercent:e.target.value}))}/>}
-        <p className="panel-subtitle">A comissão padrão será aplicada a novos agendamentos e registros de serviço. Para corrigir um serviço já concluído, use Lançamentos dos profissionais.</p>
+        <p className="panel-subtitle">A comissão padrão será aplicada a novos lançamentos sem regra de comissão do serviço ou regra individual anterior. Para corrigir um serviço já concluído, use Lançamentos dos profissionais.</p>
         <ErrorMessage>{error}</ErrorMessage>
         <div className="modal-actions"><Button type="button" variant="secondary" onClick={()=>setEditPerson(null)}>Cancelar</Button><Button>Salvar alterações</Button></div>
       </form>
@@ -2848,71 +2848,80 @@ function PublicRequestPage({ token }) {
 }
 
 function CommissionPoliciesPage() {
-  const [data,setData]=useState({services:[],professionals:[],rules:[]});
-  const [pro,setPro]=useState(""),[service,setService]=useState("");
+  const [data,setData]=useState({services:[],rules:[],serviceRules:[]});
+  const [service,setService]=useState("");
   const [percent,setPercent]=useState("70"),[retention,setRetention]=useState("0");
   const [error,setError]=useState(""),[message,setMessage]=useState("");
+  const [saving,setSaving]=useState(false);
   const refresh=useCallback(async()=>{
     try{
-      const [srv,team,rules]=await Promise.all([api("/services"),api("/professionals"),api("/commission-rules")]);
-      setData({services:srv.services,professionals:team.professionals.filter(x=>x.role==="profissional"&&x.active),rules:rules.rules});
+      const [srv,rules]=await Promise.all([api("/services"),api("/commission-rules")]);
+      setData({services:srv.services,rules:rules.rules,serviceRules:rules.serviceRules||[]});
     }catch(e){setError(e.message);}
   },[]);
   useEffect(()=>{refresh();},[refresh]);
+  const selectService=id=>{
+    setService(id);setError("");setMessage("");
+    const chosen=data.services.find(item=>item.id===id);
+    setPercent(String(chosen?.commissionMode==="custom"?chosen.serviceCommissionPercent:70));
+    setRetention(String(chosen?.houseSharePercent||0));
+  };
+  const selectedService=data.services.find(item=>item.id===service);
+  const effective=Math.max(0,Number(percent)-Number(retention));
+  const professionalCents=Math.round((selectedService?.priceCents||0)*effective/100);
   const save=async e=>{
-    e.preventDefault();setError("");setMessage("");
+    e.preventDefault();setError("");setMessage("");setSaving(true);
     try{await api("/commission-rules",{method:"PUT",body:{
-      professionalId:pro,serviceId:service,commissionPercent:Number(percent),houseSharePercent:Number(retention),
-    }});setMessage("Regra salva para novos agendamentos e registros de serviço.");await refresh();}
-    catch(e){setError(e.message);}
+      serviceId:service,commissionPercent:Number(percent),houseSharePercent:Number(retention),
+    }});setMessage("Regra do serviço salva para todos os profissionais em novos agendamentos e registros.");await refresh();}
+    catch(e){setError(e.message);}finally{setSaving(false);}
   };
   const remove=async rule=>{
-    if(!await confirmAction("Remover esta regra? Novos agendamentos e serviços registrados usarão a configuração do serviço ou profissional."))return;
-    try{await api("/commission-rules",{method:"DELETE",body:{professionalId:rule.professionalId,serviceId:rule.serviceId}});await refresh();}
+    if(!await confirmAction("Remover a regra geral deste serviço? Novos lançamentos voltarão a usar regras individuais anteriores, se houver, ou a comissão padrão do profissional."))return;
+    try{await api("/commission-rules",{method:"DELETE",body:{serviceId:rule.serviceId}});setMessage("Regra geral removida.");await refresh();if(service===rule.serviceId){setService("");setPercent("70");setRetention("0");}}
     catch(e){setError(e.message);}
   };
   return <>
-    <PageTitle eyebrow="POLÍTICAS DE REPASSE" title="Comissões por profissional e serviço"
-      description="Defina quanto cada profissional recebe por um serviço específico."/>
+    <PageTitle eyebrow="POLÍTICAS DE REPASSE" title="Comissões por serviço"
+      description="Programe o percentual de cada serviço uma única vez, independentemente de quem o realize."/>
     <section className="panel management-panel finance-rule-guide">
       <h2>Qual regra o sistema utiliza?</h2>
-      <div className="finance-rule-steps"><div><span>1</span><b>Profissional + serviço</b><small>Maior prioridade</small></div><div><span>2</span><b>Comissão do serviço</b><small>Se configurada</small></div><div><span>3</span><b>Comissão padrão</b><small>Do profissional</small></div></div>
+      <div className="finance-rule-steps"><div><span>1</span><b>Comissão do serviço</b><small>Maior prioridade · todos os profissionais</small></div><div><span>2</span><b>Regra individual anterior</b><small>Apenas se o serviço não tiver regra geral</small></div><div><span>3</span><b>Comissão padrão</b><small>Do profissional, quando não há regra</small></div></div>
       <p className="panel-subtitle">A retenção de materiais é descontada em pontos percentuais da comissão. Exemplo: R$ 100,00 × (60% − 10 pontos) = R$ 50,00 para o profissional e R$ 50,00 para o estabelecimento.</p>
       <p className="panel-subtitle">Vale para novos agendamentos internos, online e registros diretos. Serviços anteriores preservam os valores registrados; para atualizar uma comissão ainda não repassada, use Lançamentos dos profissionais → Ajustar comissão → Usar regra de comissão atual.</p>
     </section>
     <form className="panel management-panel settings-single-section finance-rule-form" onSubmit={save}>
-      <div className="panel-heading"><div><h2>Nova regra personalizada</h2>
-        <p className="panel-subtitle">Tem prioridade sobre a taxa do serviço e a comissão padrão do profissional. Não altera agendamentos já registrados.</p></div></div>
+      <div className="panel-heading"><div><h2>Configurar comissão do serviço</h2>
+        <p className="panel-subtitle">A mesma porcentagem será aplicada a qualquer profissional que realizar o serviço. Não altera registros anteriores.</p></div></div>
       <div className="form-grid">
-        <SelectField label="Profissional" value={pro} required onChange={e=>setPro(e.target.value)}>
-          <option value="">Selecione</option>{data.professionals.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
-        </SelectField>
-        <SelectField label="Serviço" value={service} required onChange={e=>setService(e.target.value)}>
+        <SelectField label="Serviço" value={service} required onChange={e=>selectService(e.target.value)}>
           <option value="">Selecione</option>{data.services.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
         </SelectField>
-        <Field label="Repasse do serviço ao profissional (%)" type="number" min="0" max="100" step="0.5"
+        <Field label="Repasse do serviço ao profissional (%)" type="number" required min="0" max="100" step="any"
           value={percent} onChange={e=>setPercent(e.target.value)}/>
-        <Field label="Retenção adicional de materiais (pontos %)" type="number" min="0" max="100" step="0.5"
+        <Field label="Retenção adicional de materiais (pontos %)" type="number" required min="0" max={percent||0} step="any"
           value={retention} onChange={e=>setRetention(e.target.value)}/>
       </div>
-      <p className="booking-share-notice">Repasse efetivo: {Math.max(0,Number(percent)-Number(retention))}% do valor do serviço.
-        {service && <> · Profissional: {money(Math.round((data.services.find(s=>s.id===service)?.priceCents||0)*Math.max(0,Number(percent)-Number(retention))/100))} · Estabelecimento: {money((data.services.find(s=>s.id===service)?.priceCents||0)-Math.round((data.services.find(s=>s.id===service)?.priceCents||0)*Math.max(0,Number(percent)-Number(retention))/100))}.</>}
+      <p className="booking-share-notice">Repasse efetivo: {effective}% do valor do serviço.
+        {selectedService && <> · Profissional: {money(professionalCents)} · Estabelecimento: {money(selectedService.priceCents-professionalCents)}.</>}
         {" "}Para repasse integral, use 100% e retenção 0%.</p>
       <ErrorMessage>{error}</ErrorMessage>{message&&<p className="success-message">{message}</p>}
-      <div className="modal-actions"><Button>Salvar regra</Button></div>
+      <div className="modal-actions"><Button disabled={saving||!service}>{saving?"Salvando...":"Salvar regra"}</Button></div>
     </form>
     <section className="panel management-panel finance-ledger">
       <div className="panel-heading"><div><h2>Regras cadastradas</h2>
-        <p className="panel-subtitle">Exceções aplicáveis a novos agendamentos e registros de serviço.</p></div></div>
-      {data.rules.length?<div className="management-list">{data.rules.map(rule=>
-        <article className="service-row request-item" key={rule.professionalId+"-"+rule.serviceId}>
+        <p className="panel-subtitle">Percentuais por serviço, aplicáveis a todos os profissionais.</p></div></div>
+      {data.serviceRules.length?<div className="management-list">{data.serviceRules.map(rule=>
+        <article className="service-row request-item" key={rule.serviceId}>
           <span className="service-row-icon"><CircleDollarSign size={18}/></span>
-          <div className="min-w-0 flex-1"><b>{rule.professionalName} · {rule.serviceName}</b>
+          <div className="min-w-0 flex-1"><b>{rule.serviceName}</b>
             <small>{rule.commissionPercent}% de repasse bruto · {rule.houseSharePercent}% de retenção</small></div>
           <strong>{Math.max(0,rule.commissionPercent-rule.houseSharePercent)}% líquido</strong>
+          <Button variant="secondary" type="button" onClick={()=>selectService(rule.serviceId)}>Editar</Button>
           <Button variant="secondary" type="button" onClick={()=>remove(rule)}>Remover</Button>
-        </article>)}</div>:<EmptyState icon={Wallet} title="Nenhuma regra especial"
-          description="Sem uma exceção, o sistema usa a configuração do serviço ou profissional."/>}
+        </article>)}</div>:<EmptyState icon={Wallet} title="Nenhuma comissão por serviço configurada"
+          description="Selecione um serviço para programar o percentual."/>}
+      {data.rules.length>0&&<p className="panel-subtitle">Existem {data.rules.length} regra(s) individual(is) anterior(es), preservadas. A regra geral do serviço tem prioridade.</p>}
     </section>
   </>;
 }

@@ -169,6 +169,33 @@ test("atendimento antecipado entra no caixa da empresa e gera saldo quinzenal se
     assert.equal((await request("/receivables/"+directId+"/pay","POST",{paymentMethod:"pix"})).status,200);
     assert.equal((await request("/receivables/"+directId+"/pay","POST",{paymentMethod:"pix"})).status,409);
     assert.equal((await request("/cash/daily?date="+current)).body.expectedTotalCents,17500);
+    // A programmed service percentage applies across professionals, including
+    // those with an older individual rule, without rewriting historical records.
+    db.prepare(`INSERT INTO users(id,tenant_id,name,email,password_hash,role,commission_percent)
+      VALUES(?,?,?,?,?,'profissional',?)`).run("pro-2",tenant,"Ana","ana@fortnight.local","hash",20);
+    assert.equal((await request("/commission-rules","PUT",{serviceId:"service-1",commissionPercent:100,houseSharePercent:0})).status,200);
+    const configured=(await request("/commission-rules")).body.serviceRules.find(row=>row.serviceId==="service-1");
+    assert.equal(configured.commissionPercent,100);
+    for(const professionalId of ["pro-1","pro-2"]){
+      const terms=(await request("/commission-preview?serviceId=service-1&professionalId="+professionalId)).body;
+      assert.equal(terms.ruleSource,"servico");
+      assert.equal(terms.earnedCents,5000);
+    }
+    const internal=await request("/appointments","POST",{...directPayload,startsAt:tomorrow+"T15:00:00"});
+    assert.equal(internal.status,201,JSON.stringify(internal.body));
+    const online=await request("/public/salao-quinzena/appointments","POST",{name:"Cliente novo",phone:"85900000002",serviceId:"service-1",professionalId:"pro-2",startsAt:tomorrow+"T15:00:00"});
+    assert.equal(online.status,201,JSON.stringify(online.body));
+    const newDirect=await request("/direct-services","POST",{...directPayload,professionalId:"pro-2"});
+    assert.equal(newDirect.status,201,JSON.stringify(newDirect.body));
+    const snap=db.prepare("SELECT commission_percent,house_share_percent FROM appointments WHERE id=?");
+    assert.deepEqual(snap.get(internal.body.id),{commission_percent:100,house_share_percent:0});
+    assert.deepEqual(snap.get(newDirect.body.id),{commission_percent:100,house_share_percent:0});
+    assert.deepEqual(db.prepare("SELECT commission_percent,house_share_percent FROM appointments WHERE tenant_id=? AND professional_id='pro-2' AND starts_at=?").get(tenant,tomorrow+"T15:00:00"),{commission_percent:100,house_share_percent:0});
+    assert.deepEqual(snap.get(directPaid.body.id),{commission_percent:70,house_share_percent:10});
+    assert.equal((await request("/commission-rules","PUT",{serviceId:"service-1",commissionPercent:20,houseSharePercent:30})).status,400);
+    assert.equal((await request("/commission-rules","DELETE",{serviceId:"service-1"})).status,200);
+    assert.equal((await request(previewPath)).body.ruleSource,"personalizada");
+    assert.equal((await request("/commission-preview?serviceId=service-1&professionalId=pro-2")).body.earnedCents,1000);
     assert.equal((await request("/cash/closings","POST",{date:current,countedCashCents:0})).status,201);
     assert.equal((await request("/direct-services","POST",directPayload)).status,409);
     assert.equal((await request("/cash/reconcile/legacy","POST",{date:current})).status,409);
