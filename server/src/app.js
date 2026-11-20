@@ -14,6 +14,8 @@ import {getPlanAccess,planFeatures,professionalLimitReached} from "./saas-plans.
 import {backupStatus,createBackup,verifyBackup,startBackupSchedule} from "./backups.js";
 
 const app = express();
+// Enable only for a reverse proxy on the same machine.
+if (process.env.TRUST_LOCAL_PROXY === "true") app.set("trust proxy", "loopback");
 const sessionSecret = process.env.SESSION_SECRET ?? "desenvolvimento-local-chave-segura-32";
 if (process.env.NODE_ENV === "production" && (!process.env.SESSION_SECRET || sessionSecret.length < 32)) {
   throw new Error("Defina SESSION_SECRET com pelo menos 32 caracteres em produção.");
