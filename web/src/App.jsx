@@ -219,6 +219,27 @@ function Login({ onLogin, demoEnabled = false }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPassword,setShowPassword]=useState(false);
+  const [demoRole, setDemoRole] = useState(null);
+  const enterDemo = async (role) => {
+    if (!demoEnabled || loading) return;
+    const staff = role === "profissional";
+    setError("");
+    setSuccess("");
+    setDemoRole(role);
+    setLoading(true);
+    try {
+      const { user } = await api(staff ? "/auth/staff-login" : "/auth/login", {
+        method: "POST",
+        body: { slug: "studio-bela-vista", password: "Agenda123!", ...(staff ? { staffCode: "001" } : { email: role === "dono" ? "admin@simplifica.local" : "recepcao@simplifica.local" }) },
+      });
+      onLogin(user);
+    } catch (reason) {
+      setError(reason.message);
+    } finally {
+      setDemoRole(null);
+      setLoading(false);
+    }
+  };
   const submit = async (event) => {
     event.preventDefault();
     setError("");
@@ -281,9 +302,17 @@ function Login({ onLogin, demoEnabled = false }) {
           {activation ? "Já tenho senha — entrar" : "Primeiro acesso? Definir minha senha"}
         </button>}
         {demoEnabled && <>
-          <div className="demo-hint">
-            <Sparkles size={16} />
-            <span>Demonstração: <strong>admin@simplifica.local</strong> · <strong>Agenda123!</strong></span>
+          <div className="demo-hint !block">
+            <div className="flex items-center gap-2 mb-2"><Sparkles size={17}/><strong>Experimente o Simplifica Agenda</strong></div>
+            <p className="mb-3">Escolha um perfil para explorar o ambiente demonstrativo.</p>
+            <div className="grid gap-2">
+              {[
+                { role: "dono", label: "Acessar como administrador", icon: LayoutDashboard },
+                { role: "recepcao", label: "Acessar como recepção", icon: ClipboardCheck },
+                { role: "profissional", label: "Acessar como profissional", icon: UserRound },
+              ].map(({ role, label, icon: Icon }) => <Button key={role} type="button" variant="secondary" className="w-full justify-start min-h-11 gap-2" disabled={loading} onClick={() => enterDemo(role)}><Icon size={17}/>{demoRole === role ? "Entrando..." : label}<ArrowRight size={15} className="ml-auto"/></Button>)}
+            </div>
+            <p className="mt-3">Dados fictícios, somente para demonstração. Senha manual: <strong>Agenda123!</strong></p>
           </div>
           <Link to="/agendar/studio-bela-vista" className="login-public-link">Ver página pública de agendamento <ArrowRight size={15} /></Link>
         </>}
