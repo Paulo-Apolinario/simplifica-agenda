@@ -10,7 +10,7 @@ import { allowRoles, publicUser, requireAuth } from "./auth.js";
 import { SQLiteSessionStore } from "./session-store.js";
 import { completedEarlySql, findScheduleConflict } from "./schedule.js";
 import { cashClosingPdf, textPdf } from "./cash-closing-pdf.js";
-import {getPlanAccess,planFeatures,professionalLimitReached} from "./saas-plans.js";
+import {getPlanAccess,planFeatures,professionalLimitReached,startSubscriptionSchedule,subscriptionNotice} from "./saas-plans.js";
 import {backupStatus,createBackup,verifyBackup,startBackupSchedule} from "./backups.js";
 
 const app = express();
@@ -399,7 +399,7 @@ app.patch("/api/saas/plans/:id",requireSaasAdmin,saveSaasPlan);
 app.get("/api/saas/businesses", requireSaasAdmin, (req,res)=>{
   const businesses=db.prepare(`SELECT t.id,t.name,t.slug,t.created_at AS createdAt,
     COALESCE(ss.plan,'comercial') AS plan,COALESCE(ss.status,'active') AS status,
-    ss.due_date AS dueDate,ss.notes,ss.trial_until AS trialUntil,coalesce(ss.enforce_plan,0) AS enforced,
+    ss.due_date AS dueDate,ss.notes,ss.trial_until AS trialUntil,coalesce(ss.enforce_plan,0) AS enforced,coalesce(ss.auto_suspend,0) AS autoSuspend,coalesce(ss.auto_suspended,0) AS autoSuspended,
     p.name AS planName,ss.monthly_cents AS monthlyCents,
     (SELECT count(*) FROM users x WHERE x.tenant_id=t.id AND x.role='profissional' AND x.active=1) AS professionals,
     u.email AS ownerEmail,u.name AS ownerName
@@ -409,7 +409,7 @@ app.get("/api/saas/businesses", requireSaasAdmin, (req,res)=>{
     ORDER BY t.created_at DESC`).all();
   res.setHeader("Cache-Control","no-store");
   const today=new Intl.DateTimeFormat("sv-SE",{timeZone:"America/Sao_Paulo"}).format(new Date());
-  res.json({businesses,today});
+  res.json({businesses:businesses.map(b=>({...b,notice:subscriptionNotice(b,today)})),today});
 });
 app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",20,15*60*1000), async(req,res)=>{
   const name=requiredText(req.body?.businessName,"Estabelecimento",120);
@@ -424,6 +424,8 @@ app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",2
       !db.prepare("SELECT 1 FROM saas_plans WHERE id=? AND active=1").get(plan))
     return fail(res,400,"Revise identificador, e-mail e plano.");
   const dueDate=req.body?.dueDate||null,trialUntil=req.body?.trialUntil||null;
+  const autoSuspend=req.body?.autoSuspend===true?1:0;
+  if(autoSuspend&&!dueDate&&!trialUntil)return fail(res,400,"Informe vencimento ou fim do teste para ativar a suspensão automática.");
   const monthlyCents=req.body?.monthlyCents===undefined?db.prepare("SELECT monthly_cents AS amount FROM saas_plans WHERE id=?").get(plan).amount:req.body.monthlyCents;
   if(monthlyCents!==null&&(!Number.isSafeInteger(monthlyCents)||monthlyCents<0||monthlyCents>100000000))return fail(res,400,"Mensalidade inválida.");
   if((dueDate&&!validCashDate(dueDate))||(trialUntil&&!validCashDate(trialUntil)))return fail(res,400,"Datas inválidas.");
@@ -440,7 +442,7 @@ app.post("/api/saas/businesses", requireSaasAdmin, limitAttempts("saas-create",2
         VALUES (?,?,?,?,?,'dono')`).run(userId,id,ownerName,email,hash);
       const hours=db.prepare("INSERT INTO business_hours (tenant_id,weekday,opens_at,closes_at) VALUES (?,?,?,?)");
       days.forEach(d=>hours.run(id,...d));
-      db.prepare("INSERT INTO tenant_subscriptions (tenant_id,plan,status,enforce_plan,due_date,trial_until,monthly_cents) VALUES (?,?,'active',1,?,?,?)").run(id,plan,dueDate,trialUntil,monthlyCents);
+      db.prepare("INSERT INTO tenant_subscriptions (tenant_id,plan,status,enforce_plan,due_date,trial_until,monthly_cents,auto_suspend) VALUES (?,?,'active',1,?,?,?,?)").run(id,plan,dueDate,trialUntil,monthlyCents,autoSuspend);
       saasAudit(req,"estabelecimento_criado",id,{name,plan,dueDate,trialUntil,monthlyCents});
     })();
   } catch(err) {
@@ -458,6 +460,8 @@ app.patch("/api/saas/businesses/:id",requireSaasAdmin,(req,res)=>{
   const plan=String(req.body?.plan||existing?.plan||"comercial"),status=String(req.body?.status||existing?.status||"active");
   const notes=String(req.body?.notes||"").trim(),dueDate=req.body?.dueDate||null;
   const trialUntil=req.body?.trialUntil===undefined?existing?.trial_until??null:req.body.trialUntil||null;
+  const autoSuspend=req.body?.autoSuspend===undefined?existing?.auto_suspend??0:req.body.autoSuspend===true?1:0;
+  if(autoSuspend&&!dueDate&&!trialUntil)return fail(res,400,"Informe vencimento ou fim do teste para ativar a suspensão automática.");
   if(!db.prepare("SELECT 1 FROM saas_plans WHERE id=? AND (active=1 OR id=?)").get(plan,existing?.plan||"comercial")||!["active","suspended"].includes(status)||
      notes.length>300||(dueDate!==null&&!validCashDate(dueDate))||(trialUntil!==null&&!validCashDate(trialUntil)))
     return fail(res,400,"Plano, status ou data inválidos.");
@@ -469,11 +473,11 @@ app.patch("/api/saas/businesses/:id",requireSaasAdmin,(req,res)=>{
   const monthlyCents=req.body?.monthlyCents===undefined?(plan!==(existing?.plan||"comercial")?db.prepare("SELECT monthly_cents AS amount FROM saas_plans WHERE id=?").get(plan).amount:existing?.monthly_cents??null):req.body.monthlyCents;
   if(monthlyCents!==null&&(!Number.isSafeInteger(monthlyCents)||monthlyCents<0||monthlyCents>100000000))return fail(res,400,"Mensalidade inválida.");
   db.transaction(()=>{
-    db.prepare(`INSERT INTO tenant_subscriptions (tenant_id,plan,status,notes,due_date,enforce_plan,trial_until,monthly_cents)
-      VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET plan=excluded.plan,status=excluded.status,notes=excluded.notes,
-      due_date=excluded.due_date,enforce_plan=excluded.enforce_plan,trial_until=excluded.trial_until,monthly_cents=excluded.monthly_cents`).run(row.id,plan,status,notes,dueDate,enforced,trialUntil,monthlyCents);
+    db.prepare(`INSERT INTO tenant_subscriptions (tenant_id,plan,status,notes,due_date,enforce_plan,trial_until,monthly_cents,auto_suspend,auto_suspended)
+      VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET plan=excluded.plan,status=excluded.status,notes=excluded.notes,
+      due_date=excluded.due_date,enforce_plan=excluded.enforce_plan,trial_until=excluded.trial_until,monthly_cents=excluded.monthly_cents,auto_suspend=excluded.auto_suspend,auto_suspended=excluded.auto_suspended`).run(row.id,plan,status,notes,dueDate,enforced,trialUntil,monthlyCents,autoSuspend,status==='suspended'&&existing?.status==='suspended'?existing.auto_suspended:0);
     if(status==="suspended") db.prepare("DELETE FROM sessions WHERE tenant_id=?").run(row.id);
-    saasAudit(req,"assinatura_editada",row.id,{plan,status,dueDate,trialUntil,enforced,monthlyCents});
+    saasAudit(req,"assinatura_editada",row.id,{plan,status,dueDate,trialUntil,enforced,monthlyCents,autoSuspend});
   })();
   res.json({ok:true});
 });
@@ -496,6 +500,7 @@ app.post("/api/saas/businesses/:id/payments",requireSaasAdmin,(req,res)=>{
     db.prepare(`INSERT INTO saas_subscription_payments(id,tenant_id,period,amount_cents,paid_on,method,plan_name,previous_due_date,next_due_date,notes,actor_name)
       VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(paymentId,b.id,period,amountCents,paidOn,method,b.planName||"Comercial",b.dueDate??null,nextDueDate,notes,req.saasActor);
     db.prepare("INSERT INTO tenant_subscriptions(tenant_id,plan,due_date) VALUES(?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET due_date=excluded.due_date").run(b.id,b.plan||"comercial",nextDueDate);
+    if(nextDueDate>=today){const restored=db.prepare("UPDATE tenant_subscriptions SET status='active',auto_suspended=0 WHERE tenant_id=? AND status='suspended' AND auto_suspended=1").run(b.id);if(restored.changes)saasAudit(req,"reativacao_por_pagamento",b.id,{paymentId,nextDueDate});}
     saasAudit(req,"mensalidade_registrada",b.id,{paymentId,period,amountCents,paidOn,nextDueDate});return {id:paymentId};
   })();
   if(typeof result==="string")return fail(res,409,result);res.status(201).json(result);
@@ -561,6 +566,7 @@ app.post("/api/auth/staff-login", limitAttempts("staff-ip", 20, 15 * 60 * 1000),
     return fail(res, 401, "Código ou senha incorretos.");
   }
   codeFailures.delete(req.staffLoginKey);
+  if(db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(user.tenant_id)?.status==="suspended")return fail(res,403,"O acesso do estabelecimento está suspenso. Contate o suporte.");
   req.session.regenerate(error => {
     if (error) return fail(res, 500, "Não foi possível iniciar a sessão.");
     req.session.user = publicUser(user);
@@ -2650,6 +2656,7 @@ app.get("/api/public/:slug/slots", (req, res) => {
     SELECT t.id AS tenantId FROM tenants t WHERE t.slug = ?
   `).get(req.params.slug);
   if (!business) return fail(res, 404, "Negócio não encontrado.");
+  if(db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(business.tenantId)?.status==="suspended")return fail(res,403,"Este estabelecimento está temporariamente indisponível.");
   const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
   const selected = db.prepare(`
     SELECT s.duration_minutes AS duration,
@@ -2786,6 +2793,7 @@ app.post("/api/public/manage/:token/cancel", limitAttempts("manage-cancel", 15, 
 app.post("/api/public/manage/:token/reschedule", limitAttempts("manage-reschedule", 15, 15 * 60 * 1000), (req, res) => {
   const row = managedPublicAppointment(req.params.token);
   if (!row) return fail(res, 404, "Solicitação não encontrada.");
+  if(db.prepare("SELECT status FROM tenant_subscriptions WHERE tenant_id=?").get(row.tenantId)?.status==="suspended")return fail(res,403,"Este estabelecimento está temporariamente indisponível. Contate o estabelecimento.");
   if (!row.allowCancellation || !["agendado", "confirmado"].includes(row.status) ||
     localNow(row.tenantId) >= addLocalMinutes(row.startsAt, -row.cancelHours * 60))
     return fail(res, 409, "Remarcação não permitida. Contate o estabelecimento.");
@@ -3079,3 +3087,4 @@ app.use((error, _req, res, _next) => {
 
 export default app;
 startBackupSchedule();
+startSubscriptionSchedule();

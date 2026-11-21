@@ -276,6 +276,8 @@ ensureColumn("clients","whatsapp_marketing_consent","INTEGER NOT NULL DEFAULT 0"
 ensureColumn("tenant_subscriptions","enforce_plan","INTEGER NOT NULL DEFAULT 0");
 ensureColumn("tenant_subscriptions","trial_until","TEXT");
 ensureColumn("tenant_subscriptions","monthly_cents","INTEGER");
+ensureColumn("tenant_subscriptions","auto_suspend","INTEGER NOT NULL DEFAULT 0");
+ensureColumn("tenant_subscriptions","auto_suspended","INTEGER NOT NULL DEFAULT 0");
 const insertSaasPlan=db.prepare("INSERT OR IGNORE INTO saas_plans(id,name,professional_limit,features_json) VALUES(?,?,?,?)");
 insertSaasPlan.run("comercial","Comercial",3,JSON.stringify({expenses:false,inventory:false,packages:false,advancedReports:false,automaticWhatsapp:false}));
 insertSaasPlan.run("profissional","Profissional",10,JSON.stringify({expenses:true,inventory:true,packages:true,advancedReports:true,automaticWhatsapp:false}));

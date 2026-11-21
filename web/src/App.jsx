@@ -555,6 +555,7 @@ function Shell({ user, onLogout, children }) {
         </div>
       </aside>
       <div className="main-column">
+        {user.role === "dono" && user.subscription?.notice?.days <= 10 && user.subscription.notice.days > 0 && <div role="status" style={{padding:"12px 20px",background:"#FEF3C7",color:"#92400E",fontWeight:600,fontSize:13,borderBottom:"1px solid #F59E0B"}}><Clock3 size={16} className="inline mr-2"/> {user.subscription.notice.days===1?"Falta 1 dia":"Faltam "+user.subscription.notice.days+" dias"} para a suspensão dos serviços. Regularize a assinatura até o vencimento. Bloqueio previsto: {dateLabel(user.subscription.notice.blockDate)}.</div>}
         {user.tenantId === "tenant-salao-demo" && <div role="status" style={{
           padding: "12px 20px", background: "#FEF3C7", color: "#92400E", fontWeight: 600,
           fontSize: 13, borderBottom: "1px solid #F59E0B",
@@ -3458,7 +3459,7 @@ function SaasAdminPage() {
           try{await call("/logout","POST");}catch{}setConnected(false);setToken("");setOperator(null);setKey("");setIssued(null);setBusinesses([]);setPayments([]);setEvents([]);setOperators([]);
         }}>Encerrar acesso à central</Button></div>
         <ErrorMessage>{error}</ErrorMessage>
-        <section className="stats-grid finance-stats"><StatCard title="Estabelecimentos ativos" value={active.length} icon={Users}/><StatCard title="Suspensos" value={commercial.length-active.length} icon={ShieldCheck} tone="orange"/><StatCard title="Vencidos" value={late.length} note="Sem bloqueio automático" icon={Clock3} tone="orange"/><StatCard title="MRR contratado" value={money(mrr)} note="Ativos com mensalidade definida, sem teste" icon={Wallet}/><StatCard title="Recebido neste mês" value={money(received)} note="Mensalidades registradas" icon={CheckCheck} tone="green"/></section>
+        <section className="stats-grid finance-stats"><StatCard title="Estabelecimentos ativos" value={active.length} icon={Users}/><StatCard title="Suspensos" value={commercial.length-active.length} icon={ShieldCheck} tone="orange"/><StatCard title="Vencidos" value={late.length} note="Conforme regra de cada assinatura" icon={Clock3} tone="orange"/><StatCard title="Bloqueio em até 10 dias" value={active.filter(b=>b.notice&&b.notice.days<=10&&b.notice.days>0).length} icon={Clock3} tone="orange"/><StatCard title="MRR contratado" value={money(mrr)} note="Ativos com mensalidade definida, sem teste" icon={Wallet}/><StatCard title="Recebido neste mês" value={money(received)} note="Mensalidades registradas" icon={CheckCheck} tone="green"/></section>
         <div className="settings-tab-bar" role="tablist" aria-label="Central SaaS">{[["businesses","Estabelecimentos"],["plans","Planos"],["payments","Mensalidades"],["operators","Operadores"],["audit","Histórico administrativo"],["backups","Backup e segurança"]].map(([k,v])=><button key={k} role="tab" type="button" aria-selected={tab===k} className={tab===k?"active":""} onClick={()=>{setTab(k);setError("");}}>{v}</button>)}</div>
         {tab==="backups"&&<SaasBackupPanel operator={operator} call={call}/>}
         {tab==="plans"&&<SaasPlansPanel plans={plans} call={call} refresh={refresh}/>}
@@ -3485,6 +3486,7 @@ function SaasAdminPage() {
               <Field label="Vencimento inicial" type="date" value={values.dueDate||""} onChange={e=>setValues(v=>({...v,dueDate:e.target.value}))}/>
               <Field label="Teste até (opcional)" type="date" value={values.trialUntil||""} onChange={e=>setValues(v=>({...v,trialUntil:e.target.value}))}/>
             </div>
+            <label className="choice-option"><input type="checkbox" checked={!!values.autoSuspend} onChange={e=>setValues(v=>({...v,autoSuspend:e.target.checked}))}/> Ativar suspensão automática e avisos 10 dias antes do bloqueio</label>
             <ErrorMessage>{error}</ErrorMessage><Button disabled={busy}>{busy?"Criando...":"Cadastrar comércio e gerar acesso"}</Button>
           </form>
         </section>
@@ -3511,6 +3513,7 @@ function SaasAdminPage() {
                 <small>{item.ownerName} · {item.ownerEmail}</small>
                 <small>{item.slug} · {item.planName||item.plan} · {item.status==="suspended"?"Suspenso":"Ativo"} · {item.enforced?"Limites aplicados":"Acesso legado"}</small><small>{item.monthlyCents===null?"Mensalidade não definida":money(item.monthlyCents)+"/mês"} · {item.professionals} profissionais · {item.dueDate?"Vence "+dateLabel(item.dueDate):"Sem vencimento"}{item.trialUntil?" · Teste até "+dateLabel(item.trialUntil):""}</small></div>
               {item.slug!=="studio-bela-vista"&&<>
+                <small>{item.autoSuspend?(item.autoSuspended?"Suspensão automática aplicada":item.notice?`Bloqueio previsto: ${dateLabel(item.notice.blockDate)}`:"Suspensão automática ativa"):"Suspensão manual"}</small>
                 <Button type="button" variant="secondary" onClick={()=>setEditing({...item})}>Editar plano</Button>
                 <Button type="button" variant="secondary" disabled={busy}
                   onClick={()=>change(item,item.status==="suspended"?"active":"suspended")}>
@@ -3523,7 +3526,7 @@ function SaasAdminPage() {
             e.preventDefault();setBusy(true);setError("");
             try{
               await call(`/businesses/${editing.id}`,"PATCH",{
-                plan:editing.plan,status:editing.status,notes:editing.notes||"",dueDate:editing.dueDate||null,trialUntil:editing.trialUntil||null,monthlyCents:editing.monthlyCents,applyPlan:!!editing.applyPlan,
+                plan:editing.plan,status:editing.status,notes:editing.notes||"",dueDate:editing.dueDate||null,trialUntil:editing.trialUntil||null,monthlyCents:editing.monthlyCents,applyPlan:!!editing.applyPlan,autoSuspend:!!editing.autoSuspend,
               });
               setEditing(null);await refresh();
             }catch(err){setError(err.message);}finally{setBusy(false);}
@@ -3537,11 +3540,12 @@ function SaasAdminPage() {
             {!editing.enforced&&<label className="choice-option"><input type="checkbox" checked={!!editing.applyPlan} onChange={e=>setEditing(v=>({...v,applyPlan:e.target.checked}))}/> Aplicar limites do plano ao estabelecimento legado</label>}
             <Field label="Vencimento (registro administrativo)" type="date" value={editing.dueDate||""}
               onChange={e=>setEditing(v=>({...v,dueDate:e.target.value}))}/>
+            <label className="choice-option"><input type="checkbox" checked={!!editing.autoSuspend} onChange={e=>setEditing(v=>({...v,autoSuspend:e.target.checked}))}/> Ativar suspensão automática e avisos 10 dias antes do bloqueio</label>
             <Field label="Observações contratuais">
               <textarea className="input" rows={3} maxLength={300} value={editing.notes||""}
                 onChange={e=>setEditing(v=>({...v,notes:e.target.value}))}/>
             </Field>
-            <p className="panel-subtitle">Alterar o plano aplica seus limites. Dados anteriores são preservados; vencimento e teste não suspendem automaticamente.</p>
+            <p className="panel-subtitle">Com a automação ativa, o acesso é suspenso no dia seguinte ao vencimento ou ao fim do teste (o que ocorrer por último). A baixa da mensalidade com novo vencimento válido reativa apenas suspensões automáticas.</p>
             <ErrorMessage>{error}</ErrorMessage>
             <div className="modal-actions"><Button type="button" variant="secondary"
               onClick={()=>setEditing(null)}>Cancelar</Button><Button disabled={busy}>Salvar</Button></div>
@@ -3570,6 +3574,13 @@ export default function App() {
     ]).then(([status, current]) => { setInstallation(status); setUser(current); })
       .catch(() => setUser(null)).finally(() => setLoading(false));
   }, [location.pathname]);
+  useEffect(()=>{
+    if(!user||publicRoute)return;
+    let active=true;
+    const refresh=()=>api("/auth/me").then(({user:current})=>{if(active)setUser(previous=>JSON.stringify(previous)===JSON.stringify(current)?previous:current);}).catch(e=>{if(active&&e.status===401)setUser(null);});
+    const timer=setInterval(refresh,60000);
+    return ()=>{active=false;clearInterval(timer);};
+  },[user?.id,publicRoute]);
   useEffect(() => {
     let active=true;
     if(!user || publicRoute){document.documentElement.classList.remove("dark");return;}
