@@ -210,7 +210,7 @@ function ErrorMessage({ children }) {
 }
 
 function Login({ onLogin, demoEnabled = false }) {
-  const [values, setValues] = useState({ email: demoEnabled ? "admin@simplifica.local" : "", staffCode: "", password: demoEnabled ? "Agenda123!" : "", slug: "" });
+  const [values, setValues] = useState({ email: "", staffCode: "", password: "", slug: "" });
   const [mode, setMode] = useState("email");
   const [activation, setActivation] = useState(false);
   const [activationToken, setActivationToken] = useState("");
@@ -269,12 +269,13 @@ function Login({ onLogin, demoEnabled = false }) {
     <main className="login-page premium-login">
       <section className="login-card">
         <img className="login-logo" src="/assets/simplifica-logo.svg" alt="Simplifica" />
-        <div className="login-access-label"><ShieldCheck size={15}/> Acesso ao estabelecimento</div>
+        <div className="login-access-label">{demoEnabled ? <Sparkles size={15}/> : <ShieldCheck size={15}/>} {demoEnabled ? "Ambiente demonstrativo" : "Acesso ao estabelecimento"}</div>
         <div className="mb-7">
-          <p className="eyebrow">BEM-VINDO DE VOLTA</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-tight">Entre na sua conta</h1>
-          <p className="mt-2 text-sm text-slate-500">Organize seus horários com mais leveza.</p>
+          <p className="eyebrow">{demoEnabled ? "CONHEÇA O SISTEMA" : "BEM-VINDO DE VOLTA"}</p>
+          <h1 className="mt-2 text-2xl font-semibold tracking-tight">{demoEnabled ? "Explore o Simplifica Agenda" : "Entre na sua conta"}</h1>
+          <p className="mt-2 text-sm text-slate-500">{demoEnabled ? "Escolha um perfil e entre sem precisar de cadastro." : "Organize seus horários com mais leveza."}</p>
         </div>
+        {!demoEnabled && <>
         <div className="auth-mode-switch" role="group" aria-label="Tipo de acesso">
           <button type="button" aria-pressed={mode==="email"} className={mode === "email" ? "selected" : ""} onClick={() => { setMode("email"); setActivation(false); setError(""); setShowPassword(false); }}> <LayoutDashboard size={16}/> Administração</button>
           <button type="button" aria-pressed={mode==="staff"} className={mode === "staff" ? "selected" : ""} onClick={() => { setMode("staff"); setError(""); setShowPassword(false); setValues({ ...values, password: "", slug: "" }); }}><UserRound size={16}/> Profissional</button>
@@ -301,6 +302,7 @@ function Login({ onLogin, demoEnabled = false }) {
         {mode === "staff" && <button className="staff-activate-switch" type="button" onClick={() => { setActivation(!activation); setError(""); setSuccess(""); }}>
           {activation ? "Já tenho senha — entrar" : "Primeiro acesso? Definir minha senha"}
         </button>}
+        </>}
         {demoEnabled && <>
           <div className="demo-hint !block">
             <div className="flex items-center gap-2 mb-2"><Sparkles size={17}/><strong>Experimente o Simplifica Agenda</strong></div>
@@ -312,7 +314,8 @@ function Login({ onLogin, demoEnabled = false }) {
                 { role: "profissional", label: "Acessar como profissional", icon: UserRound },
               ].map(({ role, label, icon: Icon }) => <Button key={role} type="button" variant="secondary" className="w-full justify-start min-h-11 gap-2" disabled={loading} onClick={() => enterDemo(role)}><Icon size={17}/>{demoRole === role ? "Entrando..." : label}<ArrowRight size={15} className="ml-auto"/></Button>)}
             </div>
-            <p className="mt-3">Dados fictícios, somente para demonstração. Senha manual: <strong>Agenda123!</strong></p>
+            <p className="mt-3">Dados fictícios, somente para demonstração.</p>
+            <ErrorMessage>{error}</ErrorMessage>
           </div>
           <Link to="/agendar/studio-bela-vista" className="login-public-link">Ver página pública de agendamento <ArrowRight size={15} /></Link>
         </>}
